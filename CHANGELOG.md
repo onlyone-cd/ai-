@@ -22,6 +22,7 @@
 - 数据库迁移：新增 Flask-Migrate/Alembic 迁移骨架和初始 schema，生产环境默认禁用 `db.create_all()`，容器启动前执行 `flask --app run db upgrade`。
 - 账号初始化：新增 `flask --app run create-admin` 和 `reset-password` 管理命令，用户创建/改密统一启用密码强度校验。
 - CI 和备份：新增 GitHub Actions 后端测试/前端构建流水线，新增 PostgreSQL 与上传文件备份/恢复脚本。
+- 合规审计：候选人详情查看、简历导出、面试报告导出、Offer 确认函导出和各类 CSV 导出均写入审计日志。
 
 ### 接口变更记录
 

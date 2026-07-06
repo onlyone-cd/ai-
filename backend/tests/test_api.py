@@ -127,6 +127,24 @@ def test_candidate_resume_export(client, admin_headers):
     assert "候选人简历" in body
     assert "技能标签" in body
     assert "简历原文" in body
+    log = AuditLog.query.filter_by(action="export", target_type="candidate", target_id=1).order_by(AuditLog.id.desc()).first()
+    assert log is not None
+    assert log.details["kind"] == "resume_txt"
+
+
+def test_candidate_detail_view_and_csv_export_are_audited(client, admin_headers):
+    detail = client.get("/api/candidates/1", headers=admin_headers)
+    exported = client.get("/api/exports/candidates.csv", headers=admin_headers)
+
+    assert detail.status_code == 200
+    assert exported.status_code == 200
+    view_log = AuditLog.query.filter_by(action="view", target_type="candidate", target_id=1).order_by(AuditLog.id.desc()).first()
+    export_log = AuditLog.query.filter_by(action="export", target_type="candidates", target_name="candidates.csv").order_by(AuditLog.id.desc()).first()
+    assert view_log is not None
+    assert view_log.details["scope"] == "detail"
+    assert export_log is not None
+    assert export_log.details["kind"] == "csv"
+    assert export_log.details["row_count"] >= 1
 
 
 def test_accounting_job_matches_accounting_candidate_first(client, admin_headers):
@@ -388,6 +406,9 @@ def test_interview_report_export(client, admin_headers):
     assert assignment["job"]["title"] in body
     assert "AI评分：82/100" in body
     assert "基础扎实" in body
+    log = AuditLog.query.filter_by(action="export", target_type="interview", target_id=assignment["id"]).order_by(AuditLog.id.desc()).first()
+    assert log is not None
+    assert log.details["kind"] == "interview_report"
 
 
 def test_interview_feedback_completes_assignment_and_moves_pipeline(client, admin_headers):

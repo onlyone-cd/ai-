@@ -54,6 +54,7 @@ curl https://your-domain.example/healthz
 - 生产首个管理员使用 `flask --app run create-admin` 创建，不再依赖演示数据。
 - 上传文件保存在 `uploads` volume，需配置定期备份。
 - 简历、面试报告、导出文件都属于敏感数据，下载和导出只能给授权角色。
+- 候选人详情查看、简历/面试/Offer/CSV 导出会写入审计日志，上线后需定期巡检异常导出行为。
 
 ## 备份和恢复
 

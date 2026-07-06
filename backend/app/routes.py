@@ -155,6 +155,8 @@ def get_candidate(user, candidate_id):
     candidate = db.session.get(Candidate, candidate_id)
     if not candidate:
         return error("候选人不存在", "NOT_FOUND", 404)
+    audit_log(user, "view", "candidate", candidate.id, candidate.name_masked, {"scope": "detail"})
+    db.session.commit()
     return ok(candidate.to_dict(detail=True))
 
 
@@ -164,6 +166,8 @@ def export_candidate_resume(user, candidate_id):
     candidate = db.session.get(Candidate, candidate_id)
     if not candidate:
         return error("候选人不存在", "NOT_FOUND", 404)
+    audit_log(user, "export", "candidate", candidate.id, candidate.name_masked, {"kind": "resume_txt", "filename": f"candidate-{candidate.id}-resume.txt"})
+    db.session.commit()
     return Response(
         "\ufeff" + build_candidate_resume_text(candidate),
         mimetype="text/plain; charset=utf-8",
@@ -841,6 +845,8 @@ def export_interview_report(user, assignment_id):
     if not feedback:
         return error("面试结果不存在", "NOT_FOUND", 404)
     body = build_interview_report_text(assignment, feedback)
+    audit_log(user, "export", "interview", assignment.id, assignment.candidate.name_masked, {"kind": "interview_report", "filename": f"interview-report-{assignment.id}.txt"})
+    db.session.commit()
     return Response(
         "\ufeff" + body,
         mimetype="text/plain; charset=utf-8",
@@ -879,6 +885,8 @@ def export_offer_letter(user, offer_id):
     offer = db.session.get(OfferRecord, offer_id)
     if not offer:
         return error("Offer 不存在", "NOT_FOUND", 404)
+    audit_log(user, "export", "offer", offer.id, offer.candidate.name_masked if offer.candidate else "", {"kind": "offer_letter", "filename": f"offer-{offer.id}.txt"})
+    db.session.commit()
     return Response(
         "\ufeff" + build_offer_letter_text(offer),
         mimetype="text/plain; charset=utf-8",
@@ -1031,7 +1039,7 @@ def export_candidates(user):
         ]
         for item in Candidate.query.order_by(Candidate.created_at.desc()).all()
     ]
-    return csv_response("candidates.csv", ["ID", "姓名", "岗位", "城市", "性别", "手机号", "邮箱", "来源", "经验", "技能标签", "创建时间"], rows)
+    return csv_response("candidates.csv", ["ID", "姓名", "岗位", "城市", "性别", "手机号", "邮箱", "来源", "经验", "技能标签", "创建时间"], rows, user=user, audit_target="candidates")
 
 
 @api.get("/exports/jobs.csv")
@@ -1041,7 +1049,7 @@ def export_jobs(user):
     for item in Job.query.order_by(Job.created_at.desc()).all():
         structured = ensure_jd_structured(item)
         rows.append([item.id, item.title, item.city or "", item.department or "", item.job_code or "", item.status, structured.get("skill_tags_raw", ""), item.created_at.isoformat()])
-    return csv_response("jobs.csv", ["ID", "岗位名称", "城市", "部门", "岗位编号", "状态", "技能权重", "创建时间"], rows)
+    return csv_response("jobs.csv", ["ID", "岗位名称", "城市", "部门", "岗位编号", "状态", "技能权重", "创建时间"], rows, user=user, audit_target="jobs")
 
 
 @api.get("/exports/offers.csv")
@@ -1063,7 +1071,7 @@ def export_offers(user):
         ]
         for item in OfferRecord.query.order_by(OfferRecord.created_at.desc()).all()
     ]
-    return csv_response("offers.csv", ["ID", "候选人", "岗位", "城市", "最低月薪K", "最高月薪K", "薪资月数", "入职日期", "状态", "备注", "创建时间"], rows)
+    return csv_response("offers.csv", ["ID", "候选人", "岗位", "城市", "最低月薪K", "最高月薪K", "薪资月数", "入职日期", "状态", "备注", "创建时间"], rows, user=user, audit_target="offers")
 
 
 @api.get("/exports/interviews.csv")
@@ -1084,7 +1092,7 @@ def export_interviews(user):
         ]
         for item in InterviewAssignment.query.order_by(InterviewAssignment.created_at.desc()).all()
     ]
-    return csv_response("interviews.csv", ["ID", "候选人", "岗位", "面试官", "轮次", "时间", "地点", "状态", "备注", "创建时间"], rows)
+    return csv_response("interviews.csv", ["ID", "候选人", "岗位", "面试官", "轮次", "时间", "地点", "状态", "备注", "创建时间"], rows, user=user, audit_target="interviews")
 
 
 @api.get("/exports/pipeline.csv")
@@ -1102,7 +1110,7 @@ def export_pipeline(user):
         ]
         for item in latest_pipeline_items()
     ]
-    return csv_response("pipeline.csv", ["ID", "候选人", "岗位", "当前阶段", "更新人", "备注", "更新时间"], rows)
+    return csv_response("pipeline.csv", ["ID", "候选人", "岗位", "当前阶段", "更新人", "备注", "更新时间"], rows, user=user, audit_target="pipeline")
 
 
 @api.get("/exports/boss-drafts.csv")
@@ -1119,7 +1127,7 @@ def export_boss_drafts(user):
         ]
         for item in BossDraft.query.order_by(BossDraft.created_at.desc()).all()
     ]
-    return csv_response("boss-drafts.csv", ["ID", "候选人", "岗位", "状态", "话术", "创建时间"], rows)
+    return csv_response("boss-drafts.csv", ["ID", "候选人", "岗位", "状态", "话术", "创建时间"], rows, user=user, audit_target="boss_drafts")
 
 
 @api.get("/tags")
@@ -2537,7 +2545,10 @@ def build_offer_letter_text(offer):
     return "\n".join(lines)
 
 
-def csv_response(filename, headers, rows):
+def csv_response(filename, headers, rows, user=None, audit_target="export"):
+    if user:
+        audit_log(user, "export", audit_target, None, filename, {"kind": "csv", "filename": filename, "row_count": len(rows)})
+        db.session.commit()
     output = StringIO()
     writer = csv.writer(output)
     writer.writerow(headers)

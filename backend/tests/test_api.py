@@ -6,6 +6,7 @@ import zipfile
 
 import jwt
 import pytest
+from sqlalchemy import inspect
 
 from app import create_app, db
 from app.config import Config
@@ -108,6 +109,19 @@ def test_production_config_rejects_demo_secret_and_sqlite():
 
     with pytest.raises(RuntimeError, match="生产配置不安全"):
         create_app(UnsafeProductionConfig)
+
+
+def test_common_query_indexes_exist(app):
+    inspector = inspect(db.engine)
+
+    candidate_indexes = {item["name"] for item in inspector.get_indexes("candidate")}
+    pipeline_indexes = {item["name"] for item in inspector.get_indexes("pipeline_stage")}
+    audit_indexes = {item["name"] for item in inspector.get_indexes("audit_log")}
+
+    assert "ix_candidate_source_created_at" in candidate_indexes
+    assert "ix_candidate_phone_masked" in candidate_indexes
+    assert "ix_pipeline_stage_job_candidate_ts" in pipeline_indexes
+    assert "ix_audit_log_target_created" in audit_indexes
 
 
 def test_admin_can_manage_users(client, admin_headers, recruiter_headers):

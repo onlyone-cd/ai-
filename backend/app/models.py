@@ -20,6 +20,13 @@ class User(db.Model):
 
 
 class Candidate(db.Model):
+    __table_args__ = (
+        db.Index("ix_candidate_source_created_at", "source", "created_at"),
+        db.Index("ix_candidate_phone_masked", "phone_masked"),
+        db.Index("ix_candidate_email_masked", "email_masked"),
+        db.Index("ix_candidate_owner_created_at", "owner_hr_id", "created_at"),
+    )
+
     id = db.Column(db.Integer, primary_key=True)
     owner_hr_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
     upload_batch_id = db.Column(db.String(64), nullable=False, default="seed")
@@ -63,6 +70,11 @@ class Candidate(db.Model):
 
 
 class UploadBatch(db.Model):
+    __table_args__ = (
+        db.Index("ix_upload_batch_owner_created_at", "owner_hr_id", "created_at"),
+        db.Index("ix_upload_batch_source_created_at", "source", "created_at"),
+    )
+
     id = db.Column(db.String(64), primary_key=True)
     owner_hr_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
     source = db.Column(db.String(32), nullable=False, default="upload")
@@ -93,6 +105,12 @@ class UploadBatch(db.Model):
 
 
 class CandidateTag(db.Model):
+    __table_args__ = (
+        db.Index("ix_candidate_tag_candidate", "candidate_id"),
+        db.Index("ix_candidate_tag_tag", "tag"),
+        db.Index("ix_candidate_tag_category", "category"),
+    )
+
     id = db.Column(db.Integer, primary_key=True)
     candidate_id = db.Column(db.Integer, db.ForeignKey("candidate.id"), nullable=False)
     tag = db.Column(db.String(64), nullable=False)
@@ -104,6 +122,12 @@ class CandidateTag(db.Model):
 
 
 class Job(db.Model):
+    __table_args__ = (
+        db.Index("ix_job_status_created_at", "status", "created_at"),
+        db.Index("ix_job_job_code", "job_code"),
+        db.Index("ix_job_owner_created_at", "owner_hr_id", "created_at"),
+    )
+
     id = db.Column(db.Integer, primary_key=True)
     owner_hr_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
     title = db.Column(db.String(128), nullable=False)
@@ -134,6 +158,11 @@ class Job(db.Model):
 
 
 class Match(db.Model):
+    __table_args__ = (
+        db.Index("ix_match_job_score", "job_id", "score"),
+        db.Index("ix_match_candidate", "candidate_id"),
+    )
+
     id = db.Column(db.Integer, primary_key=True)
     job_id = db.Column(db.Integer, db.ForeignKey("job.id"), nullable=False)
     candidate_id = db.Column(db.Integer, db.ForeignKey("candidate.id"), nullable=False)
@@ -157,6 +186,12 @@ class Match(db.Model):
 
 
 class PipelineStage(db.Model):
+    __table_args__ = (
+        db.Index("ix_pipeline_stage_job_candidate_ts", "job_id", "candidate_id", "ts"),
+        db.Index("ix_pipeline_stage_stage_ts", "stage", "ts"),
+        db.Index("ix_pipeline_stage_candidate_ts", "candidate_id", "ts"),
+    )
+
     id = db.Column(db.Integer, primary_key=True)
     candidate_id = db.Column(db.Integer, db.ForeignKey("candidate.id"), nullable=False)
     job_id = db.Column(db.Integer, db.ForeignKey("job.id"), nullable=False)
@@ -183,6 +218,12 @@ class PipelineStage(db.Model):
 
 
 class InterviewAssignment(db.Model):
+    __table_args__ = (
+        db.Index("ix_interview_assignment_status_time", "status", "scheduled_at"),
+        db.Index("ix_interview_assignment_interviewer_time", "interviewer_id", "scheduled_at"),
+        db.Index("ix_interview_assignment_candidate_job", "candidate_id", "job_id"),
+    )
+
     id = db.Column(db.Integer, primary_key=True)
     candidate_id = db.Column(db.Integer, db.ForeignKey("candidate.id"), nullable=False)
     job_id = db.Column(db.Integer, db.ForeignKey("job.id"), nullable=False)
@@ -222,6 +263,11 @@ class InterviewAssignment(db.Model):
 
 
 class InterviewFeedback(db.Model):
+    __table_args__ = (
+        db.Index("ix_interview_feedback_assignment_created", "assignment_id", "created_at"),
+        db.Index("ix_interview_feedback_interviewer_created", "interviewer_id", "created_at"),
+    )
+
     id = db.Column(db.Integer, primary_key=True)
     assignment_id = db.Column(db.Integer, db.ForeignKey("interview_assignment.id"), nullable=False)
     interviewer_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
@@ -251,6 +297,12 @@ class InterviewFeedback(db.Model):
 
 
 class OfferRecord(db.Model):
+    __table_args__ = (
+        db.Index("ix_offer_status_updated", "status", "updated_at"),
+        db.Index("ix_offer_candidate", "candidate_id"),
+        db.Index("ix_offer_job", "job_id"),
+    )
+
     id = db.Column(db.Integer, primary_key=True)
     candidate_id = db.Column(db.Integer, db.ForeignKey("candidate.id"), nullable=False)
     job_id = db.Column(db.Integer, db.ForeignKey("job.id"), nullable=False)
@@ -290,6 +342,12 @@ class OfferRecord(db.Model):
 
 
 class BossDraft(db.Model):
+    __table_args__ = (
+        db.Index("ix_boss_draft_status_created", "status", "created_at"),
+        db.Index("ix_boss_draft_candidate", "candidate_id"),
+        db.Index("ix_boss_draft_job", "job_id"),
+    )
+
     id = db.Column(db.Integer, primary_key=True)
     candidate_id = db.Column(db.Integer, db.ForeignKey("candidate.id"), nullable=False)
     job_id = db.Column(db.Integer, db.ForeignKey("job.id"), nullable=False)
@@ -314,6 +372,10 @@ class BossDraft(db.Model):
 
 
 class BossAccount(db.Model):
+    __table_args__ = (
+        db.Index("ix_boss_account_owner_updated", "owner_hr_id", "updated_at"),
+    )
+
     id = db.Column(db.Integer, primary_key=True)
     owner_hr_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
     account = db.Column(db.String(128), nullable=False, default="BOSS 账号")
@@ -337,6 +399,12 @@ class BossAccount(db.Model):
 
 
 class AuditLog(db.Model):
+    __table_args__ = (
+        db.Index("ix_audit_log_created_at", "created_at"),
+        db.Index("ix_audit_log_target_created", "target_type", "target_id", "created_at"),
+        db.Index("ix_audit_log_user_created", "user_id", "created_at"),
+    )
+
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
     action = db.Column(db.String(64), nullable=False)

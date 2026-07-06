@@ -910,7 +910,6 @@ function JobsPage() {
                   <div className="flex flex-wrap items-center gap-2">
                     <h3 className="font-semibold">{match.candidate.name_masked}</h3>
                     <span className="badge">{match.candidate.title}</span>
-                    {!matches.length && <span className="badge muted">预览</span>}
                   </div>
                   <div className="mt-3">
                     <button className="secondary-button" onClick={() => addToPipeline([match.candidate_id])}>

@@ -331,7 +331,18 @@ export const api = {
   bi: (days = 30) => request<BiOverview>(`/bi/overview?days=${days}`),
   exportCsv: (kind: "candidates" | "jobs" | "interviews" | "offers" | "pipeline") => download(`/exports/${kind}.csv`, `${kind}.csv`),
   tags: () => request<{ items: SkillTag[]; categories: string[] }>("/tags"),
-  bossStatus: () => request<{ cookie_bound: boolean; account: string; mode: string; can_auto_send: boolean; verified?: boolean; account_id?: number | null }>("/boss/status"),
+  bossStatus: () => request<{
+    cookie_bound: boolean;
+    account: string;
+    mode: string;
+    can_auto_send: boolean;
+    verified?: boolean;
+    account_id?: number | null;
+    candidate_count?: number;
+    job_count?: number;
+    last_candidate_at?: string | null;
+    last_job_at?: string | null;
+  }>("/boss/status"),
   bossExtension: () => download("/boss/extension.zip", "hireinsight-boss-importer.zip"),
   verifyBossAccount: (id: number) =>
     request<{ account: { id: number; account: string; verified: boolean } }>(`/boss/accounts/${id}/verify`, { method: "POST" }),

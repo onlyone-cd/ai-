@@ -1825,7 +1825,18 @@ function OffersPage() {
 }
 
 function BossPage() {
-  const [status, setStatus] = useState<{ cookie_bound: boolean; account: string; mode: string; can_auto_send: boolean; verified?: boolean; account_id?: number | null } | null>(null);
+  const [status, setStatus] = useState<{
+    cookie_bound: boolean;
+    account: string;
+    mode: string;
+    can_auto_send: boolean;
+    verified?: boolean;
+    account_id?: number | null;
+    candidate_count?: number;
+    job_count?: number;
+    last_candidate_at?: string | null;
+    last_job_at?: string | null;
+  } | null>(null);
   const [tab, setTab] = useState<"inbox" | "recommend" | "jobs">("inbox");
   const [inbox, setInbox] = useState<BossInboxItem[]>([]);
   const [inboxQuery, setInboxQuery] = useState("");
@@ -1835,19 +1846,25 @@ function BossPage() {
   const [candidateId, setCandidateId] = useState(0);
   const [jobId, setJobId] = useState(0);
   const [selectedCandidate, setSelectedCandidate] = useState<Candidate | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
 
   async function load(silent = false) {
-    const [statusData, inboxData, jobData] = await Promise.all([
-      api.bossStatus(),
-      api.bossInbox(),
-      api.bossJobs()
-    ]);
-    setStatus(statusData);
-    setInbox(inboxData.items);
-    setJobs(jobData.items);
-    setCandidateId((current) => current || inboxData.items.find((item) => item.candidate_id)?.candidate_id || 0);
-    setJobId((current) => current || jobData.items[0]?.id || 0);
-    if (!silent) notify("success", "BOSS 数据已刷新");
+    setRefreshing(true);
+    try {
+      const [statusData, inboxData, jobData] = await Promise.all([
+        api.bossStatus(),
+        api.bossInbox(),
+        api.bossJobs()
+      ]);
+      setStatus(statusData);
+      setInbox(inboxData.items);
+      setJobs(jobData.items);
+      setCandidateId((current) => current || inboxData.items.find((item) => item.candidate_id)?.candidate_id || 0);
+      setJobId((current) => current || jobData.items[0]?.id || 0);
+      if (!silent) notify("success", "BOSS 数据已刷新");
+    } finally {
+      setRefreshing(false);
+    }
   }
 
   useEffect(() => {
@@ -1863,6 +1880,10 @@ function BossPage() {
   }, [jobId]);
 
   const visibleInbox = inbox.filter((item) => [item.name, item.title, item.summary].join(" ").toLowerCase().includes(inboxQuery.trim().toLowerCase()));
+  const selectedJob = jobs.find((job) => job.id === jobId);
+  const syncTimes = [status?.last_candidate_at, status?.last_job_at].filter((value): value is string => Boolean(value)).sort();
+  const lastSyncAt = syncTimes[syncTimes.length - 1];
+  const lastSyncText = lastSyncAt ? new Date(lastSyncAt).toLocaleString("zh-CN", { hour12: false }) : "暂无同步";
 
   async function runAiScreen() {
     if (!candidateId || !jobId) return;
@@ -1898,6 +1919,12 @@ function BossPage() {
     setTab(next);
   }
 
+  function selectJob(job: Job, nextTab?: "recommend") {
+    setJobId(job.id);
+    if (nextTab) setTab(nextTab);
+    setMessage(nextTab ? `已切换到「${job.title}」的推荐候选人` : `已选择岗位：${job.title}`);
+  }
+
   if (selectedCandidate) {
     return (
       <CandidateDetailPage
@@ -1923,6 +1950,9 @@ function BossPage() {
           <span className="status-pill">{status?.cookie_bound ? "已激活" : "未激活"}</span>
           <span>账号 {status?.account || "-"}</span>
           <span className="text-sm text-steel">{status?.mode || "-"} · {status?.verified ? "已校验" : "待校验"} · 自动发送{status?.can_auto_send ? "允许" : "禁止"}</span>
+          <span className="badge muted">候选人 {status?.candidate_count ?? inbox.length}</span>
+          <span className="badge muted">岗位 {status?.job_count ?? jobs.length}</span>
+          <span className="text-sm text-steel">最近同步 {lastSyncText}</span>
         </div>
         <div className="flex flex-wrap gap-2">
           <button className="secondary-button" onClick={() => api.bossExtension()}>
@@ -1970,8 +2000,8 @@ function BossPage() {
                 <h2 className="font-semibold">收件箱候选人</h2>
                 <p className="mt-1 text-sm text-steel">这里只显示已通过 BOSS 插件同步并解析入库的候选人。</p>
               </div>
-              <button className="secondary-button" onClick={() => load()}>
-                <RefreshCw size={17} />
+              <button className="secondary-button" onClick={() => load()} disabled={refreshing}>
+                <RefreshCw size={17} className={refreshing ? "animate-spin" : ""} />
                 刷新
               </button>
             </div>
@@ -1999,7 +2029,7 @@ function BossPage() {
 
           {tab === "recommend" && <div className="design-card">
             <h2 className="font-semibold">推荐候选人</h2>
-            <p className="mt-1 text-sm text-steel">只从 BOSS 已导入的沟通过候选人里匹配当前 BOSS 岗位。</p>
+            <p className="mt-1 text-sm text-steel">只从 BOSS 已导入的沟通过候选人里匹配当前 BOSS 岗位{selectedJob ? `：${selectedJob.title}` : ""}。</p>
             <div className="mt-4 grid gap-3">
               {recommendations.length === 0 ? <EmptyState icon={<Users size={22} />} text="当前岗位暂无 50 分以上推荐候选人" /> : recommendations.map((item) => (
                 <div className={`row-card text-left ${candidateId === item.candidate_id ? "ring-2 ring-mint" : ""}`} key={item.candidate_id}>
@@ -2031,22 +2061,32 @@ function BossPage() {
           {tab === "jobs" && <div className="design-card">
             <div className="mb-4 flex items-center justify-between gap-3">
               <h2 className="font-semibold">BOSS 岗位列表</h2>
-              <button className="secondary-button" onClick={() => load()}>
-                <RefreshCw size={17} />
+              <button className="secondary-button" onClick={() => load()} disabled={refreshing}>
+                <RefreshCw size={17} className={refreshing ? "animate-spin" : ""} />
                 刷新
               </button>
             </div>
             <div className="mt-4 grid gap-3">
               {jobs.length === 0 ? <EmptyState icon={<BriefcaseBusiness size={22} />} text="暂无同步的 BOSS 岗位，请先用浏览器插件同步岗位列表" /> : jobs.map((job) => (
-                <button className={`row-card text-left ${jobId === job.id ? "ring-2 ring-mint" : ""}`} key={job.id} onClick={() => { setJobId(job.id); notify("success", `已选择岗位：${job.title}`); }}>
-                  <div>
+                <div className={`row-card text-left ${jobId === job.id ? "ring-2 ring-mint" : ""}`} key={job.id}>
+                  <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
                       <h3 className="font-semibold">{job.title}</h3>
                       <span className={`badge ${job.status === "active" ? "" : "muted"}`}>{job.status === "active" ? "开放" : "关闭"}</span>
                     </div>
                     <p className="text-sm text-steel">{job.city || "未填城市"} · {job.job_code || "无编号"}</p>
                   </div>
-                </button>
+                  <div className="mt-3 flex flex-wrap gap-2 md:mt-0">
+                    <button className="secondary-button" onClick={() => selectJob(job)}>
+                      <Check size={17} />
+                      选中岗位
+                    </button>
+                    <button className="primary-button" onClick={() => selectJob(job, "recommend")}>
+                      <Users size={17} />
+                      匹配候选人
+                    </button>
+                  </div>
+                </div>
               ))}
             </div>
           </div>}

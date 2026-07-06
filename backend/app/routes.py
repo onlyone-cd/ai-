@@ -1125,6 +1125,8 @@ def list_skill_tags(user):
 @login_required
 def boss_status(user):
     account = latest_boss_account(user)
+    candidates = valid_boss_candidates(limit=1000)
+    jobs = Job.query.filter(Job.job_code.like("BOSS-%")).order_by(Job.created_at.desc()).all()
     return ok(
         {
             "cookie_bound": bool(account),
@@ -1133,6 +1135,10 @@ def boss_status(user):
             "can_auto_send": False,
             "verified": bool(account and account.verified),
             "account_id": account.id if account else None,
+            "candidate_count": len(candidates),
+            "job_count": len(jobs),
+            "last_candidate_at": candidates[0].created_at.isoformat() if candidates else None,
+            "last_job_at": jobs[0].created_at.isoformat() if jobs else None,
         }
     )
 
@@ -1195,11 +1201,7 @@ def verify_boss_account(user, account_id):
 @api.get("/boss/candidates/inbox")
 @login_required
 def boss_inbox(user):
-    candidates = [
-        candidate
-        for candidate in Candidate.query.filter_by(source="boss").order_by(Candidate.created_at.desc()).limit(100).all()
-        if looks_like_boss_resume_text(candidate.raw_text)
-    ][:50]
+    candidates = valid_boss_candidates(limit=100)[:50]
     return ok({"items": [boss_inbox_item(candidate) for candidate in candidates]})
 
 
@@ -1482,6 +1484,14 @@ def latest_boss_account(user):
     if user.role != "admin":
         query = query.filter_by(owner_hr_id=user.id)
     return query.order_by(BossAccount.updated_at.desc()).first()
+
+
+def valid_boss_candidates(limit=100):
+    return [
+        candidate
+        for candidate in Candidate.query.filter_by(source="boss").order_by(Candidate.created_at.desc()).limit(limit).all()
+        if looks_like_boss_resume_text(candidate.raw_text)
+    ]
 
 
 def preview_match_for_candidate(job, candidate):

@@ -15,7 +15,7 @@ from sqlalchemy.exc import IntegrityError
 from . import db
 from .auth import hash_password, issue_token, login_required, roles_required, validate_password_strength, verify_password
 from .job_service import build_jd_structured, ensure_jd_structured, persist_matches, preview_matches
-from .llm_client import LLMError, chat_json, llm_available
+from .llm_client import LLMError, chat_json, llm_available, llm_status
 from .matching import match_candidate
 from .models import AuditLog, BossAccount, BossDraft, Candidate, CandidateTag, InterviewAssignment, InterviewFeedback, Job, Match, OfferRecord, PipelineStage, User
 from .rbac import ROLES, role_permissions
@@ -58,6 +58,13 @@ def me(user):
 @login_required
 def permissions(user):
     return ok({"role": user.role, "roles": list(ROLES), "permissions": role_permissions(user.role)})
+
+
+@api.get("/system/llm/status")
+@login_required
+@roles_required("admin", "manager")
+def system_llm_status(user):
+    return ok(llm_status())
 
 
 @api.get("/users")

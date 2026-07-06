@@ -1,4 +1,6 @@
 from io import BytesIO
+import json
+import urllib.error
 import zipfile
 
 import pytest
@@ -6,6 +8,7 @@ import pytest
 from app import create_app, db
 from app.config import Config
 from app.auth import verify_password
+from app.llm_client import chat_json
 from app.models import AuditLog, BossDraft, Candidate, CandidateTag, InterviewAssignment, InterviewFeedback, Job, Match, OfferRecord, PipelineStage, User
 
 
@@ -49,6 +52,47 @@ def test_healthz_reports_database_and_security_headers(client):
     assert response.get_json()["status"] == "ok"
     assert response.headers["X-Request-ID"] == "test-request-id"
     assert response.headers["X-Content-Type-Options"] == "nosniff"
+
+
+def test_llm_status_does_not_expose_api_key(client, admin_headers):
+    response = client.get("/api/system/llm/status", headers=admin_headers)
+
+    assert response.status_code == 200
+    data = response.get_json()["data"]
+    assert "DEEPSEEK_API_KEY" not in data
+    assert "api_key" not in data
+    assert {"enabled", "available", "provider", "model", "timeout_seconds", "max_retries"} <= set(data)
+
+
+def test_llm_chat_json_retries_transient_failure(app, monkeypatch):
+    calls = {"count": 0}
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            body = {"choices": [{"message": {"content": json.dumps({"ok": True})}}]}
+            return json.dumps(body).encode("utf-8")
+
+    def fake_urlopen(request, timeout):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise urllib.error.URLError("temporary outage")
+        return FakeResponse()
+
+    app.config["LLM_ENABLED"] = True
+    app.config["DEEPSEEK_API_KEY"] = "test-key"
+    app.config["LLM_MAX_RETRIES"] = 1
+    app.config["LLM_RETRY_BACKOFF_SECONDS"] = 0
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    with app.app_context():
+        assert chat_json([{"role": "user", "content": "json"}]) == {"ok": True}
+    assert calls["count"] == 2
 
 
 def test_production_config_rejects_demo_secret_and_sqlite():

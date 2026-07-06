@@ -24,6 +24,7 @@
 - CI 和备份：新增 GitHub Actions 后端测试/前端构建流水线，新增 PostgreSQL 与上传文件备份/恢复脚本。
 - 合规审计：候选人详情查看、简历导出、面试报告导出、Offer 确认函导出和各类 CSV 导出均写入审计日志。
 - 登录安全：新增登录失败锁定策略，支持通过 `LOGIN_MAX_FAILURES` 和 `LOGIN_LOCKOUT_MINUTES` 配置公网防暴力破解。
+- AI 稳定性：LLM 调用支持统一超时、瞬时失败重试和调用日志，新增 `/api/system/llm/status` 用于生产巡检且不暴露 Key。
 
 ### 接口变更记录
 
@@ -33,6 +34,7 @@
 - `GET /api/auth/me`：获取当前用户。
 - `GET /api/auth/permissions`：获取当前角色权限。
 - `GET /healthz`：生产健康检查，校验服务和数据库连接状态。
+- `GET /api/system/llm/status`：查看 LLM 是否启用、可用、模型、超时和重试配置，不返回密钥。
 - `GET /api/users`：用户列表。
 - `GET /api/users/interviewers`：面试官列表。
 - `POST /api/users`：创建用户。

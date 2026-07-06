@@ -6,6 +6,7 @@ class Config:
     ENVIRONMENT = os.getenv("ENVIRONMENT", "development")
     SQLALCHEMY_DATABASE_URI = os.getenv("DATABASE_URL", "sqlite:///hireinsight_demo.db")
     SQLALCHEMY_TRACK_MODIFICATIONS = False
+    AUTO_CREATE_DB = os.getenv("AUTO_CREATE_DB", "false" if ENVIRONMENT == "production" else "true").lower() == "true"
     JWT_SECRET = os.getenv("JWT_SECRET", "demo-secret")
     JWT_EXPIRY_HOURS = int(os.getenv("JWT_EXPIRY_HOURS", "8"))
     CORS_ORIGINS = os.getenv("CORS_ORIGINS", "*").split(",")
@@ -33,6 +34,7 @@ class TestConfig(Config):
     SQLALCHEMY_DATABASE_URI = "sqlite:///:memory:"
     JWT_SECRET = "test-secret"
     SEED_DEMO_DATA = True
+    AUTO_CREATE_DB = True
     UPLOAD_FOLDER = "test_uploads"
     LLM_ENABLED = False
     RATE_LIMIT_ENABLED = False

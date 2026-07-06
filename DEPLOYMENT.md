@@ -13,6 +13,20 @@
 docker compose -f docker-compose.production.yml --env-file .env up -d --build
 ```
 
+容器启动时会先执行数据库迁移：
+
+```powershell
+flask --app run db upgrade
+```
+
+开发环境修改模型后生成迁移：
+
+```powershell
+cd backend
+flask --app run db migrate -m "describe change"
+flask --app run db upgrade
+```
+
 ## 健康检查
 
 ```powershell
@@ -24,12 +38,12 @@ curl https://your-domain.example/healthz
 ## 数据和文件
 
 - 数据库使用 PostgreSQL，生产不要使用 SQLite。
+- 生产环境设置 `AUTO_CREATE_DB=false`，只能通过迁移升级 schema。
 - 上传文件保存在 `uploads` volume，需配置定期备份。
 - 简历、面试报告、导出文件都属于敏感数据，下载和导出只能给授权角色。
 
 ## 当前仍需继续补齐
 
-- Alembic 数据库迁移和回滚脚本。
 - 对象存储或专用文件服务。
 - Redis/Celery 异步任务队列，用于批量简历解析、AI 评分和 BOSS 批量同步。
 - 集中日志、错误告警、AI 调用费用统计。

@@ -19,6 +19,7 @@
 - 用户管理：管理员创建账号、更新角色、启用/禁用用户。
 - 生产化基础：新增 `.env.example`、Dockerfile、生产 Docker Compose、Nginx 示例、部署清单、`/healthz` 健康检查、安全响应头、基础限流、上传数量限制和 ZIP 安全校验。
 - 生产安全加固：生产环境启动前校验 JWT/CORS/数据库/演示数据配置，请求链路增加 `X-Request-ID`，上传超限和未捕获异常统一返回 JSON。
+- 数据库迁移：新增 Flask-Migrate/Alembic 迁移骨架和初始 schema，生产环境默认禁用 `db.create_all()`，容器启动前执行 `flask --app run db upgrade`。
 
 ### 接口变更记录
 

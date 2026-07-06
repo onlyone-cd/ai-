@@ -23,4 +23,4 @@ RUN mkdir -p /data/uploads
 WORKDIR /app/backend
 EXPOSE 5001
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 CMD curl -fsS http://127.0.0.1:${PORT}/healthz || exit 1
-CMD ["sh", "-c", "gunicorn -w ${WEB_CONCURRENCY:-2} -b 0.0.0.0:${PORT:-5001} run:app"]
+CMD ["sh", "-c", "flask --app run db upgrade && gunicorn -w ${WEB_CONCURRENCY:-2} -b 0.0.0.0:${PORT:-5001} run:app"]

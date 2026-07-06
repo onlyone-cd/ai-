@@ -12,7 +12,15 @@ from sqlalchemy import text
 from werkzeug.exceptions import HTTPException, RequestEntityTooLarge
 from werkzeug.middleware.proxy_fix import ProxyFix
 
+try:
+    from flask_migrate import Migrate
+except ImportError:
+    class Migrate:
+        def init_app(self, *args, **kwargs):
+            return None
+
 db = SQLAlchemy()
+migrate = Migrate()
 _rate_buckets = defaultdict(deque)
 
 
@@ -30,6 +38,7 @@ def create_app(config_object=None):
 
     CORS(app, resources={r"/api/*": {"origins": app.config["CORS_ORIGINS"]}})
     db.init_app(app)
+    migrate.init_app(app, db)
 
     from .routes import api
 
@@ -104,9 +113,10 @@ def create_app(config_object=None):
         return jsonify({"message": "Frontend is not built yet. Run npm run dev in frontend."})
 
     with app.app_context():
-        db.create_all()
-        ensure_sqlite_schema()
-        if app.config["SEED_DEMO_DATA"]:
+        if app.config["AUTO_CREATE_DB"]:
+            db.create_all()
+            ensure_sqlite_schema()
+        if app.config["AUTO_CREATE_DB"] and app.config["SEED_DEMO_DATA"]:
             from .seed import seed_demo_data, sync_plain_profile_fields
 
             seed_demo_data()
@@ -142,5 +152,7 @@ def validate_production_config(app):
         problems.append("生产环境必须使用 PostgreSQL/MySQL，不能使用 SQLite")
     if app.config["SEED_DEMO_DATA"]:
         problems.append("生产环境必须设置 SEED_DEMO_DATA=false")
+    if app.config["AUTO_CREATE_DB"]:
+        problems.append("生产环境必须设置 AUTO_CREATE_DB=false，并使用数据库迁移")
     if problems:
         raise RuntimeError("生产配置不安全：" + "；".join(problems))

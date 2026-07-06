@@ -5,6 +5,7 @@ import hashlib
 from io import BytesIO, StringIO
 from pathlib import Path
 import re
+from time import time
 import zipfile
 
 import jwt
@@ -26,14 +27,24 @@ api = Blueprint("api", __name__)
 
 STAGES = ["pending", "ai_screen", "business_review", "interview_first", "interview_second", "offer", "onboarded", "rejected"]
 OFFER_STATUSES = {"draft", "sent", "accepted", "declined", "cancelled"}
+LOGIN_FAILURES = {}
 
 
 @api.post("/auth/login")
 def login():
     payload = request.get_json(force=True)
-    user = User.query.filter_by(username=payload.get("username"), active=True).first()
+    username = str(payload.get("username") or "").strip()
+    lock_key = login_failure_key(username)
+    retry_after = login_retry_after(lock_key)
+    if retry_after > 0:
+        return error("登录失败次数过多，请稍后再试", "LOGIN_LOCKED", 429, {"retry_after_seconds": retry_after})
+    user = User.query.filter_by(username=username, active=True).first()
     if not user or not verify_password(payload.get("password", ""), user.password_hash):
+        retry_after = record_login_failure(lock_key)
+        if retry_after > 0:
+            return error("登录失败次数过多，请稍后再试", "LOGIN_LOCKED", 429, {"retry_after_seconds": retry_after})
         return error("用户名或密码错误", "INVALID_CREDENTIALS", 401)
+    LOGIN_FAILURES.pop(lock_key, None)
     return ok({"token": issue_token(user), "user": with_permissions(user)})
 
 
@@ -2462,6 +2473,33 @@ def boss_draft_status_label(status):
         "sent": "已发送",
         "archived": "已取消",
     }.get(status, status)
+
+
+def login_failure_key(username):
+    ip = request.remote_addr or "unknown"
+    return f"{username.lower() or '-'}|{ip}"
+
+
+def login_retry_after(key):
+    entry = LOGIN_FAILURES.get(key)
+    if not entry:
+        return 0
+    locked_until = float(entry.get("locked_until") or 0)
+    remaining = int(max(0, locked_until - time()))
+    if remaining <= 0 and locked_until:
+        LOGIN_FAILURES.pop(key, None)
+    return remaining
+
+
+def record_login_failure(key):
+    max_failures = max(1, int(current_app.config.get("LOGIN_MAX_FAILURES", 5)))
+    lock_seconds = max(1, int(current_app.config.get("LOGIN_LOCKOUT_MINUTES", 15)) * 60)
+    entry = LOGIN_FAILURES.setdefault(key, {"count": 0, "locked_until": 0})
+    entry["count"] = int(entry.get("count") or 0) + 1
+    if entry["count"] >= max_failures:
+        entry["locked_until"] = time() + lock_seconds
+        return lock_seconds
+    return 0
 
 
 def summarize_text(text, limit=120):

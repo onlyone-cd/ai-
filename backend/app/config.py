@@ -22,6 +22,8 @@ class Config:
     LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
     RATE_LIMIT_ENABLED = os.getenv("RATE_LIMIT_ENABLED", "true").lower() == "true"
     RATE_LIMIT_PER_MINUTE = int(os.getenv("RATE_LIMIT_PER_MINUTE", "120"))
+    LOGIN_MAX_FAILURES = int(os.getenv("LOGIN_MAX_FAILURES", "5"))
+    LOGIN_LOCKOUT_MINUTES = int(os.getenv("LOGIN_LOCKOUT_MINUTES", "15"))
     TRUST_PROXY_COUNT = int(os.getenv("TRUST_PROXY_COUNT", "1"))
     MAX_UPLOAD_FILES = int(os.getenv("MAX_UPLOAD_FILES", "20"))
     MAX_ARCHIVE_FILES = int(os.getenv("MAX_ARCHIVE_FILES", "50"))

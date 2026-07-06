@@ -18,6 +18,22 @@ def test_login_returns_user_permissions(client):
     assert "users:manage" in data["user"]["permissions"]
 
 
+def test_login_locks_after_repeated_failures(client, app):
+    app.config["LOGIN_MAX_FAILURES"] = 2
+    app.config["LOGIN_LOCKOUT_MINUTES"] = 1
+
+    first = client.post("/api/auth/login", json={"username": "admin", "password": "wrong"})
+    second = client.post("/api/auth/login", json={"username": "admin", "password": "wrong-again"})
+    locked = client.post("/api/auth/login", json={"username": "admin", "password": "admin123"})
+
+    assert first.status_code == 401
+    assert first.get_json()["code"] == "INVALID_CREDENTIALS"
+    assert second.status_code == 429
+    assert second.get_json()["code"] == "LOGIN_LOCKED"
+    assert second.get_json()["details"]["retry_after_seconds"] > 0
+    assert locked.status_code == 429
+
+
 def test_auth_is_required_for_business_api(client):
     response = client.get("/api/candidates")
 

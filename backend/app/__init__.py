@@ -40,8 +40,11 @@ def create_app(config_object=None):
     db.init_app(app)
     migrate.init_app(app, db)
 
-    from .routes import api
+    from .routes import LOGIN_FAILURES, api
     from .cli import register_cli
+
+    if app.config.get("TESTING"):
+        LOGIN_FAILURES.clear()
 
     app.register_blueprint(api, url_prefix="/api")
     register_cli(app)

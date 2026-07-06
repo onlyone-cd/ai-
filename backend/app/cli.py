@@ -1,10 +1,12 @@
 import os
+from time import sleep
 
 import click
 
 from . import db
 from .auth import hash_password, validate_password_strength, verify_password
 from .models import User
+from .task_service import run_next_task
 
 
 def register_cli(app):
@@ -55,3 +57,27 @@ def register_cli(app):
         user.password_hash = hash_password(password)
         db.session.commit()
         click.echo(f"password reset: {username}")
+
+    @app.cli.command("run-tasks")
+    @click.option("--limit", default=10, show_default=True, help="单轮最多执行多少个队列任务。")
+    @click.option("--watch", is_flag=True, help="持续轮询队列，适合生产 worker 容器。")
+    @click.option("--sleep-seconds", default=5, show_default=True, help="watch 模式空闲等待秒数。")
+    def run_tasks(limit, watch, sleep_seconds):
+        """Run queued background tasks."""
+        while True:
+            processed = 0
+            for _ in range(max(1, int(limit or 1))):
+                try:
+                    task = run_next_task()
+                except Exception as exc:
+                    processed += 1
+                    click.echo(f"task failed: {exc}")
+                    continue
+                if not task:
+                    break
+                processed += 1
+                click.echo(f"task succeeded: {task.id} {task.task_type}")
+            click.echo(f"processed tasks: {processed}")
+            if not watch:
+                break
+            sleep(max(1, int(sleep_seconds or 1)))

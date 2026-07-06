@@ -10,6 +10,7 @@
 - LLM 调用超时和重试由 `LLM_TIMEOUT_SECONDS`、`LLM_MAX_RETRIES`、`LLM_RETRY_BACKOFF_SECONDS` 控制，状态可通过 `/api/system/llm/status` 巡检。
 - 候选人面试间链接有效期和公开接口限制由 `INTERVIEW_ROOM_TOKEN_HOURS`、`PUBLIC_INTERVIEW_MAX_REQUESTS_PER_MINUTE`、`PUBLIC_INTERVIEW_MAX_ANSWER_CHARS` 控制。
 - 结构化访问日志由 `ACCESS_LOG_ENABLED` 控制，慢请求阈值由 `SLOW_REQUEST_MS` 控制；生产建议接入集中日志平台并按 `request_id` 检索。
+- 后台任务 worker 由 Docker Compose 的 `worker` 服务运行，轮询参数由 `TASK_WORKER_LIMIT`、`TASK_WORKER_SLEEP_SECONDS` 控制。
 - 使用 HTTPS，Nginx 前置代理后保留 `X-Forwarded-*` 请求头。
 
 ## Docker 启动
@@ -18,7 +19,7 @@
 docker compose -f docker-compose.production.yml --env-file .env up -d --build
 ```
 
-容器启动时会先执行数据库迁移：
+`app` 和 `worker` 容器启动时会先执行数据库迁移：
 
 ```powershell
 flask --app run db upgrade
@@ -42,6 +43,13 @@ docker compose -f docker-compose.production.yml --env-file .env exec app flask -
 cd backend
 flask --app run db migrate -m "describe change"
 flask --app run db upgrade
+```
+
+本地手动执行后台任务：
+
+```powershell
+cd backend
+flask --app run run-tasks --limit 10
 ```
 
 ## 健康检查
@@ -85,6 +93,6 @@ curl https://your-domain.example/healthz
 ## 当前仍需继续补齐
 
 - 对象存储或专用文件服务。
-- Redis/Celery 异步任务队列，用于批量简历解析、AI 评分和 BOSS 批量同步。
+- Redis/Celery 高吞吐任务队列，用于替换当前数据库轻量任务队列，承载更大规模的批量简历解析、AI 评分和 BOSS 批量同步。
 - 集中日志、错误告警、AI 调用费用统计。
 - E2E 自动化测试和正式发布流水线。

@@ -30,6 +30,23 @@ services:
     ports:
       - "5001:5001"
 
+  worker:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://hireinsight:${POSTGRES_PASSWORD}@postgres:5432/hireinsight
+      UPLOAD_FOLDER: /data/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - uploads:/data/uploads
+    command: >
+      sh -c "flask --app run db upgrade &&
+      flask --app run run-tasks --watch --limit ${TASK_WORKER_LIMIT:-5} --sleep-seconds ${TASK_WORKER_SLEEP_SECONDS:-5}"
+
 volumes:
   postgres-data:
   uploads:

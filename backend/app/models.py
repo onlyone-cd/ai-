@@ -398,6 +398,48 @@ class BossAccount(db.Model):
         }
 
 
+class BackgroundTask(db.Model):
+    __table_args__ = (
+        db.Index("ix_background_task_status_created", "status", "created_at"),
+        db.Index("ix_background_task_type_status", "task_type", "status"),
+        db.Index("ix_background_task_creator_created", "created_by", "created_at"),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    task_type = db.Column(db.String(64), nullable=False)
+    status = db.Column(db.String(24), nullable=False, default="queued")
+    payload = db.Column(db.JSON, nullable=False, default=dict)
+    result = db.Column(db.JSON, nullable=False, default=dict)
+    error = db.Column(db.Text, nullable=True)
+    attempts = db.Column(db.Integer, nullable=False, default=0)
+    max_attempts = db.Column(db.Integer, nullable=False, default=3)
+    created_by = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
+    created_at = db.Column(db.DateTime(timezone=True), default=utcnow)
+    updated_at = db.Column(db.DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+    started_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    finished_at = db.Column(db.DateTime(timezone=True), nullable=True)
+
+    creator = db.relationship("User")
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "task_type": self.task_type,
+            "status": self.status,
+            "payload": self.payload or {},
+            "result": self.result or {},
+            "error": self.error,
+            "attempts": self.attempts,
+            "max_attempts": self.max_attempts,
+            "created_by": self.created_by,
+            "creator_name": self.creator.name if self.creator else "",
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+            "started_at": self.started_at.isoformat() if self.started_at else None,
+            "finished_at": self.finished_at.isoformat() if self.finished_at else None,
+        }
+
+
 class AuditLog(db.Model):
     __table_args__ = (
         db.Index("ix_audit_log_created_at", "created_at"),

@@ -248,6 +248,14 @@ textarea {
     @apply bg-slate-100 text-steel;
   }
 
+  .badge.success {
+    @apply bg-emerald-50 text-emerald-700;
+  }
+
+  .badge.danger {
+    @apply bg-red-50 text-red-700;
+  }
+
   .chip {
     @apply rounded-md border border-blue-100 bg-blue-50/60 px-2 py-1 text-xs text-blue-700;
   }

@@ -13,7 +13,8 @@ from app import create_app, db
 from app.config import Config
 from app.auth import verify_password
 from app.llm_client import chat_json
-from app.models import AuditLog, BossDraft, Candidate, CandidateTag, InterviewAssignment, InterviewFeedback, Job, Match, OfferRecord, PipelineStage, User
+from app.models import AuditLog, BackgroundTask, BossDraft, Candidate, CandidateTag, InterviewAssignment, InterviewFeedback, Job, Match, OfferRecord, PipelineStage, User
+from app.task_service import run_next_task
 
 
 def test_login_returns_user_permissions(client):
@@ -136,11 +137,13 @@ def test_common_query_indexes_exist(app):
     candidate_indexes = {item["name"] for item in inspector.get_indexes("candidate")}
     pipeline_indexes = {item["name"] for item in inspector.get_indexes("pipeline_stage")}
     audit_indexes = {item["name"] for item in inspector.get_indexes("audit_log")}
+    task_indexes = {item["name"] for item in inspector.get_indexes("background_task")}
 
     assert "ix_candidate_source_created_at" in candidate_indexes
     assert "ix_candidate_phone_masked" in candidate_indexes
     assert "ix_pipeline_stage_job_candidate_ts" in pipeline_indexes
     assert "ix_audit_log_target_created" in audit_indexes
+    assert "ix_background_task_status_created" in task_indexes
 
 
 def test_admin_can_manage_users(client, admin_headers, recruiter_headers):
@@ -1114,6 +1117,45 @@ def test_resume_retry_parse_refreshes_tags(client, admin_headers):
     data = response.get_json()["data"]["candidate"]
     assert data["parse_status"] == "ok"
     assert data["tags"]
+
+
+def test_resume_retry_parse_can_run_as_background_task(client, admin_headers):
+    candidate = client.get("/api/candidates/1", headers=admin_headers).get_json()["data"]
+    queued = client.post(f"/api/resume/{candidate['id']}/retry-parse?async=1", headers=admin_headers)
+
+    assert queued.status_code == 200
+    task = queued.get_json()["data"]["task"]
+    assert task["task_type"] == "resume_retry_parse"
+    assert task["status"] == "queued"
+
+    listed = client.get("/api/tasks?task_type=resume_retry_parse", headers=admin_headers)
+    assert listed.status_code == 200
+    listed_data = listed.get_json()["data"]
+    assert listed_data["status_counts"]["queued"] >= 1
+    assert any(item["id"] == task["id"] for item in listed_data["items"])
+
+    run_task = run_next_task()
+    assert run_task.id == task["id"]
+    assert run_task.status == "succeeded"
+    assert run_task.result["candidate_id"] == candidate["id"]
+    assert run_task.result["tag_count"] > 0
+
+    detail = client.get(f"/api/tasks/{task['id']}", headers=admin_headers)
+    assert detail.status_code == 200
+    assert detail.get_json()["data"]["status"] == "succeeded"
+
+
+def test_failed_background_task_can_be_retried(client, admin_headers):
+    task = BackgroundTask(task_type="resume_retry_parse", status="failed", payload={"candidate_id": 999999}, attempts=1, max_attempts=3, created_by=1)
+    db.session.add(task)
+    db.session.commit()
+
+    response = client.post(f"/api/tasks/{task.id}/retry", headers=admin_headers)
+
+    assert response.status_code == 200
+    data = response.get_json()["data"]
+    assert data["status"] == "queued"
+    assert data["error"] is None
 
 
 def test_boss_cookie_verify_ai_screen_and_draft_actions(client, admin_headers):

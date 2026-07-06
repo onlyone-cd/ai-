@@ -114,6 +114,22 @@ export type AuditLog = {
   created_at: string;
 };
 
+export type BackgroundTask = {
+  id: number;
+  task_type: string;
+  status: "queued" | "running" | "succeeded" | "failed";
+  payload: Record<string, unknown>;
+  result: Record<string, unknown>;
+  error?: string | null;
+  attempts: number;
+  max_attempts: number;
+  creator_name?: string;
+  created_at?: string | null;
+  updated_at?: string | null;
+  started_at?: string | null;
+  finished_at?: string | null;
+};
+
 export type OfferRecord = {
   id: number;
   candidate_id: number;
@@ -250,6 +266,8 @@ export const api = {
   me: () => request<User>("/auth/me"),
   users: () => request<{ items: User[] }>("/users"),
   auditLogs: () => request<{ items: AuditLog[] }>("/audit/logs"),
+  tasks: (status = "all") => request<{ items: BackgroundTask[]; status_counts: Record<string, number> }>(`/tasks?status=${status}`),
+  retryTask: (id: number) => request<BackgroundTask>(`/tasks/${id}/retry`, { method: "POST" }),
   interviewers: () => request<{ items: User[] }>("/users/interviewers"),
   createUser: (payload: { username: string; name: string; role: string; password: string }) =>
     request<User>("/users", { method: "POST", body: JSON.stringify(payload) }),
@@ -264,6 +282,7 @@ export const api = {
     request<Candidate>(`/candidates/${id}/tags`, { method: "PUT", body: JSON.stringify({ tags }) }),
   deleteCandidate: (id: number) => request<{ deleted: number }>(`/candidates/${id}`, { method: "DELETE" }),
   retryParseResume: (id: number) => request<{ candidate: Candidate }>(`/resume/${id}/retry-parse`, { method: "POST" }),
+  retryParseResumeAsync: (id: number) => request<{ task: BackgroundTask }>(`/resume/${id}/retry-parse?async=1`, { method: "POST" }),
   uploadResume: (files: File | File[]) => {
     const formData = new FormData();
     for (const file of Array.isArray(files) ? files : [files]) {

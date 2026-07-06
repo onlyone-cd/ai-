@@ -32,6 +32,7 @@
 - 数据库性能：新增常用查询索引和 Alembic 迁移 `0002_add_query_indexes`，覆盖候选人、标签、岗位、匹配、流程、面试、Offer、BOSS 和审计日志。
 - 数据量保护：核心列表接口统一支持 `limit`/`offset` 分页，并返回 `total`、`has_more`，避免生产环境一次性加载全量数据。
 - 生产观测：新增结构化访问日志，记录 request_id、方法、路径、状态码、耗时、慢请求标记和 UA，支持 `ACCESS_LOG_ENABLED`、`SLOW_REQUEST_MS` 配置。
+- 后台任务：新增数据库任务队列、任务状态查询/重试接口、`run-tasks` worker 命令和生产 worker 容器；简历重新解析支持异步入队。
 
 ### 接口变更记录
 
@@ -42,6 +43,9 @@
 - `GET /api/auth/permissions`：获取当前角色权限。
 - `GET /healthz`：生产健康检查，校验服务和数据库连接状态。
 - `GET /api/system/llm/status`：查看 LLM 是否启用、可用、模型、超时和重试配置，不返回密钥。
+- `GET /api/tasks`：后台任务列表，支持 `status`、`task_type`、`limit`、`offset`。
+- `GET /api/tasks/<id>`：后台任务详情。
+- `POST /api/tasks/<id>/retry`：失败后台任务重新排队。
 - `GET /api/users`：用户列表，支持 `limit`/`offset` 分页。
 - `GET /api/users/interviewers`：面试官列表。
 - `POST /api/users`：创建用户。
@@ -57,7 +61,7 @@
 - `PUT /api/candidates/<id>/tags`：替换候选人技能标签。
 - `DELETE /api/candidates/<id>`：删除候选人并清理关联数据。
 - `POST /api/resume/upload`：上传单个/多个简历文件或 ZIP。
-- `POST /api/resume/<id>/retry-parse`：重新解析候选人简历。
+- `POST /api/resume/<id>/retry-parse`：重新解析候选人简历；加 `?async=1` 时创建后台任务。
 - `GET /api/tags`：获取技能标签库。
 
 #### 岗位和匹配

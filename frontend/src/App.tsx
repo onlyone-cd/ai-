@@ -32,7 +32,7 @@ import {
   Wrench,
   Users
 } from "lucide-react";
-import { api, AgentResponse, AiInterviewPlan, AuditLog, BiOverview, BossInboxItem, Candidate, clearToken, InterviewAssignment, InterviewFeedback, InterviewMessage, Job, MatchResult, notify, OfferRecord, PipelineItem, PublicInterviewRoom, setToken, SkillTag, User } from "./lib/api";
+import { api, AgentResponse, AiInterviewPlan, AuditLog, BackgroundTask, BiOverview, BossInboxItem, Candidate, clearToken, InterviewAssignment, InterviewFeedback, InterviewMessage, Job, MatchResult, notify, OfferRecord, PipelineItem, PublicInterviewRoom, setToken, SkillTag, User } from "./lib/api";
 
 const stageLabels: Record<string, string> = {
   pending: "待处理",
@@ -54,7 +54,7 @@ const offerStatusLabels: Record<string, string> = {
   cancelled: "已取消"
 };
 
-type View = "candidates" | "jobs" | "pipeline" | "interviews" | "offers" | "boss" | "bi" | "agent" | "audit" | "users";
+type View = "candidates" | "jobs" | "pipeline" | "interviews" | "offers" | "boss" | "bi" | "agent" | "tasks" | "audit" | "users";
 
 function App() {
   const roomToken = window.location.pathname.match(/^\/interview-room\/([^/]+)/)?.[1] || "";
@@ -111,6 +111,7 @@ function App() {
     { key: "boss", icon: <MessageSquareText size={17} />, label: "BOSS 闭环" },
     { key: "bi", icon: <BarChart3 size={17} />, label: "BI 看板" },
     { key: "agent", icon: <Bot size={17} />, label: "AI 助手" },
+    ...(user.role !== "interviewer" ? [{ key: "tasks", icon: <Database size={17} />, label: "后台任务" }] : []),
     ...(user.role === "admin" ? [{ key: "audit", icon: <Clock3 size={17} />, label: "操作日志" }] : []),
     ...(user.role === "admin" ? [{ key: "users", icon: <UserCog size={17} />, label: "用户管理" }] : [])
   ];
@@ -161,7 +162,7 @@ function App() {
         </AntLayout.Header>
 
         <AntLayout.Content className="app-content p-4 lg:p-8">
-          <MobileTabs view={view} setView={setView} isAdmin={user.role === "admin"} />
+          <MobileTabs view={view} setView={setView} isAdmin={user.role === "admin"} canUseTasks={user.role !== "interviewer"} />
           {view === "candidates" && <CandidatesPage />}
           {view === "jobs" && <JobsPage />}
           {view === "pipeline" && <PipelinePage />}
@@ -170,6 +171,7 @@ function App() {
           {view === "boss" && <BossPage />}
           {view === "bi" && <BiPage />}
           {view === "agent" && <AgentPage />}
+          {view === "tasks" && <TasksPage />}
           {view === "audit" && <AuditLogsPage />}
           {view === "users" && <UsersPage currentUser={user} />}
         </AntLayout.Content>
@@ -2304,6 +2306,84 @@ function AgentTrace({ response }: { response: AgentResponse }) {
   );
 }
 
+function TasksPage() {
+  const [tasks, setTasks] = useState<BackgroundTask[]>([]);
+  const [counts, setCounts] = useState<Record<string, number>>({});
+  const [status, setStatus] = useState("all");
+  const [busyId, setBusyId] = useState<number | null>(null);
+
+  async function load(nextStatus = status) {
+    const data = await api.tasks(nextStatus);
+    setTasks(data.items);
+    setCounts(data.status_counts || {});
+  }
+
+  useEffect(() => {
+    load(status);
+  }, [status]);
+
+  async function retry(task: BackgroundTask) {
+    setBusyId(task.id);
+    try {
+      await api.retryTask(task.id);
+      await load();
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  const statuses = ["all", "queued", "running", "succeeded", "failed"];
+
+  return (
+    <section className="space-y-4">
+      <div className="toolbar">
+        <div>
+          <h2 className="font-semibold">后台任务</h2>
+          <p className="text-xs text-steel">用于批量解析、AI 评分、BOSS 同步等耗时任务的队列状态。</p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <select className="select" value={status} onChange={(event) => setStatus(event.target.value)}>
+            {statuses.map((item) => <option value={item} key={item}>{taskStatusLabel(item)}{item !== "all" ? ` · ${counts[item] || 0}` : ""}</option>)}
+          </select>
+          <button className="secondary-button" onClick={() => load()}>
+            <RefreshCw size={17} />
+            刷新
+          </button>
+        </div>
+      </div>
+
+      <div className="grid gap-3">
+        {tasks.map((task) => (
+          <div className="row-card flex-col items-start" key={task.id}>
+            <div className="flex w-full flex-wrap items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h3 className="font-semibold">#{task.id} {taskTypeLabel(task.task_type)}</h3>
+                  <span className={`badge ${task.status === "failed" ? "danger" : task.status === "succeeded" ? "success" : "muted"}`}>{taskStatusLabel(task.status)}</span>
+                  <span className="badge muted">尝试 {task.attempts}/{task.max_attempts}</span>
+                </div>
+                <p className="mt-1 text-sm text-steel">
+                  {task.creator_name || "系统"} · 创建 {task.created_at ? formatDateTime(task.created_at) : "-"}
+                  {task.finished_at ? ` · 完成 ${formatDateTime(task.finished_at)}` : ""}
+                </p>
+              </div>
+              {task.status === "failed" && (
+                <button className="secondary-button" disabled={busyId === task.id} onClick={() => retry(task)}>
+                  <RefreshCw size={17} />
+                  重新排队
+                </button>
+              )}
+            </div>
+            {task.error && <p className="mt-2 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{task.error}</p>}
+            {Object.keys(task.result || {}).length > 0 && <p className="mt-2 text-xs text-steel">{JSON.stringify(task.result)}</p>}
+          </div>
+        ))}
+        {tasks.length === 0 && <EmptyState icon={<Database size={22} />} text="暂无后台任务" />}
+      </div>
+    </section>
+  );
+}
+
 function AuditLogsPage() {
   const [logs, setLogs] = useState<AuditLog[]>([]);
   const [filter, setFilter] = useState("");
@@ -2561,15 +2641,12 @@ function CandidateDetailPage({ candidate, onBack, onDeleted }: { candidate: Cand
 
   async function retryParse() {
     setBusy(true);
-    setMessage("正在重新解析简历...");
+    setMessage("正在创建后台解析任务...");
     try {
-      const data = await api.retryParseResume(detail.id);
-      setDetail(data.candidate);
-      setEdit(candidateEditFields(data.candidate));
-      setTagText(formatTagText(data.candidate.tags));
-      setMessage(`重新解析完成，识别到 ${data.candidate.tags.length} 个技能标签`);
+      const data = await api.retryParseResumeAsync(detail.id);
+      setMessage(`已加入后台任务 #${data.task.id}，可在后台任务页面查看进度`);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "重新解析失败");
+      setMessage(error instanceof Error ? error.message : "创建后台解析任务失败");
     } finally {
       setBusy(false);
     }
@@ -2619,7 +2696,7 @@ function CandidateDetailPage({ candidate, onBack, onDeleted }: { candidate: Cand
           </button>
           <button className="secondary-button" onClick={retryParse} disabled={busy}>
             <RefreshCw size={17} />
-            {busy ? "解析中" : "重新解析"}
+            {busy ? "入队中" : "后台重解析"}
           </button>
           <button className="secondary-button" onClick={() => api.candidateResume(detail.id)}>
             <Download size={17} />
@@ -3017,8 +3094,9 @@ function parseInterviewDimensions(comment: string) {
   });
 }
 
-function MobileTabs({ view, setView, isAdmin }: { view: View; setView: (view: View) => void; isAdmin: boolean }) {
+function MobileTabs({ view, setView, isAdmin, canUseTasks }: { view: View; setView: (view: View) => void; isAdmin: boolean; canUseTasks: boolean }) {
   const tabs: [View, string][] = [["candidates", "人才"], ["jobs", "岗位"], ["pipeline", "流程"], ["interviews", "面试"], ["offers", "Offer"], ["boss", "BOSS"], ["bi", "BI"], ["agent", "AI"]];
+  if (canUseTasks) tabs.push(["tasks", "任务"]);
   if (isAdmin) {
     tabs.push(["audit", "日志"]);
     tabs.push(["users", "用户"]);
@@ -3059,6 +3137,7 @@ function titleFor(view: View) {
     boss: "BOSS 半自动闭环",
     bi: "BI 看板",
     agent: "AI 助手",
+    tasks: "后台任务",
     audit: "操作日志",
     users: "用户管理"
   }[view];
@@ -3073,8 +3152,26 @@ function auditActionLabel(action: string) {
     close: "关闭",
     restore: "恢复",
     cancel: "取消",
-    feedback: "提交反馈"
+    feedback: "提交反馈",
+    enqueue: "加入队列",
+    retry: "重新排队"
   }[action] || action;
+}
+
+function taskStatusLabel(status: string) {
+  return {
+    all: "全部",
+    queued: "排队中",
+    running: "执行中",
+    succeeded: "已完成",
+    failed: "失败"
+  }[status] || status;
+}
+
+function taskTypeLabel(type: string) {
+  return {
+    resume_retry_parse: "简历重新解析"
+  }[type] || type;
 }
 
 function auditTargetLabel(target: string) {
@@ -3083,7 +3180,8 @@ function auditTargetLabel(target: string) {
     candidate: "候选人",
     job: "岗位",
     interview: "面试",
-    offer: "Offer"
+    offer: "Offer",
+    background_task: "后台任务"
   }[target] || target;
 }
 

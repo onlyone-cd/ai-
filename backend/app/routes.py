@@ -17,11 +17,12 @@ from .auth import hash_password, issue_token, login_required, roles_required, va
 from .job_service import build_jd_structured, ensure_jd_structured, persist_matches, preview_matches
 from .llm_client import LLMError, chat_json, llm_available, llm_status
 from .matching import match_candidate
-from .models import AuditLog, BossAccount, BossDraft, Candidate, CandidateTag, InterviewAssignment, InterviewFeedback, Job, Match, OfferRecord, PipelineStage, User
+from .models import AuditLog, BackgroundTask, BossAccount, BossDraft, Candidate, CandidateTag, InterviewAssignment, InterviewFeedback, Job, Match, OfferRecord, PipelineStage, User
 from .rbac import ROLES, role_permissions
 from .resume_service import ARCHIVE_EXTENSIONS, parse_and_save_archive, parse_and_save_resume, parse_and_save_text, reparse_candidate
 from .responses import error, ok
 from .tag_library import label_map, load_labels
+from .task_service import enqueue_task, retry_task
 
 api = Blueprint("api", __name__)
 
@@ -66,6 +67,59 @@ def permissions(user):
 @roles_required("admin", "manager")
 def system_llm_status(user):
     return ok(llm_status())
+
+
+@api.get("/tasks")
+@login_required
+@roles_required("admin", "manager", "recruiter")
+def list_tasks(user):
+    query = BackgroundTask.query.order_by(BackgroundTask.created_at.desc())
+    status = request.args.get("status")
+    task_type = request.args.get("task_type")
+    if status and status != "all":
+        query = query.filter_by(status=status)
+    if task_type:
+        query = query.filter_by(task_type=task_type)
+    if user.role == "recruiter":
+        query = query.filter_by(created_by=user.id)
+    tasks, meta = paginate_query(query)
+    count_base = BackgroundTask.query
+    if task_type:
+        count_base = count_base.filter_by(task_type=task_type)
+    if user.role == "recruiter":
+        count_base = count_base.filter_by(created_by=user.id)
+    status_counts = {status_name: count_base.filter_by(status=status_name).count() for status_name in ["queued", "running", "succeeded", "failed"]}
+    return ok({"items": [task.to_dict() for task in tasks], "status_counts": status_counts, **meta})
+
+
+@api.get("/tasks/<int:task_id>")
+@login_required
+@roles_required("admin", "manager", "recruiter")
+def get_task(user, task_id):
+    task = db.session.get(BackgroundTask, task_id)
+    if not task:
+        return error("后台任务不存在", "NOT_FOUND", 404)
+    if user.role == "recruiter" and task.created_by != user.id:
+        return error("无权查看该后台任务", "FORBIDDEN", 403)
+    return ok(task.to_dict())
+
+
+@api.post("/tasks/<int:task_id>/retry")
+@login_required
+@roles_required("admin", "manager", "recruiter")
+def retry_background_task(user, task_id):
+    task = db.session.get(BackgroundTask, task_id)
+    if not task:
+        return error("后台任务不存在", "NOT_FOUND", 404)
+    if user.role == "recruiter" and task.created_by != user.id:
+        return error("无权重试该后台任务", "FORBIDDEN", 403)
+    try:
+        task = retry_task(task)
+    except ValueError as exc:
+        return error(str(exc), "TASK_NOT_RETRYABLE", 409)
+    audit_log(user, "retry", "background_task", task.id, task.task_type)
+    db.session.commit()
+    return ok(task.to_dict(), "后台任务已重新排队")
 
 
 def pagination_params(default_limit=50, max_limit=200):
@@ -376,6 +430,11 @@ def retry_parse_resume(user, candidate_id):
     candidate = db.session.get(Candidate, candidate_id)
     if not candidate:
         return error("候选人不存在", "NOT_FOUND", 404)
+    if request.args.get("async") in {"1", "true", "yes"}:
+        task = enqueue_task("resume_retry_parse", {"candidate_id": candidate.id}, created_by=user.id)
+        audit_log(user, "enqueue", "background_task", task.id, task.task_type, {"candidate_id": candidate.id})
+        db.session.commit()
+        return ok({"task": task.to_dict()}, "简历重解析任务已加入后台队列")
     try:
         candidate = reparse_candidate(candidate)
         db.session.commit()

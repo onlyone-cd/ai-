@@ -1,6 +1,6 @@
-# AI 招聘管理系统 Demo
+# AI 招聘管理系统
 
-这是按项目文档生成的最小可运行 Demo，技术栈为 Flask + SQLAlchemy + React + TypeScript + Vite + Tailwind。Demo 先打通登录、人才库、岗位、匹配、流程、BOSS 半自动闭环、BI 和 AI 助手的主链路。
+AI 招聘管理系统用于打通简历导入、人才库解析、岗位管理、人岗匹配、招聘流程、AI 面试、Offer、BOSS 半自动同步、BI 看板和 AI Agent 助手。技术栈为 Flask + SQLAlchemy + Alembic + React + TypeScript + Vite + Tailwind，支持 Docker 生产部署、权限控制、审计日志、后台任务和 DeepSeek 增强解析。
 
 ## 快速启动
 
@@ -21,7 +21,7 @@ pnpm install
 pnpm run dev
 ```
 
-默认账号：
+开发默认账号：
 
 - 用户名：`admin`
 - 密码：`admin123`
@@ -33,21 +33,24 @@ pnpm run dev
 
 也可以先执行 `pnpm run build`，再只启动后端，Flask 会在 `http://localhost:5001` 同源托管前端和 `/api`。
 
-## Demo 覆盖范围
+## 核心能力
 
-- RBAC 登录演示
-- 人才库列表、标签、经验档位、详情抽屉
-- 岗位创建和 JD 技能权重解析
-- 人岗匹配，使用 `75% 覆盖率 + 25% 熟练度` 公式
+- JWT 登录、RBAC 权限、管理员用户管理
+- 人才库列表、批量简历/ZIP 上传、标签、经验档位、详情页、重解析和导出
+- 岗位创建、AI 生成 JD、AI 校准 JD、JD 技能权重解析
+- 人岗匹配、匹配预览、正式匹配持久化、低于 50 分过滤
 - 命中标签、缺失标签、exact/related 解释
-- 候选人流程看板和阶段推进
-- BOSS Cookie 状态、岗位同步、候选人收件箱导入
+- 候选人流程看板、阶段推进、流程历史和导出
+- AI 面试安排、候选人网页面试间、语音答题、动态追问、完成同步和 AI 评分
+- Offer 创建、状态流转、确认函导出
+- BOSS Cookie 状态、岗位同步、候选人收件箱导入、岗位推荐
 - BI 招聘漏斗、来源质量、经验分布
-- AI 助手只读查询和受控动作模拟
+- AI Agent 对话，可查询人才库、岗位、匹配、流程、面试、Offer、BOSS、BI 和用户模块
+- 后台任务队列、结构化访问日志、审计日志、健康检查、生产迁移和备份脚本
 
-## 正式开发进度
+## 开发进度
 
-第一阶段系统地基已开始：
+当前主链路已进入上线准备阶段，已完成：
 
 - 后端已拆出 `config.py`、`auth.py`、`rbac.py`、`responses.py`
 - JWT 登录、当前用户、角色权限清单已独立封装

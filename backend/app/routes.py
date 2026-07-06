@@ -1739,6 +1739,8 @@ def ai_job_payload(payload, generate=False):
                 ],
                 temperature=0.2,
                 timeout=30,
+                source="job",
+                tool_name="ai_generate_jd" if generate else "ai_calibrate_jd",
             )
             base["jd_text"] = str(data.get("jd_text") or base["jd_text"]).strip()
             base["skill_tags_raw"] = str(data.get("skill_tags_raw") or base["skill_tags_raw"]).strip()
@@ -1763,6 +1765,15 @@ def fallback_jd_text(title, city="", department=""):
 def agent_chat(user):
     message = request.get_json(force=True).get("message", "")
     result = run_agent_tool(user, message)
+    audit_log(
+        user,
+        "agent_tool",
+        "agent",
+        None,
+        str(result.get("tool") or "chat"),
+        {"tool": result.get("tool"), "readonly": bool(result.get("readonly", True)), "message_length": len(str(message or ""))},
+    )
+    db.session.commit()
     return ok(result)
 
 
@@ -2009,7 +2020,7 @@ def free_agent_chat(text, suggestions):
         },
     ]
     try:
-        data = chat_json(messages, temperature=0.3, timeout=30)
+        data = chat_json(messages, temperature=0.3, timeout=30, source="agent", tool_name="chat")
     except LLMError as exc:
         return {
             "answer": f"我理解你的问题，但 DeepSeek 暂时不可用：{str(exc)[:120]}。你可以先使用已接入的模块工具继续操作。",
@@ -2361,6 +2372,8 @@ def build_interview_ai_plan(assignment, prefer_deepseek=False):
                 ],
                 temperature=0.2,
                 timeout=30,
+                source="interview",
+                tool_name="interview_ai_plan",
             )
             payload["opening"] = str(data.get("opening") or payload["opening"])
             payload["questions"] = normalize_interview_questions(data.get("questions")) or payload["questions"]
@@ -2392,6 +2405,8 @@ def build_interview_turn_reply(assignment, payload):
                     ],
                     temperature=0.3,
                     timeout=12,
+                    source="interview",
+                    tool_name="interview_clarify_question",
                 )
                 base["reply"] = str(data.get("reply") or base["reply"]).strip()
                 base["source"] = "deepseek"
@@ -2414,6 +2429,8 @@ def build_interview_turn_reply(assignment, payload):
                 ],
                 temperature=0.3,
                 timeout=12,
+                source="interview",
+                tool_name="interview_followup",
             )
             base["reply"] = str(data.get("reply") or base["reply"]).strip()
             base["source"] = "deepseek"
@@ -2489,6 +2506,8 @@ def score_public_interview(assignment, answers, messages, cheat_events):
                 ],
                 temperature=0.2,
                 timeout=15,
+                source="interview",
+                tool_name="interview_ai_scoring",
             )
             score = int(data.get("score", result["score"]))
             result = {

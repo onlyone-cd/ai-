@@ -34,6 +34,7 @@
 - 生产观测：新增结构化访问日志，记录 request_id、方法、路径、状态码、耗时、慢请求标记和 UA，支持 `ACCESS_LOG_ENABLED`、`SLOW_REQUEST_MS` 配置。
 - 后台任务：新增数据库任务队列、任务状态查询/重试接口、`run-tasks` worker 命令和生产 worker 容器；简历重新解析支持异步入队。
 - AI 用量统计：LLM 调用成功/失败均记录 provider、model、耗时、token、预估成本和 request_id，新增用量汇总接口用于费用巡检。
+- AI 调用溯源：LLM 用量记录新增 `source`、`tool_name`、`api_path`，AI Agent 工具选择写入审计日志，便于追踪哪个接口/工具触发了 AI。
 - 数据留存：新增 `prune-data` 运维命令，支持按保留天数清理过期审计日志、LLM 用量记录和已结束后台任务，默认 dry-run 防误删。
 
 ### 接口变更记录

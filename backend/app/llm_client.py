@@ -3,7 +3,7 @@ import time
 import urllib.error
 import urllib.request
 
-from flask import current_app, g, has_request_context
+from flask import current_app, g, has_request_context, request
 from sqlalchemy.orm import Session
 
 
@@ -27,7 +27,7 @@ def llm_status():
     }
 
 
-def chat_json(messages, temperature=0.1, timeout=None):
+def chat_json(messages, temperature=0.1, timeout=None, source="", tool_name=""):
     if not llm_available():
         raise LLMError("LLM 未启用或缺少 API Key")
 
@@ -72,7 +72,7 @@ def chat_json(messages, temperature=0.1, timeout=None):
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="ignore")
             duration_ms = int((time.monotonic() - started_at) * 1000)
-            record_llm_usage(messages, None, False, duration_ms, attempt + 1, status_code=exc.code, error_text=detail)
+            record_llm_usage(messages, None, False, duration_ms, attempt + 1, status_code=exc.code, error_text=detail, source=source, tool_name=tool_name)
             current_app.logger.warning("LLM HTTP error code=%s request_id=%s detail=%s", exc.code, request_id, detail[:200])
             raise LLMError(f"LLM HTTP {exc.code}: {detail[:300]}") from exc
         except (TimeoutError, urllib.error.URLError, OSError) as exc:
@@ -88,24 +88,24 @@ def chat_json(messages, temperature=0.1, timeout=None):
                 time.sleep(backoff * (attempt + 1))
                 continue
             duration_ms = int((time.monotonic() - started_at) * 1000)
-            record_llm_usage(messages, None, False, duration_ms, attempt + 1, error_text=str(last_error))
+            record_llm_usage(messages, None, False, duration_ms, attempt + 1, error_text=str(last_error), source=source, tool_name=tool_name)
             raise LLMError(f"LLM 调用失败: {last_error}") from exc
         except Exception as exc:
             duration_ms = int((time.monotonic() - started_at) * 1000)
-            record_llm_usage(messages, None, False, duration_ms, attempt + 1, error_text=str(exc))
+            record_llm_usage(messages, None, False, duration_ms, attempt + 1, error_text=str(exc), source=source, tool_name=tool_name)
             raise LLMError(f"LLM 调用失败: {exc}") from exc
 
     try:
         content = body["choices"][0]["message"]["content"]
         parsed = json.loads(content)
-        record_llm_usage(messages, body, True, int((time.monotonic() - started_at) * 1000), successful_attempt)
+        record_llm_usage(messages, body, True, int((time.monotonic() - started_at) * 1000), successful_attempt, source=source, tool_name=tool_name)
         return parsed
     except Exception as exc:
-        record_llm_usage(messages, body, False, int((time.monotonic() - started_at) * 1000), successful_attempt, error_text=str(exc))
+        record_llm_usage(messages, body, False, int((time.monotonic() - started_at) * 1000), successful_attempt, error_text=str(exc), source=source, tool_name=tool_name)
         raise LLMError("LLM 返回内容不是合法 JSON") from exc
 
 
-def record_llm_usage(messages, response_body, success, duration_ms, attempts, status_code=None, error_text=""):
+def record_llm_usage(messages, response_body, success, duration_ms, attempts, status_code=None, error_text="", source="", tool_name=""):
     if not current_app.config.get("LLM_USAGE_LOG_ENABLED", True):
         return
     try:
@@ -117,6 +117,9 @@ def record_llm_usage(messages, response_body, success, duration_ms, attempts, st
             provider=str(current_app.config.get("LLM_PROVIDER") or ""),
             model=str(current_app.config.get("LLM_MODEL") or ""),
             endpoint=str(current_app.config.get("LLM_API_URL") or "")[:255],
+            source=str(source or default_source())[:80],
+            tool_name=str(tool_name or "")[:120] or None,
+            api_path=active_api_path(),
             request_id=getattr(g, "request_id", "") if has_request_context() else "",
             success=bool(success),
             status_code=status_code,
@@ -168,3 +171,20 @@ def estimate_cost_usd(prompt_tokens, completion_tokens):
     prompt_price = float(current_app.config.get("LLM_PROMPT_PRICE_PER_1M_TOKENS_USD", 0) or 0)
     completion_price = float(current_app.config.get("LLM_COMPLETION_PRICE_PER_1M_TOKENS_USD", 0) or 0)
     return (prompt_tokens / 1_000_000 * prompt_price) + (completion_tokens / 1_000_000 * completion_price)
+
+
+def active_api_path():
+    return request.path[:255] if has_request_context() else None
+
+
+def default_source():
+    if not has_request_context():
+        return "background"
+    path = request.path
+    if "/agent/" in path:
+        return "agent"
+    if "/interview" in path:
+        return "interview"
+    if "/jobs/" in path:
+        return "job"
+    return "api"

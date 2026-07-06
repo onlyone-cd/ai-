@@ -119,10 +119,13 @@ def test_llm_chat_json_retries_transient_failure(app, monkeypatch):
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
 
     with app.app_context():
-        assert chat_json([{"role": "user", "content": "json"}]) == {"ok": True}
+        assert chat_json([{"role": "user", "content": "json"}], source="test_suite", tool_name="unit_test_tool") == {"ok": True}
         usage = LLMUsage.query.order_by(LLMUsage.id.desc()).first()
         assert usage is not None
         assert usage.success is True
+        assert usage.source == "test_suite"
+        assert usage.tool_name == "unit_test_tool"
+        assert usage.api_path is None
         assert usage.prompt_tokens == 12
         assert usage.completion_tokens == 5
         assert usage.total_tokens == 17
@@ -176,6 +179,7 @@ def test_llm_usage_endpoint_summarizes_without_secrets(client, admin_headers, ap
     assert data["summary"]["failed_calls"] >= 1
     assert data["summary"]["total_tokens"] >= 160
     assert data["summary"]["estimated_cost_usd"] >= 0.01
+    assert {"source", "tool_name", "api_path"} <= set(data["items"][0])
     assert "DEEPSEEK_API_KEY" not in json.dumps(data)
     assert "test-key" not in json.dumps(data)
 
@@ -431,6 +435,7 @@ def test_sensitive_module_permissions_for_interviewer(client, admin_headers, rec
         "/api/offers/1",
         "/api/offers/1/letter.txt",
         "/api/bi/overview",
+        "/api/system/llm/usage",
         "/api/pipeline/overview",
         "/api/boss/status",
         "/api/boss/extension.zip",
@@ -507,6 +512,35 @@ def test_job_ai_generate_and_calibrate_fallback(client, admin_headers):
     assert calibrated.status_code == 200
     calibrated_data = calibrated.get_json()["data"]
     assert {"SQL", "Python"} <= {skill["tag"] for skill in calibrated_data["structured"]["skills"]}
+
+
+def test_job_ai_generate_records_llm_context(client, admin_headers, app, monkeypatch):
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            body = {
+                "choices": [{"message": {"content": json.dumps({"jd_text": "岗位职责：负责 Java 开发。任职要求：Java、Spring Boot。", "skill_tags_raw": "Java 5|Spring Boot 4"})}}],
+                "usage": {"prompt_tokens": 20, "completion_tokens": 10, "total_tokens": 30},
+            }
+            return json.dumps(body).encode("utf-8")
+
+    app.config["LLM_ENABLED"] = True
+    app.config["DEEPSEEK_API_KEY"] = "test-key"
+    monkeypatch.setattr("urllib.request.urlopen", lambda request, timeout: FakeResponse())
+
+    response = client.post("/api/jobs/ai-generate?deepseek=1", headers=admin_headers, json={"title": "Java 后端工程师"})
+
+    assert response.status_code == 200
+    usage = LLMUsage.query.order_by(LLMUsage.id.desc()).first()
+    assert usage is not None
+    assert usage.source == "job"
+    assert usage.tool_name == "ai_generate_jd"
+    assert usage.api_path == "/api/jobs/ai-generate"
 
 
 def test_job_update_rejects_blank_required_fields(client, admin_headers):
@@ -1046,6 +1080,20 @@ def test_agent_counts_candidate_segments_and_can_create_job(client, admin_header
     assert create_data["result"]["created"] is True
     assert create_data["result"]["job"]["title"] == "数据分析师"
     assert {"SQL", "Python"} <= {skill["tag"] for skill in create_data["result"]["job"]["jd_structured"]["skills"]}
+
+
+def test_agent_tool_calls_are_audited_without_message_content(client, admin_headers):
+    message = "现在人才库有多少人？"
+    response = client.post("/api/agent/chat", headers=admin_headers, json={"message": message})
+
+    assert response.status_code == 200
+    data = response.get_json()["data"]
+    log = AuditLog.query.filter_by(action="agent_tool", target_type="agent").order_by(AuditLog.id.desc()).first()
+    assert log is not None
+    assert log.target_name == data["tool"]
+    assert log.details["tool"] == data["tool"]
+    assert log.details["message_length"] == len(message)
+    assert message not in json.dumps(log.details, ensure_ascii=False)
 
 
 def test_agent_smalltalk_does_not_trigger_bi_snapshot(client, admin_headers):

@@ -36,7 +36,7 @@ def parse_resume_with_deepseek(raw_text):
         },
     ]
     try:
-        parsed = chat_json(messages)
+        parsed = chat_json(messages, source="resume_parse", tool_name="deepseek_resume_parser")
     except LLMError:
         return None
 

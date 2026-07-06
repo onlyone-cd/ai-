@@ -83,7 +83,7 @@ curl https://your-domain.example/healthz
 - 列表接口已支持 `limit`/`offset` 分页；公网环境前端和第三方调用不要使用超大页大小，避免拖慢数据库。
 - 候选人详情查看、简历/面试/Offer/CSV 导出会写入审计日志，上线后需定期巡检异常导出行为。
 - 访问日志不记录请求体和完整查询参数，避免简历、手机号、Token 等敏感内容进入日志。
-- LLM 用量记录不保存 Prompt 和模型响应正文，只保存 Token、耗时、状态和 request_id。
+- LLM 用量记录不保存 Prompt 和模型响应正文，只保存 Token、耗时、状态、request_id、调用来源、工具名和 API 路径。
 
 ## 备份和恢复
 

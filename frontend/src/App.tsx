@@ -3158,7 +3158,8 @@ function auditActionLabel(action: string) {
     cancel: "取消",
     feedback: "提交反馈",
     enqueue: "加入队列",
-    retry: "重新排队"
+    retry: "重新排队",
+    agent_tool: "Agent 工具调用"
   }[action] || action;
 }
 
@@ -3185,7 +3186,8 @@ function auditTargetLabel(target: string) {
     job: "岗位",
     interview: "面试",
     offer: "Offer",
-    background_task: "后台任务"
+    background_task: "后台任务",
+    agent: "AI Agent"
   }[target] || target;
 }
 

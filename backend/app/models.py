@@ -451,6 +451,9 @@ class LLMUsage(db.Model):
     provider = db.Column(db.String(64), nullable=False)
     model = db.Column(db.String(128), nullable=False)
     endpoint = db.Column(db.String(255), nullable=True)
+    source = db.Column(db.String(80), nullable=True)
+    tool_name = db.Column(db.String(120), nullable=True)
+    api_path = db.Column(db.String(255), nullable=True)
     request_id = db.Column(db.String(64), nullable=True)
     success = db.Column(db.Boolean, nullable=False, default=True)
     status_code = db.Column(db.Integer, nullable=True)
@@ -470,6 +473,9 @@ class LLMUsage(db.Model):
             "provider": self.provider,
             "model": self.model,
             "endpoint": self.endpoint,
+            "source": self.source,
+            "tool_name": self.tool_name,
+            "api_path": self.api_path,
             "request_id": self.request_id,
             "success": self.success,
             "status_code": self.status_code,

@@ -120,6 +120,9 @@ Test-Step "internal_talent.organization_employee_analysis" {
   $tree = Invoke-Api "GET" "/api/organization/tree"
   if (-not $tree.data.items -or $tree.data.items.Count -lt 1) { throw "organization tree empty" }
   $unitId = $tree.data.items[0].id
+  $createdUnit = Invoke-Api "POST" "/api/organization/units" @{ parent_id = $unitId; name = "Smoke Org Unit"; unit_type = "team"; headcount_plan = 2 }
+  Invoke-Api "PATCH" "/api/organization/units/$($createdUnit.data.id)" @{ city = "Shanghai"; headcount_plan = 3 } | Out-Null
+  Invoke-Api "DELETE" "/api/organization/units/$($createdUnit.data.id)" | Out-Null
   $employee = Invoke-Api "POST" "/api/employees/from-candidate" @{
     candidate_id = $script:TempCandidateId
     organization_unit_id = $unitId

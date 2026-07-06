@@ -17,6 +17,73 @@ from app.models import AuditLog, BackgroundTask, BossDraft, Candidate, Candidate
 from app.task_service import run_next_task
 
 
+def minimal_organization_xlsx(rows):
+    shared = []
+    shared_index = {}
+
+    def shared_id(value):
+        text = str(value or "")
+        if text not in shared_index:
+            shared_index[text] = len(shared)
+            shared.append(text)
+        return shared_index[text]
+
+    def col_name(index):
+        return chr(ord("A") + index)
+
+    sheet_rows = []
+    for row_index, row in enumerate(rows, start=1):
+        cells = []
+        for col_index, value in enumerate(row):
+            sid = shared_id(value)
+            cells.append(f'<c r="{col_name(col_index)}{row_index}" t="s"><v>{sid}</v></c>')
+        sheet_rows.append(f'<row r="{row_index}">{"".join(cells)}</row>')
+
+    shared_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="{0}" uniqueCount="{0}">{1}</sst>'
+    ).format(len(shared), "".join(f"<si><t>{text}</t></si>" for text in shared))
+    sheet_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>{}</sheetData></worksheet>'
+    ).format("".join(sheet_rows))
+    workbook_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" '
+        'xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+        '<sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>'
+    )
+    rels_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>'
+        '</Relationships>'
+    )
+    root_rels = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>'
+        '</Relationships>'
+    )
+    content_types = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+        '<Default Extension="xml" ContentType="application/xml"/>'
+        '</Types>'
+    )
+    output = BytesIO()
+    with zipfile.ZipFile(output, "w") as archive:
+        archive.writestr("[Content_Types].xml", content_types)
+        archive.writestr("_rels/.rels", root_rels)
+        archive.writestr("xl/workbook.xml", workbook_xml)
+        archive.writestr("xl/_rels/workbook.xml.rels", rels_xml)
+        archive.writestr("xl/worksheets/sheet1.xml", sheet_xml)
+        archive.writestr("xl/sharedStrings.xml", shared_xml)
+    output.seek(0)
+    return output
+
+
 def test_login_returns_user_permissions(client):
     response = client.post("/api/auth/login", json={"username": "admin", "password": "admin123"})
 
@@ -334,6 +401,54 @@ def test_internal_talent_organization_employee_analysis_and_recommendations(clie
     assert detail.status_code == 200
     assert detail.get_json()["data"]["candidate"]["id"] == candidate["id"]
     assert AuditLog.query.filter_by(target_type="employee", target_id=employee["id"]).count() >= 2
+
+
+def test_organization_excel_import_and_department_resume_upload(client, admin_headers):
+    excel = minimal_organization_xlsx(
+        [
+            ["序号", "一级部门", "二级部门", "三级部门"],
+            ["1", "SIM空间运营团队", "超级sim产品事业部", "SIM空间运营团队"],
+            ["", "", "", "证券业务研发"],
+            ["", "", "互金运营事业部", "金融运营部"],
+            ["2", "产品开发团队", "缴费产品事业部", "客户业务研发部"],
+            ["3", "CodexRoot", "", "DirectTeam"],
+        ]
+    )
+    imported = client.post(
+        "/api/organization/import-excel",
+        headers=admin_headers,
+        data={"file": (excel, "组织架构.xlsx")},
+        content_type="multipart/form-data",
+    )
+    assert imported.status_code == 200
+    tree = imported.get_json()["data"]["tree"]
+    assert any(item["name"] == "SIM空间运营团队" for item in tree[0]["children"])
+
+    team = OrganizationUnit.query.filter_by(name="证券业务研发").first()
+    assert team is not None
+    direct_team = OrganizationUnit.query.filter_by(name="DirectTeam").first()
+    assert direct_team is not None
+    assert direct_team.parent.name == "CodexRoot"
+    resume = BytesIO("姓名：组织员工\n男 13911112222 org@example.com\n3 年 Java 后端开发经验，熟悉 Spring Boot 和 MySQL。".encode("utf-8"))
+    uploaded = client.post(
+        f"/api/organization/units/{team.id}/employee-resumes",
+        headers=admin_headers,
+        data={"files": (resume, "org-employee.txt")},
+        content_type="multipart/form-data",
+    )
+    assert uploaded.status_code == 200
+    data = uploaded.get_json()["data"]
+    assert data["success_count"] == 1
+    assert data["employees"][0]["name"] == "组织员工"
+    assert data["employees"][0]["organization_unit"]["name"] == "证券业务研发"
+
+    employees = client.get(f"/api/organization/units/{team.id}/employees", headers=admin_headers)
+    assert employees.status_code == 200
+    assert employees.get_json()["data"]["items"][0]["name"] == "组织员工"
+
+    blocked_delete = client.delete(f"/api/organization/units/{team.id}", headers=admin_headers)
+    assert blocked_delete.status_code == 409
+    assert blocked_delete.get_json()["code"] == "ORG_HAS_EMPLOYEES"
 
 
 def test_cli_can_create_admin_and_reset_password(app, client):

@@ -6,6 +6,7 @@ from io import BytesIO, StringIO
 from pathlib import Path
 import re
 from time import time
+from xml.etree import ElementTree
 import zipfile
 
 import jwt
@@ -342,6 +343,115 @@ def update_organization_unit(user, unit_id):
     return ok(unit.to_dict(include_counts=True), "组织节点已更新")
 
 
+@api.delete("/organization/units/<int:unit_id>")
+@login_required
+@roles_required("admin", "manager")
+def delete_organization_unit(user, unit_id):
+    unit = db.session.get(OrganizationUnit, unit_id)
+    if not unit:
+        return error("组织节点不存在", "NOT_FOUND", 404)
+    if OrganizationUnit.query.filter_by(parent_id=unit.id).first():
+        return error("请先删除或调整下级组织", "ORG_HAS_CHILDREN", 409)
+    if EmployeeProfile.query.filter_by(organization_unit_id=unit.id).first():
+        return error("该组织下仍有员工，不能删除", "ORG_HAS_EMPLOYEES", 409)
+    audit_log(user, "delete", "organization_unit", unit.id, unit.name)
+    db.session.delete(unit)
+    db.session.commit()
+    return ok({"deleted": unit_id}, "组织节点已删除")
+
+
+@api.post("/organization/import-excel")
+@login_required
+@roles_required("admin", "manager")
+def import_organization_excel(user):
+    file = request.files.get("file")
+    if not file:
+        return error("请上传组织架构 Excel")
+    if Path(file.filename or "").suffix.lower() != ".xlsx":
+        return error("仅支持 .xlsx 组织架构文件")
+    root = ensure_default_organization(user)
+    try:
+        rows = parse_organization_xlsx(file.stream)
+    except ValueError as exc:
+        return error(str(exc))
+    created = []
+    current = {"level1": "", "level2": ""}
+    for row in rows:
+        row_level1 = row.get("一级部门")
+        row_level2 = row.get("二级部门")
+        if row_level1 and row_level1 != current["level1"]:
+            current["level2"] = ""
+        level1 = row_level1 or current["level1"]
+        level2 = row_level2 or current["level2"]
+        level3 = row.get("三级部门")
+        if level1:
+            current["level1"] = level1
+            unit1 = get_or_create_org_unit(level1, root.id, "business_unit", len(created))
+            if unit1["created"]:
+                created.append(unit1["unit"])
+        else:
+            unit1 = {"unit": root, "created": False}
+        if level2:
+            current["level2"] = level2
+            unit2 = get_or_create_org_unit(level2, unit1["unit"].id, "department", len(created))
+            if unit2["created"]:
+                created.append(unit2["unit"])
+        else:
+            unit2 = unit1
+        if level3:
+            unit3 = get_or_create_org_unit(level3, unit2["unit"].id, "team", len(created))
+            if unit3["created"]:
+                created.append(unit3["unit"])
+    audit_log(user, "import", "organization_unit", root.id, root.name, {"created": len(created), "rows": len(rows), "filename": file.filename})
+    db.session.commit()
+    units = OrganizationUnit.query.order_by(OrganizationUnit.parent_id.asc().nullsfirst(), OrganizationUnit.sort_order.asc(), OrganizationUnit.id.asc()).all()
+    return ok({"created": [unit.to_dict(include_counts=True) for unit in created], "tree": build_organization_tree(units)}, "组织架构已导入")
+
+
+@api.post("/organization/units/<int:unit_id>/employee-resumes")
+@login_required
+@roles_required("admin", "manager", "recruiter")
+def upload_employee_resumes_to_unit(user, unit_id):
+    unit = db.session.get(OrganizationUnit, unit_id)
+    if not unit:
+        return error("组织节点不存在", "NOT_FOUND", 404)
+    files = request.files.getlist("files") or ([request.files["file"]] if "file" in request.files else [])
+    if not files:
+        return error("请上传员工简历文件")
+    employees = []
+    candidates = []
+    errors = []
+    for file in files:
+        try:
+            if Path(file.filename or "").suffix.lower() in ARCHIVE_EXTENSIONS:
+                _, archive_candidates, archive_errors = parse_and_save_archive(file, user)
+                errors.extend(archive_errors)
+                parsed_candidates = archive_candidates
+            else:
+                _, candidate = parse_and_save_resume(file, user)
+                parsed_candidates = [candidate]
+            for candidate in parsed_candidates:
+                candidates.append(candidate)
+                employee, created = employee_from_candidate_record(candidate, user, unit)
+                employees.append(employee)
+        except Exception as exc:
+            errors.append({"filename": file.filename, "error": str(exc)})
+    db.session.commit()
+    audit_log(user, "upload", "organization_unit", unit.id, unit.name, {"employees": len(employees), "errors": len(errors)})
+    db.session.commit()
+    return ok(
+        {
+            "unit": unit.to_dict(include_counts=True),
+            "employees": [employee.to_dict(detail=True) for employee in employees],
+            "candidates": [candidate.to_dict(detail=True) for candidate in candidates],
+            "errors": errors,
+            "success_count": len(employees),
+            "failed_count": len(errors),
+        },
+        "员工简历已上传并归入组织",
+    )
+
+
 @api.get("/organization/units/<int:unit_id>/employees")
 @login_required
 @roles_required("admin", "manager", "recruiter")
@@ -410,28 +520,7 @@ def create_employee_from_candidate(user):
         return ok(existing.to_dict(detail=True), "候选人已转为内部员工，无需重复创建")
     unit = db.session.get(OrganizationUnit, payload.get("organization_unit_id")) if payload.get("organization_unit_id") else ensure_default_organization(user)
     job = db.session.get(Job, payload.get("current_job_id")) if payload.get("current_job_id") else None
-    employee = EmployeeProfile(
-        candidate_id=candidate.id,
-        organization_unit_id=unit.id if unit else None,
-        current_job_id=job.id if job else None,
-        owner_hr_id=user.id,
-        employee_no=str(payload.get("employee_no") or f"EMP-{candidate.id:05d}").strip(),
-        name=candidate.name_masked,
-        phone=candidate.phone_masked,
-        email=candidate.email_masked,
-        department=unit.name if unit else candidate.city,
-        current_title=job.title if job else candidate.title,
-        level=str(payload.get("level") or "").strip(),
-        city=payload.get("city") or candidate.city,
-        employment_status=payload.get("employment_status") or "active",
-        hire_date=parse_date(payload.get("hire_date")),
-        manager_name=str(payload.get("manager_name") or "").strip(),
-        raw_text=candidate.raw_text,
-        resume_json=candidate.resume_json or {},
-        parse_status=candidate.parse_status,
-    )
-    db.session.add(employee)
-    db.session.flush()
+    employee, _ = employee_from_candidate_record(candidate, user, unit, job=job, payload=payload)
     compensation = build_employee_compensation(employee.id, payload)
     if compensation:
         db.session.add(compensation)
@@ -3052,6 +3141,128 @@ def build_employee_compensation(employee_id, payload):
         source=payload.get("salary_source") or "manual",
         effective_date=parse_date(payload.get("salary_effective_date")) or date.today(),
     )
+
+
+def employee_from_candidate_record(candidate, user, unit, job=None, payload=None):
+    payload = payload or {}
+    existing = EmployeeProfile.query.filter_by(candidate_id=candidate.id).first()
+    if existing:
+        if unit and existing.organization_unit_id != unit.id:
+            existing.organization_unit_id = unit.id
+            existing.department = unit.name
+        if job and existing.current_job_id != job.id:
+            existing.current_job_id = job.id
+            existing.current_title = job.title
+        return existing, False
+    employee = EmployeeProfile(
+        candidate_id=candidate.id,
+        organization_unit_id=unit.id if unit else None,
+        current_job_id=job.id if job else None,
+        owner_hr_id=user.id,
+        employee_no=str(payload.get("employee_no") or f"EMP-{candidate.id:05d}").strip(),
+        name=candidate.name_masked,
+        phone=candidate.phone_masked,
+        email=candidate.email_masked,
+        department=unit.name if unit else candidate.city,
+        current_title=job.title if job else candidate.title,
+        level=str(payload.get("level") or "").strip(),
+        city=payload.get("city") or candidate.city,
+        employment_status=payload.get("employment_status") or "active",
+        hire_date=parse_date(payload.get("hire_date")),
+        manager_name=str(payload.get("manager_name") or "").strip(),
+        raw_text=candidate.raw_text,
+        resume_json=candidate.resume_json or {},
+        parse_status=candidate.parse_status,
+    )
+    db.session.add(employee)
+    db.session.flush()
+    return employee, True
+
+
+def parse_organization_xlsx(stream):
+    try:
+        with zipfile.ZipFile(stream) as archive:
+            shared_strings = read_xlsx_shared_strings(archive)
+            workbook = ElementTree.fromstring(archive.read("xl/workbook.xml"))
+            ns = {"m": "http://schemas.openxmlformats.org/spreadsheetml/2006/main", "r": "http://schemas.openxmlformats.org/officeDocument/2006/relationships"}
+            first_sheet = workbook.find("m:sheets/m:sheet", ns)
+            if first_sheet is None:
+                raise ValueError("Excel 中没有工作表")
+            rel_id = first_sheet.attrib.get("{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id")
+            rels = ElementTree.fromstring(archive.read("xl/_rels/workbook.xml.rels"))
+            rel_target = None
+            for rel in rels:
+                if rel.attrib.get("Id") == rel_id:
+                    rel_target = rel.attrib.get("Target")
+                    break
+            sheet_path = "xl/" + (rel_target or "worksheets/sheet1.xml").lstrip("/")
+            sheet = ElementTree.fromstring(archive.read(sheet_path))
+            rows = []
+            for row in sheet.findall(".//m:sheetData/m:row", ns):
+                values = {}
+                for cell in row.findall("m:c", ns):
+                    ref = cell.attrib.get("r", "")
+                    col = re.sub(r"\d+", "", ref)
+                    values[col] = read_xlsx_cell(cell, shared_strings, ns)
+                rows.append([values.get(col, "") for col in ["A", "B", "C", "D", "E", "F"]])
+    except KeyError as exc:
+        raise ValueError("Excel 文件结构不完整") from exc
+    except zipfile.BadZipFile as exc:
+        raise ValueError("Excel 文件格式无效") from exc
+    header_index = next((index for index, row in enumerate(rows) if {"一级部门", "二级部门", "三级部门"} & set(row)), None)
+    if header_index is None:
+        raise ValueError("未找到一级部门/二级部门/三级部门表头")
+    headers = rows[header_index]
+    parsed = []
+    for row in rows[header_index + 1 :]:
+        item = {headers[index]: row[index].strip() for index in range(min(len(headers), len(row))) if headers[index]}
+        if item.get("一级部门") or item.get("二级部门") or item.get("三级部门"):
+            parsed.append(item)
+    if not parsed:
+        raise ValueError("组织架构 Excel 没有可导入的数据")
+    return parsed
+
+
+def read_xlsx_shared_strings(archive):
+    try:
+        root = ElementTree.fromstring(archive.read("xl/sharedStrings.xml"))
+    except KeyError:
+        return []
+    ns = {"m": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+    strings = []
+    for item in root.findall("m:si", ns):
+        parts = [node.text or "" for node in item.findall(".//m:t", ns)]
+        strings.append("".join(parts))
+    return strings
+
+
+def read_xlsx_cell(cell, shared_strings, ns):
+    value = cell.find("m:v", ns)
+    inline = cell.find("m:is/m:t", ns)
+    if inline is not None:
+        return (inline.text or "").strip()
+    if value is None:
+        return ""
+    text = value.text or ""
+    if cell.attrib.get("t") == "s":
+        try:
+            return shared_strings[int(text)].strip()
+        except (ValueError, IndexError):
+            return ""
+    return str(text).strip()
+
+
+def get_or_create_org_unit(name, parent_id, unit_type, sort_order=0):
+    name = str(name or "").strip()
+    unit = OrganizationUnit.query.filter_by(parent_id=parent_id, name=name).first()
+    if unit:
+        if unit.unit_type != unit_type:
+            unit.unit_type = unit_type
+        return {"unit": unit, "created": False}
+    unit = OrganizationUnit(parent_id=parent_id, name=name, unit_type=unit_type, sort_order=sort_order)
+    db.session.add(unit)
+    db.session.flush()
+    return {"unit": unit, "created": True}
 
 
 def match_employee_to_job(employee, job):

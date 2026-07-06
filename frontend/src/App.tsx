@@ -55,7 +55,7 @@ const offerStatusLabels: Record<string, string> = {
   cancelled: "已取消"
 };
 
-type View = "candidates" | "internal" | "jobs" | "pipeline" | "interviews" | "offers" | "boss" | "bi" | "agent" | "tasks" | "audit" | "users";
+type View = "candidates" | "organization" | "internal" | "jobs" | "pipeline" | "interviews" | "offers" | "boss" | "bi" | "agent" | "tasks" | "audit" | "users";
 
 function App() {
   const roomToken = window.location.pathname.match(/^\/interview-room\/([^/]+)/)?.[1] || "";
@@ -105,6 +105,7 @@ function App() {
 
   const navItems = [
     { key: "candidates", icon: <Users size={17} />, label: "人才库" },
+    { key: "organization", icon: <Building2 size={17} />, label: "组织架构" },
     { key: "internal", icon: <Building2 size={17} />, label: "内部人才" },
     { key: "jobs", icon: <BriefcaseBusiness size={17} />, label: "岗位匹配" },
     { key: "pipeline", icon: <ChevronRight size={17} />, label: "流程看板" },
@@ -166,6 +167,7 @@ function App() {
         <AntLayout.Content className="app-content p-4 lg:p-8">
           <MobileTabs view={view} setView={setView} isAdmin={user.role === "admin"} canUseTasks={user.role !== "interviewer"} />
           {view === "candidates" && <CandidatesPage />}
+          {view === "organization" && <OrganizationManagementPage />}
           {view === "internal" && <InternalTalentPage />}
           {view === "jobs" && <JobsPage />}
           {view === "pipeline" && <PipelinePage />}
@@ -2581,6 +2583,247 @@ function UsersPage({ currentUser }: { currentUser: User }) {
   );
 }
 
+function OrganizationManagementPage() {
+  const [units, setUnits] = useState<OrganizationUnit[]>([]);
+  const [employees, setEmployees] = useState<EmployeeProfile[]>([]);
+  const [selectedId, setSelectedId] = useState(0);
+  const [message, setMessage] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [unitForm, setUnitForm] = useState({ name: "", unit_type: "department", parent_id: 0, city: "", headcount_plan: "" });
+  const [resumeFiles, setResumeFiles] = useState<File[]>([]);
+  const flatUnits = useMemo(() => flattenOrganizationUnits(units), [units]);
+  const selectedUnit = flatUnits.find((unit) => unit.id === selectedId);
+
+  async function load(nextSelectedId = selectedId) {
+    const tree = await api.organizationTree();
+    setUnits(tree.items);
+    const flattened = flattenOrganizationUnits(tree.items);
+    const activeId = nextSelectedId || flattened[0]?.id || 0;
+    if (activeId) {
+      setSelectedId(activeId);
+      const data = await api.organizationEmployees(activeId);
+      setEmployees(data.items);
+      const unit = flattened.find((item) => item.id === activeId);
+      if (unit) {
+        setUnitForm({
+          name: unit.name || "",
+          unit_type: unit.unit_type || "department",
+          parent_id: unit.parent_id || 0,
+          city: unit.city || "",
+          headcount_plan: unit.headcount_plan ? String(unit.headcount_plan) : ""
+        });
+      }
+    }
+  }
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  async function selectUnit(id: number) {
+    await load(id);
+  }
+
+  async function saveUnit(event: React.FormEvent) {
+    event.preventDefault();
+    if (!unitForm.name.trim()) {
+      notify("error", "组织名称必填");
+      return;
+    }
+    setBusy(true);
+    try {
+      const payload = {
+        ...unitForm,
+        parent_id: unitForm.parent_id || undefined,
+        headcount_plan: unitForm.headcount_plan ? Number(unitForm.headcount_plan) : undefined
+      };
+      const unit = selectedId ? await api.updateOrganizationUnit(selectedId, payload) : await api.createOrganizationUnit(payload);
+      setMessage(`${unit.name} 已保存`);
+      await load(unit.id);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function addChild() {
+    setSelectedId(0);
+    setUnitForm({ name: "", unit_type: "department", parent_id: selectedId, city: selectedUnit?.city || "", headcount_plan: "" });
+  }
+
+  async function removeUnit() {
+    if (!selectedUnit) return;
+    if (!window.confirm(`确认删除组织「${selectedUnit.name}」？有员工或下级组织时不能删除。`)) return;
+    await api.deleteOrganizationUnit(selectedUnit.id);
+    setMessage("组织节点已删除");
+    await load(0);
+  }
+
+  async function importExcel(files: FileList | null) {
+    const file = files?.[0];
+    if (!file) return;
+    setBusy(true);
+    try {
+      const data = await api.importOrganizationExcel(file);
+      setMessage(`组织架构已导入，新增 ${data.created.length} 个节点`);
+      await load(0);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function uploadEmployeeResumes(event: React.FormEvent) {
+    event.preventDefault();
+    if (!selectedId) {
+      notify("error", "请先选择组织节点");
+      return;
+    }
+    if (!resumeFiles.length) {
+      notify("error", "请先选择员工简历");
+      return;
+    }
+    setBusy(true);
+    try {
+      const data = await api.uploadOrganizationEmployeeResumes(selectedId, resumeFiles);
+      setMessage(`已导入 ${data.success_count} 名员工，失败 ${data.failed_count} 个文件`);
+      setResumeFiles([]);
+      await load(selectedId);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="grid gap-5 xl:grid-cols-[340px_1fr]">
+      <aside className="space-y-4">
+        <div className="design-card">
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="font-semibold">组织架构</h2>
+              <p className="text-xs text-steel">支持 Excel 导入、增删改查、按部门归档员工简历</p>
+            </div>
+            <button className="secondary-button" onClick={() => load()}>
+              <RefreshCw size={16} />
+            </button>
+          </div>
+          <label className="secondary-button mt-4 w-full cursor-pointer">
+            <Upload size={16} />
+            导入组织架构 Excel
+            <input className="hidden" type="file" accept=".xlsx" onChange={(event) => importExcel(event.target.files)} />
+          </label>
+          <div className="mt-4 max-h-[520px] space-y-1 overflow-auto pr-1">
+            {units.map((unit) => (
+              <OrganizationNode key={unit.id} unit={unit} selectedId={selectedId} onSelect={selectUnit} />
+            ))}
+          </div>
+        </div>
+      </aside>
+
+      <main className="space-y-4">
+        <div className="toolbar">
+          <div>
+            <h2 className="font-semibold">{selectedUnit?.name || "新建组织"}</h2>
+            <p className="text-xs text-steel">员工上传后会显示在当前组织节点下，并同步建立内部员工档案。</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button className="secondary-button" onClick={addChild}>
+              <Plus size={17} />
+              新增下级
+            </button>
+            {selectedUnit && (
+              <button className="secondary-button text-red-700" onClick={removeUnit}>
+                <Trash2 size={17} />
+                删除
+              </button>
+            )}
+          </div>
+        </div>
+
+        {message && <div className="rounded-md bg-blue-50 px-3 py-2 text-sm text-blue-700">{message}</div>}
+
+        <section className="grid gap-4 xl:grid-cols-[360px_1fr]">
+          <div className="space-y-4">
+            <form className="design-card" onSubmit={saveUnit}>
+              <h3 className="font-semibold">组织信息</h3>
+              <label className="field-label mt-4">组织名称</label>
+              <input className="input" value={unitForm.name} onChange={(event) => setUnitForm({ ...unitForm, name: event.target.value })} />
+              <label className="field-label mt-3">上级组织</label>
+              <select className="select w-full" value={unitForm.parent_id} onChange={(event) => setUnitForm({ ...unitForm, parent_id: Number(event.target.value) })}>
+                <option value={0}>无上级</option>
+                {flatUnits.filter((unit) => unit.id !== selectedId).map((unit) => (
+                  <option key={unit.id} value={unit.id}>{"　".repeat(unit.depth)}{unit.name}</option>
+                ))}
+              </select>
+              <label className="field-label mt-3">组织类型</label>
+              <select className="select w-full" value={unitForm.unit_type} onChange={(event) => setUnitForm({ ...unitForm, unit_type: event.target.value })}>
+                <option value="company">公司</option>
+                <option value="business_unit">事业部</option>
+                <option value="department">部门</option>
+                <option value="team">小组</option>
+              </select>
+              <div className="mt-3 grid grid-cols-2 gap-3">
+                <input className="input" placeholder="城市" value={unitForm.city} onChange={(event) => setUnitForm({ ...unitForm, city: event.target.value })} />
+                <input className="input" placeholder="编制人数" value={unitForm.headcount_plan} onChange={(event) => setUnitForm({ ...unitForm, headcount_plan: event.target.value })} />
+              </div>
+              <button className="primary-button mt-4 w-full" disabled={busy}>
+                <Check size={17} />
+                保存组织
+              </button>
+            </form>
+
+            <form className="design-card" onSubmit={uploadEmployeeResumes}>
+              <h3 className="font-semibold">上传当前部门员工简历</h3>
+              <p className="mt-1 text-xs text-steel">支持多文件和 ZIP，导入后员工名字会显示在右侧列表。</p>
+              <label className="upload-drop mt-4">
+                <FileText size={28} />
+                <strong>{resumeFiles.length ? `已选择 ${resumeFiles.length} 个文件` : "选择员工简历或 ZIP"}</strong>
+                <span>上传到：{selectedUnit?.name || "未选择组织"}</span>
+                <input type="file" multiple accept=".txt,.md,.docx,.pdf,.zip" onChange={(event) => setResumeFiles(Array.from(event.target.files || []))} />
+              </label>
+              {resumeFiles.length > 0 && (
+                <div className="mt-3 flex max-h-24 flex-wrap gap-1.5 overflow-auto">
+                  {resumeFiles.map((file) => <span className="chip" key={`${file.name}-${file.size}`}>{file.name}</span>)}
+                </div>
+              )}
+              <button className="primary-button mt-4 w-full" type="submit" disabled={busy || !selectedId || !resumeFiles.length}>
+                <Upload size={17} />
+                上传并归档员工
+              </button>
+            </form>
+          </div>
+
+          <div className="design-card">
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="font-semibold">部门员工</h3>
+                <p className="text-xs text-steel">{selectedUnit?.name || "全部"} · {employees.length} 人</p>
+              </div>
+            </div>
+            {employees.length === 0 ? (
+              <EmptyState icon={<Users size={22} />} text="当前组织下暂无员工" />
+            ) : (
+              <div className="mt-4 grid gap-3">
+                {employees.map((employee) => (
+                  <div className="row-card" key={employee.id}>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h3 className="font-semibold">{employee.name}</h3>
+                        <span className="badge">{employee.current_title}</span>
+                        <span className="badge muted">{employee.employee_no || `#${employee.id}`}</span>
+                      </div>
+                      <p className="mt-1 text-sm text-steel">{employee.phone || "手机未维护"} · {employee.email || "邮箱未维护"}</p>
+                    </div>
+                    <span className="badge">{employmentStatusLabel(employee.employment_status)}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </section>
+      </main>
+    </section>
+  );
+}
+
 function InternalTalentPage() {
   const [units, setUnits] = useState<OrganizationUnit[]>([]);
   const [employees, setEmployees] = useState<EmployeeProfile[]>([]);
@@ -3547,7 +3790,7 @@ function parseInterviewDimensions(comment: string) {
 }
 
 function MobileTabs({ view, setView, isAdmin, canUseTasks }: { view: View; setView: (view: View) => void; isAdmin: boolean; canUseTasks: boolean }) {
-  const tabs: [View, string][] = [["candidates", "人才"], ["internal", "内部"], ["jobs", "岗位"], ["pipeline", "流程"], ["interviews", "面试"], ["offers", "Offer"], ["boss", "BOSS"], ["bi", "BI"], ["agent", "AI"]];
+  const tabs: [View, string][] = [["candidates", "人才"], ["organization", "组织"], ["internal", "内部"], ["jobs", "岗位"], ["pipeline", "流程"], ["interviews", "面试"], ["offers", "Offer"], ["boss", "BOSS"], ["bi", "BI"], ["agent", "AI"]];
   if (canUseTasks) tabs.push(["tasks", "任务"]);
   if (isAdmin) {
     tabs.push(["audit", "日志"]);
@@ -3582,6 +3825,7 @@ function EmptyState({ icon, text }: { icon: React.ReactNode; text: string }) {
 function titleFor(view: View) {
   return {
     candidates: "人才库",
+    organization: "组织架构",
     internal: "内部人才",
     jobs: "岗位匹配",
     pipeline: "流程看板",

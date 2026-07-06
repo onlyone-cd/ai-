@@ -412,6 +412,21 @@ export const api = {
   organizationTree: () => request<{ items: OrganizationUnit[] }>("/organization/tree"),
   createOrganizationUnit: (payload: Partial<OrganizationUnit>) =>
     request<OrganizationUnit>("/organization/units", { method: "POST", body: JSON.stringify(payload) }),
+  updateOrganizationUnit: (id: number, payload: Partial<OrganizationUnit>) =>
+    request<OrganizationUnit>(`/organization/units/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
+  deleteOrganizationUnit: (id: number) => request<{ deleted: number }>(`/organization/units/${id}`, { method: "DELETE" }),
+  importOrganizationExcel: (file: File) => {
+    const formData = new FormData();
+    formData.append("file", file);
+    return upload<{ created: OrganizationUnit[]; tree: OrganizationUnit[] }>("/organization/import-excel", formData);
+  },
+  uploadOrganizationEmployeeResumes: (unitId: number, files: File | File[]) => {
+    const formData = new FormData();
+    for (const file of Array.isArray(files) ? files : [files]) {
+      formData.append("files", file);
+    }
+    return upload<{ unit: OrganizationUnit; employees: EmployeeProfile[]; candidates: Candidate[]; errors: { filename: string; error: string }[]; success_count: number; failed_count: number }>(`/organization/units/${unitId}/employee-resumes`, formData);
+  },
   organizationEmployees: (unitId: number) => request<{ unit: OrganizationUnit; items: EmployeeProfile[] }>(`/organization/units/${unitId}/employees`),
   organizationOverview: (unitId: number) => request<{ total: number; active: number; inactive: number; with_compensation: number; analyzed: number; high_fit: number; salary_risk: number; avg_match_score: number; unit: OrganizationUnit }>(`/organization/units/${unitId}/overview`),
   employees: (organizationUnitId?: number) => request<{ items: EmployeeProfile[]; overview: { total: number; active: number; inactive: number; with_compensation: number; analyzed: number; high_fit: number; salary_risk: number; avg_match_score: number } }>(`/employees${organizationUnitId ? `?organization_unit_id=${organizationUnitId}` : ""}`),

@@ -27,6 +27,7 @@
 - AI 稳定性：LLM 调用支持统一超时、瞬时失败重试和调用日志，新增 `/api/system/llm/status` 用于生产巡检且不暴露 Key。
 - 面试间安全：候选人公开面试间 token 有效期改为配置项，并增加 token/IP 限流和提交内容大小限制。
 - 密钥防泄漏：新增仓库 secret 扫描脚本并接入 GitHub Actions，阻止 API Key、GitHub Token、私钥等敏感内容误提交。
+- 后端权限边界：人才库详情/简历下载限制为 admin/manager/recruiter，批量 CSV 导出限制为 admin/manager，避免只靠前端隐藏按钮。
 
 ### 接口变更记录
 

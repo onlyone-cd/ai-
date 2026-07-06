@@ -209,6 +209,26 @@ def test_candidate_detail_view_and_csv_export_are_audited(client, admin_headers)
     assert export_log.details["row_count"] >= 1
 
 
+def test_sensitive_candidate_and_export_permissions(client, admin_headers, recruiter_headers):
+    created = client.post(
+        "/api/users",
+        headers=admin_headers,
+        json={"username": "interviewer_only", "name": "只面试", "role": "interviewer", "password": "Pass1234"},
+    )
+    assert created.status_code == 200
+    login = client.post("/api/auth/login", json={"username": "interviewer_only", "password": "Pass1234"})
+    interviewer_headers = {"Authorization": f"Bearer {login.get_json()['data']['token']}"}
+
+    assert client.get("/api/candidates", headers=recruiter_headers).status_code == 200
+    assert client.get("/api/candidates/1", headers=interviewer_headers).status_code == 403
+    assert client.get("/api/candidates/1/resume.txt", headers=interviewer_headers).status_code == 403
+
+    recruiter_export = client.get("/api/exports/candidates.csv", headers=recruiter_headers)
+    admin_export = client.get("/api/exports/candidates.csv", headers=admin_headers)
+    assert recruiter_export.status_code == 403
+    assert admin_export.status_code == 200
+
+
 def test_accounting_job_matches_accounting_candidate_first(client, admin_headers):
     jobs = client.get("/api/jobs", headers=admin_headers).get_json()["data"]["items"]
     accounting_job = next(job for job in jobs if job["title"] == "财务会计主管")

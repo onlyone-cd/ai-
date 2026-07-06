@@ -153,6 +153,7 @@ def update_user(user, user_id):
 
 @api.get("/candidates")
 @login_required
+@roles_required("admin", "manager", "recruiter")
 def list_candidates(user):
     query = Candidate.query.order_by(Candidate.created_at.desc())
     experience_level = request.args.get("experience_level")
@@ -170,6 +171,7 @@ def list_candidates(user):
 
 @api.get("/candidates/<int:candidate_id>")
 @login_required
+@roles_required("admin", "manager", "recruiter")
 def get_candidate(user, candidate_id):
     candidate = db.session.get(Candidate, candidate_id)
     if not candidate:
@@ -181,6 +183,7 @@ def get_candidate(user, candidate_id):
 
 @api.get("/candidates/<int:candidate_id>/resume.txt")
 @login_required
+@roles_required("admin", "manager", "recruiter")
 def export_candidate_resume(user, candidate_id):
     candidate = db.session.get(Candidate, candidate_id)
     if not candidate:
@@ -1056,6 +1059,7 @@ def pipeline_overview(user):
 
 @api.get("/exports/candidates.csv")
 @login_required
+@roles_required("admin", "manager")
 def export_candidates(user):
     rows = [
         [
@@ -1078,6 +1082,7 @@ def export_candidates(user):
 
 @api.get("/exports/jobs.csv")
 @login_required
+@roles_required("admin", "manager")
 def export_jobs(user):
     rows = []
     for item in Job.query.order_by(Job.created_at.desc()).all():
@@ -1088,6 +1093,7 @@ def export_jobs(user):
 
 @api.get("/exports/offers.csv")
 @login_required
+@roles_required("admin", "manager")
 def export_offers(user):
     rows = [
         [
@@ -1110,6 +1116,7 @@ def export_offers(user):
 
 @api.get("/exports/interviews.csv")
 @login_required
+@roles_required("admin", "manager")
 def export_interviews(user):
     rows = [
         [
@@ -1131,6 +1138,7 @@ def export_interviews(user):
 
 @api.get("/exports/pipeline.csv")
 @login_required
+@roles_required("admin", "manager")
 def export_pipeline(user):
     rows = [
         [
@@ -1149,6 +1157,7 @@ def export_pipeline(user):
 
 @api.get("/exports/boss-drafts.csv")
 @login_required
+@roles_required("admin", "manager")
 def export_boss_drafts(user):
     rows = [
         [

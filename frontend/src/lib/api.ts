@@ -130,6 +130,19 @@ export type BackgroundTask = {
   finished_at?: string | null;
 };
 
+export type LLMUsageSummary = {
+  period_days: number;
+  summary: {
+    total_calls: number;
+    failed_calls: number;
+    success_rate: number;
+    prompt_tokens: number;
+    completion_tokens: number;
+    total_tokens: number;
+    estimated_cost_usd: number;
+  };
+};
+
 export type OfferRecord = {
   id: number;
   candidate_id: number;
@@ -266,6 +279,7 @@ export const api = {
   me: () => request<User>("/auth/me"),
   users: () => request<{ items: User[] }>("/users"),
   auditLogs: () => request<{ items: AuditLog[] }>("/audit/logs"),
+  llmUsage: (days = 30) => request<LLMUsageSummary>(`/system/llm/usage?days=${days}`),
   tasks: (status = "all") => request<{ items: BackgroundTask[]; status_counts: Record<string, number> }>(`/tasks?status=${status}`),
   retryTask: (id: number) => request<BackgroundTask>(`/tasks/${id}/retry`, { method: "POST" }),
   interviewers: () => request<{ items: User[] }>("/users/interviewers"),

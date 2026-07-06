@@ -17,7 +17,7 @@ from .auth import hash_password, issue_token, login_required, roles_required, va
 from .job_service import build_jd_structured, ensure_jd_structured, persist_matches, preview_matches
 from .llm_client import LLMError, chat_json, llm_available, llm_status
 from .matching import match_candidate
-from .models import AuditLog, BackgroundTask, BossAccount, BossDraft, Candidate, CandidateTag, InterviewAssignment, InterviewFeedback, Job, Match, OfferRecord, PipelineStage, User
+from .models import AuditLog, BackgroundTask, BossAccount, BossDraft, Candidate, CandidateTag, InterviewAssignment, InterviewFeedback, Job, LLMUsage, Match, OfferRecord, PipelineStage, User
 from .rbac import ROLES, role_permissions
 from .resume_service import ARCHIVE_EXTENSIONS, parse_and_save_archive, parse_and_save_resume, parse_and_save_text, reparse_candidate
 from .responses import error, ok
@@ -67,6 +67,40 @@ def permissions(user):
 @roles_required("admin", "manager")
 def system_llm_status(user):
     return ok(llm_status())
+
+
+@api.get("/system/llm/usage")
+@login_required
+@roles_required("admin", "manager")
+def system_llm_usage(user):
+    days = max(1, min(request.args.get("days", 30, type=int) or 30, 365))
+    since = datetime.now(timezone.utc) - timedelta(days=days)
+    base_query = LLMUsage.query.filter(LLMUsage.created_at >= since)
+    rows = base_query.all()
+    total_calls = len(rows)
+    failed_calls = len([item for item in rows if not item.success])
+    prompt_tokens = sum(item.prompt_tokens or 0 for item in rows)
+    completion_tokens = sum(item.completion_tokens or 0 for item in rows)
+    total_tokens = prompt_tokens + completion_tokens
+    total_cost_usd = sum(float(item.cost_usd or 0) for item in rows)
+    query = base_query.order_by(LLMUsage.created_at.desc())
+    items, meta = paginate_query(query, default_limit=50, max_limit=200)
+    return ok(
+        {
+            "period_days": days,
+            "summary": {
+                "total_calls": total_calls,
+                "failed_calls": failed_calls,
+                "success_rate": round(((total_calls - failed_calls) / total_calls * 100), 2) if total_calls else 100,
+                "prompt_tokens": prompt_tokens,
+                "completion_tokens": completion_tokens,
+                "total_tokens": total_tokens,
+                "estimated_cost_usd": round(total_cost_usd, 6),
+            },
+            "items": [item.to_dict() for item in items],
+            **meta,
+        }
+    )
 
 
 @api.get("/tasks")

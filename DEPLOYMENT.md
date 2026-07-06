@@ -8,6 +8,7 @@
 - `SEED_DEMO_DATA=false`，避免生产库写入演示数据。
 - 登录失败锁定由 `LOGIN_MAX_FAILURES` 和 `LOGIN_LOCKOUT_MINUTES` 控制，公网环境不要关闭。
 - LLM 调用超时和重试由 `LLM_TIMEOUT_SECONDS`、`LLM_MAX_RETRIES`、`LLM_RETRY_BACKOFF_SECONDS` 控制，状态可通过 `/api/system/llm/status` 巡检。
+- LLM 用量记录由 `LLM_USAGE_LOG_ENABLED` 控制，成本估算单价由 `LLM_PROMPT_PRICE_PER_1M_TOKENS_USD`、`LLM_COMPLETION_PRICE_PER_1M_TOKENS_USD` 控制，用量可通过 `/api/system/llm/usage` 巡检。
 - 候选人面试间链接有效期和公开接口限制由 `INTERVIEW_ROOM_TOKEN_HOURS`、`PUBLIC_INTERVIEW_MAX_REQUESTS_PER_MINUTE`、`PUBLIC_INTERVIEW_MAX_ANSWER_CHARS` 控制。
 - 结构化访问日志由 `ACCESS_LOG_ENABLED` 控制，慢请求阈值由 `SLOW_REQUEST_MS` 控制；生产建议接入集中日志平台并按 `request_id` 检索。
 - 后台任务 worker 由 Docker Compose 的 `worker` 服务运行，轮询参数由 `TASK_WORKER_LIMIT`、`TASK_WORKER_SLEEP_SECONDS` 控制。
@@ -73,6 +74,7 @@ curl https://your-domain.example/healthz
 - 列表接口已支持 `limit`/`offset` 分页；公网环境前端和第三方调用不要使用超大页大小，避免拖慢数据库。
 - 候选人详情查看、简历/面试/Offer/CSV 导出会写入审计日志，上线后需定期巡检异常导出行为。
 - 访问日志不记录请求体和完整查询参数，避免简历、手机号、Token 等敏感内容进入日志。
+- LLM 用量记录不保存 Prompt 和模型响应正文，只保存 Token、耗时、状态和 request_id。
 
 ## 备份和恢复
 
@@ -94,5 +96,5 @@ curl https://your-domain.example/healthz
 
 - 对象存储或专用文件服务。
 - Redis/Celery 高吞吐任务队列，用于替换当前数据库轻量任务队列，承载更大规模的批量简历解析、AI 评分和 BOSS 批量同步。
-- 集中日志、错误告警、AI 调用费用统计。
+- 集中日志、错误告警和 AI 费用阈值告警。
 - E2E 自动化测试和正式发布流水线。

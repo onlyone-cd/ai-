@@ -33,6 +33,7 @@
 - 数据量保护：核心列表接口统一支持 `limit`/`offset` 分页，并返回 `total`、`has_more`，避免生产环境一次性加载全量数据。
 - 生产观测：新增结构化访问日志，记录 request_id、方法、路径、状态码、耗时、慢请求标记和 UA，支持 `ACCESS_LOG_ENABLED`、`SLOW_REQUEST_MS` 配置。
 - 后台任务：新增数据库任务队列、任务状态查询/重试接口、`run-tasks` worker 命令和生产 worker 容器；简历重新解析支持异步入队。
+- AI 用量统计：LLM 调用成功/失败均记录 provider、model、耗时、token、预估成本和 request_id，新增用量汇总接口用于费用巡检。
 
 ### 接口变更记录
 
@@ -43,6 +44,7 @@
 - `GET /api/auth/permissions`：获取当前角色权限。
 - `GET /healthz`：生产健康检查，校验服务和数据库连接状态。
 - `GET /api/system/llm/status`：查看 LLM 是否启用、可用、模型、超时和重试配置，不返回密钥。
+- `GET /api/system/llm/usage`：查看 LLM 最近 N 天调用量、失败量、Token 和预估成本，不返回 Prompt、响应正文或密钥。
 - `GET /api/tasks`：后台任务列表，支持 `status`、`task_type`、`limit`、`offset`。
 - `GET /api/tasks/<id>`：后台任务详情。
 - `POST /api/tasks/<id>/retry`：失败后台任务重新排队。

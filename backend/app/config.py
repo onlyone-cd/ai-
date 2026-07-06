@@ -21,6 +21,9 @@ class Config:
     LLM_TIMEOUT_SECONDS = int(os.getenv("LLM_TIMEOUT_SECONDS", "45"))
     LLM_MAX_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "1"))
     LLM_RETRY_BACKOFF_SECONDS = float(os.getenv("LLM_RETRY_BACKOFF_SECONDS", "0.5"))
+    LLM_USAGE_LOG_ENABLED = os.getenv("LLM_USAGE_LOG_ENABLED", "true").lower() == "true"
+    LLM_PROMPT_PRICE_PER_1M_TOKENS_USD = float(os.getenv("LLM_PROMPT_PRICE_PER_1M_TOKENS_USD", "0"))
+    LLM_COMPLETION_PRICE_PER_1M_TOKENS_USD = float(os.getenv("LLM_COMPLETION_PRICE_PER_1M_TOKENS_USD", "0"))
     SECURITY_HEADERS_ENABLED = os.getenv("SECURITY_HEADERS_ENABLED", "true").lower() == "true"
     LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
     ACCESS_LOG_ENABLED = os.getenv("ACCESS_LOG_ENABLED", "true").lower() == "true"

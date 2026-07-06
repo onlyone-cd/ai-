@@ -13,7 +13,7 @@ from app import create_app, db
 from app.config import Config
 from app.auth import verify_password
 from app.llm_client import chat_json
-from app.models import AuditLog, BackgroundTask, BossDraft, Candidate, CandidateTag, InterviewAssignment, InterviewFeedback, Job, Match, OfferRecord, PipelineStage, User
+from app.models import AuditLog, BackgroundTask, BossDraft, Candidate, CandidateTag, InterviewAssignment, InterviewFeedback, Job, LLMUsage, Match, OfferRecord, PipelineStage, User
 from app.task_service import run_next_task
 
 
@@ -98,7 +98,10 @@ def test_llm_chat_json_retries_transient_failure(app, monkeypatch):
             return False
 
         def read(self):
-            body = {"choices": [{"message": {"content": json.dumps({"ok": True})}}]}
+            body = {
+                "choices": [{"message": {"content": json.dumps({"ok": True})}}],
+                "usage": {"prompt_tokens": 12, "completion_tokens": 5, "total_tokens": 17},
+            }
             return json.dumps(body).encode("utf-8")
 
     def fake_urlopen(request, timeout):
@@ -111,11 +114,70 @@ def test_llm_chat_json_retries_transient_failure(app, monkeypatch):
     app.config["DEEPSEEK_API_KEY"] = "test-key"
     app.config["LLM_MAX_RETRIES"] = 1
     app.config["LLM_RETRY_BACKOFF_SECONDS"] = 0
+    app.config["LLM_PROMPT_PRICE_PER_1M_TOKENS_USD"] = 1
+    app.config["LLM_COMPLETION_PRICE_PER_1M_TOKENS_USD"] = 2
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
 
     with app.app_context():
         assert chat_json([{"role": "user", "content": "json"}]) == {"ok": True}
+        usage = LLMUsage.query.order_by(LLMUsage.id.desc()).first()
+        assert usage is not None
+        assert usage.success is True
+        assert usage.prompt_tokens == 12
+        assert usage.completion_tokens == 5
+        assert usage.total_tokens == 17
+        assert usage.attempts == 2
+        assert usage.cost_usd > 0
     assert calls["count"] == 2
+
+
+def test_llm_usage_endpoint_summarizes_without_secrets(client, admin_headers, app):
+    with app.app_context():
+        db.session.add(
+            LLMUsage(
+                provider="deepseek",
+                model="deepseek-chat",
+                endpoint="https://api.deepseek.com/v1/chat/completions",
+                request_id="usage-test",
+                success=True,
+                prompt_tokens=100,
+                completion_tokens=40,
+                total_tokens=140,
+                estimated=False,
+                cost_usd=0.01,
+                duration_ms=300,
+                attempts=1,
+            )
+        )
+        db.session.add(
+            LLMUsage(
+                provider="deepseek",
+                model="deepseek-chat",
+                endpoint="https://api.deepseek.com/v1/chat/completions",
+                request_id="usage-failed",
+                success=False,
+                error="timeout",
+                prompt_tokens=20,
+                completion_tokens=0,
+                total_tokens=20,
+                estimated=True,
+                cost_usd=0,
+                duration_ms=45000,
+                attempts=2,
+            )
+        )
+        db.session.commit()
+
+    response = client.get("/api/system/llm/usage?days=30", headers=admin_headers)
+
+    assert response.status_code == 200
+    data = response.get_json()["data"]
+    assert data["summary"]["total_calls"] >= 2
+    assert data["summary"]["failed_calls"] >= 1
+    assert data["summary"]["total_tokens"] >= 160
+    assert data["summary"]["estimated_cost_usd"] >= 0.01
+    assert "DEEPSEEK_API_KEY" not in json.dumps(data)
+    assert "test-key" not in json.dumps(data)
 
 
 def test_production_config_rejects_demo_secret_and_sqlite():
@@ -138,12 +200,14 @@ def test_common_query_indexes_exist(app):
     pipeline_indexes = {item["name"] for item in inspector.get_indexes("pipeline_stage")}
     audit_indexes = {item["name"] for item in inspector.get_indexes("audit_log")}
     task_indexes = {item["name"] for item in inspector.get_indexes("background_task")}
+    llm_usage_indexes = {item["name"] for item in inspector.get_indexes("llm_usage")}
 
     assert "ix_candidate_source_created_at" in candidate_indexes
     assert "ix_candidate_phone_masked" in candidate_indexes
     assert "ix_pipeline_stage_job_candidate_ts" in pipeline_indexes
     assert "ix_audit_log_target_created" in audit_indexes
     assert "ix_background_task_status_created" in task_indexes
+    assert "ix_llm_usage_success_created" in llm_usage_indexes
 
 
 def test_admin_can_manage_users(client, admin_headers, recruiter_headers):

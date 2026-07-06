@@ -440,6 +440,51 @@ class BackgroundTask(db.Model):
         }
 
 
+class LLMUsage(db.Model):
+    __table_args__ = (
+        db.Index("ix_llm_usage_created_at", "created_at"),
+        db.Index("ix_llm_usage_provider_model", "provider", "model"),
+        db.Index("ix_llm_usage_success_created", "success", "created_at"),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    provider = db.Column(db.String(64), nullable=False)
+    model = db.Column(db.String(128), nullable=False)
+    endpoint = db.Column(db.String(255), nullable=True)
+    request_id = db.Column(db.String(64), nullable=True)
+    success = db.Column(db.Boolean, nullable=False, default=True)
+    status_code = db.Column(db.Integer, nullable=True)
+    error = db.Column(db.Text, nullable=True)
+    prompt_tokens = db.Column(db.Integer, nullable=False, default=0)
+    completion_tokens = db.Column(db.Integer, nullable=False, default=0)
+    total_tokens = db.Column(db.Integer, nullable=False, default=0)
+    estimated = db.Column(db.Boolean, nullable=False, default=True)
+    cost_usd = db.Column(db.Float, nullable=False, default=0.0)
+    duration_ms = db.Column(db.Integer, nullable=False, default=0)
+    attempts = db.Column(db.Integer, nullable=False, default=1)
+    created_at = db.Column(db.DateTime(timezone=True), default=utcnow)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "provider": self.provider,
+            "model": self.model,
+            "endpoint": self.endpoint,
+            "request_id": self.request_id,
+            "success": self.success,
+            "status_code": self.status_code,
+            "error": self.error,
+            "prompt_tokens": self.prompt_tokens,
+            "completion_tokens": self.completion_tokens,
+            "total_tokens": self.total_tokens,
+            "estimated": self.estimated,
+            "cost_usd": round(float(self.cost_usd or 0), 8),
+            "duration_ms": self.duration_ms,
+            "attempts": self.attempts,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
 class AuditLog(db.Model):
     __table_args__ = (
         db.Index("ix_audit_log_created_at", "created_at"),

@@ -32,7 +32,7 @@ import {
   Wrench,
   Users
 } from "lucide-react";
-import { api, AgentResponse, AiInterviewPlan, AuditLog, BackgroundTask, BiOverview, BossInboxItem, Candidate, clearToken, InterviewAssignment, InterviewFeedback, InterviewMessage, Job, MatchResult, notify, OfferRecord, PipelineItem, PublicInterviewRoom, setToken, SkillTag, User } from "./lib/api";
+import { api, AgentResponse, AiInterviewPlan, AuditLog, BackgroundTask, BiOverview, BossInboxItem, Candidate, clearToken, InterviewAssignment, InterviewFeedback, InterviewMessage, Job, LLMUsageSummary, MatchResult, notify, OfferRecord, PipelineItem, PublicInterviewRoom, setToken, SkillTag, User } from "./lib/api";
 
 const stageLabels: Record<string, string> = {
   pending: "待处理",
@@ -2100,9 +2100,11 @@ function BossPage() {
 
 function BiPage() {
   const [data, setData] = useState<BiOverview | null>(null);
+  const [llmUsage, setLlmUsage] = useState<LLMUsageSummary | null>(null);
   const [periodDays, setPeriodDays] = useState(30);
   useEffect(() => {
     api.bi(periodDays).then(setData);
+    api.llmUsage(periodDays).then(setLlmUsage).catch(() => setLlmUsage(null));
   }, [periodDays]);
   if (!data) return <EmptyState icon={<BarChart3 size={22} />} text="正在加载 BI 数据" />;
   const funnel = data.pipeline_funnel;
@@ -2136,6 +2138,8 @@ function BiPage() {
         <KpiCard label="推荐成功面试" value={interviews} hint="进入面试中阶段" tone="blue" />
         <KpiCard label="面试通过" value={`${offers} / ${interviews}`} hint={`通过率 ${interviews ? ((offers / interviews) * 100).toFixed(1) : "0.0"}%`} tone="purple" />
         <KpiCard label="待补反馈" value={funnel.business_review || 0} hint="业务复核中" tone="red" />
+        <KpiCard label="AI 调用" value={llmUsage?.summary.total_calls ?? 0} hint={`成功率 ${llmUsage?.summary.success_rate ?? 100}%`} tone="blue" />
+        <KpiCard label="AI 成本" value={`$${(llmUsage?.summary.estimated_cost_usd ?? 0).toFixed(4)}`} hint={`${llmUsage?.summary.total_tokens ?? 0} tokens`} tone="green" />
       </div>
 
       <div className="grid gap-5 xl:grid-cols-2">

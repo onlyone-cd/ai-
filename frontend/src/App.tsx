@@ -723,6 +723,7 @@ function JobsPage() {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [jobId, setJobId] = useState<number | null>(null);
   const [selectedJob, setSelectedJob] = useState<Job | null>(null);
+  const [selectedCandidate, setSelectedCandidate] = useState<Candidate | null>(null);
   const [matches, setMatches] = useState<MatchResult[]>([]);
   const [preview, setPreview] = useState<MatchResult[]>([]);
   const [formOpen, setFormOpen] = useState(false);
@@ -812,6 +813,22 @@ function JobsPage() {
     );
   }, [jobs, query]);
   const visibleMatches = useMemo(() => (matches.length ? matches : preview).filter((item) => item.score >= 50), [matches, preview]);
+
+  if (selectedCandidate) {
+    return (
+      <CandidateDetailPage
+        candidate={selectedCandidate}
+        backLabel="返回岗位匹配"
+        onBack={() => setSelectedCandidate(null)}
+        onDeleted={() => {
+          setSelectedCandidate(null);
+          setMatches([]);
+          setPreview([]);
+          load();
+        }}
+      />
+    );
+  }
 
   return (
     <section className="grid gap-5 xl:grid-cols-[360px_1fr]">
@@ -912,10 +929,16 @@ function JobsPage() {
                     <span className="badge">{match.candidate.title}</span>
                   </div>
                   <div className="mt-3">
-                    <button className="secondary-button" onClick={() => addToPipeline([match.candidate_id])}>
-                      <Plus size={17} />
-                      加入流程
-                    </button>
+                    <div className="flex flex-wrap gap-2">
+                      <button className="secondary-button" onClick={() => setSelectedCandidate(match.candidate)}>
+                        <FileText size={17} />
+                        查看简历
+                      </button>
+                      <button className="secondary-button" onClick={() => addToPipeline([match.candidate_id])}>
+                        <Plus size={17} />
+                        加入流程
+                      </button>
+                    </div>
                   </div>
                   <div className="mt-3 grid gap-2 md:grid-cols-2">
                     <div>
@@ -2626,7 +2649,7 @@ function UploadResumeModal({ onClose, onUploaded }: { onClose: () => void; onUpl
   );
 }
 
-function CandidateDetailPage({ candidate, onBack, onDeleted }: { candidate: Candidate; onBack: () => void; onDeleted: () => void }) {
+function CandidateDetailPage({ candidate, onBack, onDeleted, backLabel = "返回人才库" }: { candidate: Candidate; onBack: () => void; onDeleted: () => void; backLabel?: string }) {
   const [detail, setDetail] = useState<Candidate>(candidate);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
@@ -2720,7 +2743,7 @@ function CandidateDetailPage({ candidate, onBack, onDeleted }: { candidate: Cand
         <div className="resume-hero-top">
           <button className="secondary-button" onClick={onBack}>
             <ArrowLeft size={17} />
-            返回人才库
+            {backLabel}
           </button>
           <button className="secondary-button" onClick={retryParse} disabled={busy}>
             <RefreshCw size={17} />

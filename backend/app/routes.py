@@ -1696,8 +1696,8 @@ def looks_like_boss_resume_text(text):
         return False
     evidence = [
         bool(re.search(r"1[3-9]\d{9}|[\w.+-]+@[\w.-]+", value)),
-        bool(re.search(r"\d+\s*年|应届|在校|本科|大专|硕士|博士", value)),
-        bool(re.search(r"经验|项目|职责|教育|求职|简历|熟悉|负责|开发|会计|运营|销售|产品|设计|测试|人事|行政", value)),
+        bool(re.search(r"\d+\s*年|应届|在校|本科|大专|硕士|博士|\d+\s*(years?|yrs?)|bachelor|master|phd|college|university|education", value, re.I)),
+        bool(re.search(r"经验|项目|职责|教育|求职|简历|熟悉|负责|开发|会计|运营|销售|产品|设计|测试|人事|行政|experience|project|responsib|resume|profile|familiar|develop|engineer|accounting|operation|sales|product|design|test|hr|admin", value, re.I)),
     ]
     return sum(evidence) >= 2
 

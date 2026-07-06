@@ -30,7 +30,7 @@ def parse_skill_tags(raw):
     if not raw:
         return []
     result = []
-    for part in re.split(r"[|；;]", str(raw)):
+    for part in re.split(r"[|\r\n,;，；、]+", str(raw)):
         part = part.strip()
         if not part:
             continue

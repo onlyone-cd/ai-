@@ -1,4 +1,15 @@
-from app.matching import match_candidate
+from app.matching import match_candidate, parse_skill_tags
+
+
+def test_parse_skill_tags_supports_multiline_weights():
+    tags = parse_skill_tags("Java 5\nSpring Boot 5\nMySQL 4\nRedis 4")
+
+    assert tags == [
+        {"tag": "Java", "weight": 5},
+        {"tag": "Spring Boot", "weight": 5},
+        {"tag": "MySQL", "weight": 4},
+        {"tag": "Redis", "weight": 4},
+    ]
 
 
 def test_hr_process_tags_need_hr_context():

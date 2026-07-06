@@ -1260,6 +1260,26 @@ def test_boss_batch_import_parses_real_resume_text(client, admin_headers):
     assert {"Java", "MySQL", "Redis"} <= {tag["tag"] for tag in data["items"][0]["tags"]}
 
 
+def test_boss_batch_import_accepts_english_resume_text(client, admin_headers):
+    response = client.post(
+        "/api/boss/candidates/batch-import",
+        headers=admin_headers,
+        json={
+            "items": [
+                {
+                    "external_id": "boss-english",
+                    "raw_text": "Name: English Candidate\nPhone: 13900001234 english@example.com\n4 years Java backend development experience, familiar with Spring Boot, MySQL and Redis.\nEducation: Bachelor, Computer Science",
+                }
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.get_json()["data"]
+    assert data["items"][0]["source"] == "boss"
+    assert {"Java", "MySQL", "Redis"} <= {tag["tag"] for tag in data["items"][0]["tags"]}
+
+
 def test_boss_batch_import_skips_navigation_noise(client, admin_headers):
     response = client.post(
         "/api/boss/candidates/batch-import",

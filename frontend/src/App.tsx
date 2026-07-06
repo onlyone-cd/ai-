@@ -1834,6 +1834,7 @@ function BossPage() {
   const [recommendations, setRecommendations] = useState<MatchResult[]>([]);
   const [candidateId, setCandidateId] = useState(0);
   const [jobId, setJobId] = useState(0);
+  const [selectedCandidate, setSelectedCandidate] = useState<Candidate | null>(null);
 
   async function load(silent = false) {
     const [statusData, inboxData, jobData] = await Promise.all([
@@ -1869,6 +1870,12 @@ function BossPage() {
     setMessage(`AI 初筛已写入流程 ${data.created.length} 人，跳过 ${data.skipped.length} 人`);
   }
 
+  async function openCandidate(candidateId?: number) {
+    if (!candidateId) return;
+    const candidate = await api.getCandidate(candidateId);
+    setSelectedCandidate(candidate);
+  }
+
   async function verifyBoss() {
     if (!status?.account_id) return;
     const data = await api.verifyBossAccount(status.account_id);
@@ -1889,6 +1896,19 @@ function BossPage() {
 
   function switchBossTab(next: typeof tab) {
     setTab(next);
+  }
+
+  if (selectedCandidate) {
+    return (
+      <CandidateDetailPage
+        candidate={selectedCandidate}
+        onBack={() => setSelectedCandidate(null)}
+        onDeleted={() => {
+          setSelectedCandidate(null);
+          load(true);
+        }}
+      />
+    );
   }
 
   return (
@@ -1968,6 +1988,10 @@ function BossPage() {
                     <p>{item.title}</p>
                     <span>{item.summary}</span>
                   </div>
+                  <button className="secondary-button mt-3" onClick={() => openCandidate(item.candidate_id)} disabled={!item.candidate_id}>
+                    <FileText size={17} />
+                    查看简历
+                  </button>
                 </div>
               ))}
             </div>
@@ -1978,7 +2002,7 @@ function BossPage() {
             <p className="mt-1 text-sm text-steel">只从 BOSS 已导入的沟通过候选人里匹配当前 BOSS 岗位。</p>
             <div className="mt-4 grid gap-3">
               {recommendations.length === 0 ? <EmptyState icon={<Users size={22} />} text="当前岗位暂无 50 分以上推荐候选人" /> : recommendations.map((item) => (
-                <button className={`row-card text-left ${candidateId === item.candidate_id ? "ring-2 ring-mint" : ""}`} key={item.candidate_id} onClick={() => { setCandidateId(item.candidate_id); notify("success", `已选择候选人：${item.candidate.name_masked}`); }}>
+                <div className={`row-card text-left ${candidateId === item.candidate_id ? "ring-2 ring-mint" : ""}`} key={item.candidate_id}>
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
                       <h3 className="font-semibold">{item.candidate.name_masked}</h3>
@@ -1988,8 +2012,18 @@ function BossPage() {
                     <p className="mt-2 text-xs text-steel">
                       命中：{item.reason.hits.slice(0, 4).map((hit) => hit.candidate_tag).join("、") || "暂无"}；缺失：{item.reason.missing_tags.slice(0, 3).join("、") || "无"}
                     </p>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <button className="secondary-button" onClick={() => { setCandidateId(item.candidate_id); notify("success", `已选择候选人：${item.candidate.name_masked}`); }}>
+                        <Check size={17} />
+                        选中候选人
+                      </button>
+                      <button className="secondary-button" onClick={() => openCandidate(item.candidate_id)}>
+                        <FileText size={17} />
+                        查看简历
+                      </button>
+                    </div>
                   </div>
-                </button>
+                </div>
               ))}
             </div>
           </div>}

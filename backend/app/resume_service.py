@@ -39,10 +39,24 @@ def parse_and_save_archive(file: FileStorage, owner):
     batches = []
     errors = []
     max_file_size = current_app.config.get("MAX_CONTENT_LENGTH", 16 * 1024 * 1024)
+    max_files = current_app.config.get("MAX_ARCHIVE_FILES", 50)
+    max_total_size = current_app.config.get("MAX_ARCHIVE_UNCOMPRESSED_SIZE", 64 * 1024 * 1024)
+    max_ratio = current_app.config.get("MAX_ARCHIVE_COMPRESSION_RATIO", 100)
     try:
         with zipfile.ZipFile(file.stream) as archive:
             members = [item for item in archive.infolist() if not item.is_dir()]
-            for info in members[:50]:
+            if len(members) > max_files:
+                raise ValueError(f"压缩包内文件数量超过限制：最多 {max_files} 个")
+            total_size = sum(item.file_size for item in members)
+            if total_size > max_total_size:
+                raise ValueError("压缩包解压后体积过大")
+            for info in members:
+                if is_unsafe_archive_member(info):
+                    errors.append({"filename": info.filename, "error": "压缩包路径不安全，已跳过"})
+                    continue
+                if info.compress_size and info.file_size / max(info.compress_size, 1) > max_ratio:
+                    errors.append({"filename": info.filename, "error": "压缩比异常，疑似恶意压缩包"})
+                    continue
                 filename = Path(info.filename).name
                 extension = Path(filename).suffix.lower()
                 if extension not in ALLOWED_EXTENSIONS:
@@ -65,6 +79,12 @@ def parse_and_save_archive(file: FileStorage, owner):
     if not candidates and not errors:
         raise ValueError("压缩包中未找到 TXT、MD、DOCX、PDF 简历")
     return batches, candidates, errors
+
+
+def is_unsafe_archive_member(info):
+    name = str(info.filename or "").replace("\\", "/")
+    parts = [part for part in name.split("/") if part]
+    return name.startswith("/") or ".." in parts
 
 
 def resume_upload_dir():

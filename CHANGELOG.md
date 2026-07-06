@@ -17,6 +17,7 @@
 - BI 看板：招聘概览、流程漏斗、来源质量、经验分布、周期筛选。
 - AI Agent：人才统计、候选人检索、岗位查询、自然语言创建岗位、岗位匹配推荐、流程/面试/Offer/BOSS/BI/用户查询。
 - 用户管理：管理员创建账号、更新角色、启用/禁用用户。
+- 生产化基础：新增 `.env.example`、Dockerfile、生产 Docker Compose、Nginx 示例、部署清单、`/healthz` 健康检查、安全响应头、基础限流、上传数量限制和 ZIP 安全校验。
 
 ### 接口变更记录
 
@@ -25,6 +26,7 @@
 - `POST /api/auth/login`：账号登录，返回 JWT 和用户权限。
 - `GET /api/auth/me`：获取当前用户。
 - `GET /api/auth/permissions`：获取当前角色权限。
+- `GET /healthz`：生产健康检查，校验服务和数据库连接状态。
 - `GET /api/users`：用户列表。
 - `GET /api/users/interviewers`：面试官列表。
 - `POST /api/users`：创建用户。

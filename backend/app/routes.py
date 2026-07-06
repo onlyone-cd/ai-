@@ -258,6 +258,9 @@ def upload_resume(user):
     files = [file for file in files if file and file.filename]
     if not files:
         return error("请上传简历文件")
+    max_files = int(current_app.config.get("MAX_UPLOAD_FILES", 20))
+    if len(files) > max_files:
+        return error(f"单次最多上传 {max_files} 个文件", "TOO_MANY_FILES", 413)
 
     batches = []
     candidates = []

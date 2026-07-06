@@ -26,6 +26,7 @@
 - 登录安全：新增登录失败锁定策略，支持通过 `LOGIN_MAX_FAILURES` 和 `LOGIN_LOCKOUT_MINUTES` 配置公网防暴力破解。
 - AI 稳定性：LLM 调用支持统一超时、瞬时失败重试和调用日志，新增 `/api/system/llm/status` 用于生产巡检且不暴露 Key。
 - 面试间安全：候选人公开面试间 token 有效期改为配置项，并增加 token/IP 限流和提交内容大小限制。
+- 密钥防泄漏：新增仓库 secret 扫描脚本并接入 GitHub Actions，阻止 API Key、GitHub Token、私钥等敏感内容误提交。
 
 ### 接口变更记录
 

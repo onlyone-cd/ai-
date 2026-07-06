@@ -4,6 +4,7 @@
 
 - 复制 `.env.example` 为 `.env`，替换 `JWT_SECRET`、`POSTGRES_PASSWORD`、`DEEPSEEK_API_KEY`、`CORS_ORIGINS` 和域名。
 - DeepSeek Key 不要提交到 Git；如果曾经在聊天或代码中出现过，先到平台废弃旧 Key 并重新生成。
+- 提交前可执行 `python scripts/check_secrets.py` 检查仓库内是否误包含 API Key、GitHub Token 或私钥；CI 也会自动检查。
 - `SEED_DEMO_DATA=false`，避免生产库写入演示数据。
 - 登录失败锁定由 `LOGIN_MAX_FAILURES` 和 `LOGIN_LOCKOUT_MINUTES` 控制，公网环境不要关闭。
 - LLM 调用超时和重试由 `LLM_TIMEOUT_SECONDS`、`LLM_MAX_RETRIES`、`LLM_RETRY_BACKOFF_SECONDS` 控制，状态可通过 `/api/system/llm/status` 巡检。

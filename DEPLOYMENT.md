@@ -12,6 +12,7 @@
 - 候选人面试间链接有效期和公开接口限制由 `INTERVIEW_ROOM_TOKEN_HOURS`、`PUBLIC_INTERVIEW_MAX_REQUESTS_PER_MINUTE`、`PUBLIC_INTERVIEW_MAX_ANSWER_CHARS` 控制。
 - 结构化访问日志由 `ACCESS_LOG_ENABLED` 控制，慢请求阈值由 `SLOW_REQUEST_MS` 控制；生产建议接入集中日志平台并按 `request_id` 检索。
 - 后台任务 worker 由 Docker Compose 的 `worker` 服务运行，轮询参数由 `TASK_WORKER_LIMIT`、`TASK_WORKER_SLEEP_SECONDS` 控制。
+- 数据留存由 `AUDIT_LOG_RETENTION_DAYS`、`LLM_USAGE_RETENTION_DAYS`、`TASK_RETENTION_DAYS` 控制；上线后建议每周执行一次 `prune-data --confirm`。
 - 使用 HTTPS，Nginx 前置代理后保留 `X-Forwarded-*` 请求头。
 
 ## Docker 启动
@@ -51,6 +52,14 @@ flask --app run db upgrade
 ```powershell
 cd backend
 flask --app run run-tasks --limit 10
+```
+
+预览和执行过期数据清理：
+
+```powershell
+cd backend
+flask --app run prune-data
+flask --app run prune-data --confirm
 ```
 
 ## 健康检查

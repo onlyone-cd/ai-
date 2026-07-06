@@ -2,7 +2,7 @@ from io import BytesIO
 import json
 import logging
 import urllib.error
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import zipfile
 
 import jwt
@@ -261,6 +261,60 @@ def test_cli_can_create_admin_and_reset_password(app, client):
     assert reset.exit_code == 0
     db.session.refresh(user)
     assert verify_password("NewStrong123", user.password_hash)
+
+
+def test_cli_prune_data_requires_confirm(app):
+    runner = app.test_cli_runner()
+    old = datetime.now(timezone.utc) - timedelta(days=400)
+    recent = datetime.now(timezone.utc)
+    with app.app_context():
+        db.session.add(AuditLog(user_id=1, action="old", target_type="candidate", target_id=1, target_name="old", created_at=old))
+        db.session.add(AuditLog(user_id=1, action="recent", target_type="candidate", target_id=1, target_name="recent", created_at=recent))
+        db.session.add(
+            LLMUsage(
+                provider="deepseek",
+                model="deepseek-chat",
+                success=True,
+                prompt_tokens=10,
+                completion_tokens=5,
+                total_tokens=15,
+                estimated=True,
+                cost_usd=0,
+                duration_ms=100,
+                attempts=1,
+                created_at=old,
+            )
+        )
+        db.session.add(
+            BackgroundTask(
+                task_type="resume_retry_parse",
+                status="succeeded",
+                payload={},
+                result={},
+                attempts=1,
+                max_attempts=3,
+                created_by=1,
+                created_at=old,
+                updated_at=old,
+            )
+        )
+        db.session.commit()
+
+        dry_run = runner.invoke(args=["prune-data", "--audit-days", "365", "--llm-days", "180", "--task-days", "90"])
+        assert dry_run.exit_code == 0
+        assert "dry_run=True" in dry_run.output
+        assert "audit_logs=1" in dry_run.output
+        assert "llm_usages=1" in dry_run.output
+        assert "background_tasks=1" in dry_run.output
+        assert AuditLog.query.filter_by(action="old").count() == 1
+
+        confirmed = runner.invoke(args=["prune-data", "--audit-days", "365", "--llm-days", "180", "--task-days", "90", "--confirm"])
+        assert confirmed.exit_code == 0
+        assert "prune committed" in confirmed.output
+        assert AuditLog.query.filter_by(action="old").count() == 0
+        assert AuditLog.query.filter_by(action="recent").count() == 1
+        assert LLMUsage.query.count() == 0
+        assert BackgroundTask.query.count() == 0
 
 
 def test_audit_logs_record_sensitive_actions(client, admin_headers):

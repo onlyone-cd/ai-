@@ -1,11 +1,12 @@
 import os
+from datetime import datetime, timedelta, timezone
 from time import sleep
 
 import click
 
 from . import db
 from .auth import hash_password, validate_password_strength, verify_password
-from .models import User
+from .models import AuditLog, BackgroundTask, LLMUsage, User
 from .task_service import run_next_task
 
 
@@ -81,3 +82,49 @@ def register_cli(app):
             if not watch:
                 break
             sleep(max(1, int(sleep_seconds or 1)))
+
+    @app.cli.command("prune-data")
+    @click.option("--confirm", is_flag=True, help="真正删除过期数据；不加时只做 dry-run 预览。")
+    @click.option("--audit-days", type=int, default=None, help="审计日志保留天数。")
+    @click.option("--llm-days", type=int, default=None, help="LLM 用量记录保留天数。")
+    @click.option("--task-days", type=int, default=None, help="已完成/失败后台任务保留天数。")
+    def prune_data(confirm, audit_days, llm_days, task_days):
+        """Prune expired operational records."""
+        audit_days = retention_days(audit_days, app.config.get("AUDIT_LOG_RETENTION_DAYS", 365))
+        llm_days = retention_days(llm_days, app.config.get("LLM_USAGE_RETENTION_DAYS", 180))
+        task_days = retention_days(task_days, app.config.get("TASK_RETENTION_DAYS", 90))
+        now = datetime.now(timezone.utc)
+
+        audit_query = AuditLog.query.filter(AuditLog.created_at < now - timedelta(days=audit_days))
+        llm_query = LLMUsage.query.filter(LLMUsage.created_at < now - timedelta(days=llm_days))
+        task_query = BackgroundTask.query.filter(
+            BackgroundTask.status.in_(["succeeded", "failed"]),
+            BackgroundTask.updated_at < now - timedelta(days=task_days),
+        )
+
+        counts = {
+            "audit_logs": audit_query.count(),
+            "llm_usages": llm_query.count(),
+            "background_tasks": task_query.count(),
+        }
+        click.echo(
+            "prune "
+            f"dry_run={not confirm} "
+            f"audit_logs={counts['audit_logs']} "
+            f"llm_usages={counts['llm_usages']} "
+            f"background_tasks={counts['background_tasks']}"
+        )
+        if not confirm:
+            return
+        audit_query.delete(synchronize_session=False)
+        llm_query.delete(synchronize_session=False)
+        task_query.delete(synchronize_session=False)
+        db.session.commit()
+        click.echo("prune committed")
+
+
+def retention_days(value, default):
+    days = int(default if value is None else value)
+    if days <= 0:
+        raise click.ClickException("保留天数必须大于 0")
+    return days

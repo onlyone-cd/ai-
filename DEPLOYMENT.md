@@ -9,6 +9,7 @@
 - 登录失败锁定由 `LOGIN_MAX_FAILURES` 和 `LOGIN_LOCKOUT_MINUTES` 控制，公网环境不要关闭。
 - LLM 调用超时和重试由 `LLM_TIMEOUT_SECONDS`、`LLM_MAX_RETRIES`、`LLM_RETRY_BACKOFF_SECONDS` 控制，状态可通过 `/api/system/llm/status` 巡检。
 - 候选人面试间链接有效期和公开接口限制由 `INTERVIEW_ROOM_TOKEN_HOURS`、`PUBLIC_INTERVIEW_MAX_REQUESTS_PER_MINUTE`、`PUBLIC_INTERVIEW_MAX_ANSWER_CHARS` 控制。
+- 结构化访问日志由 `ACCESS_LOG_ENABLED` 控制，慢请求阈值由 `SLOW_REQUEST_MS` 控制；生产建议接入集中日志平台并按 `request_id` 检索。
 - 使用 HTTPS，Nginx 前置代理后保留 `X-Forwarded-*` 请求头。
 
 ## Docker 启动
@@ -63,6 +64,7 @@ curl https://your-domain.example/healthz
 - BOSS、AI Agent、BI、Offer、流程总览等业务接口限制为 admin/manager/recruiter，interviewer 只能处理分配给自己的面试相关能力。
 - 列表接口已支持 `limit`/`offset` 分页；公网环境前端和第三方调用不要使用超大页大小，避免拖慢数据库。
 - 候选人详情查看、简历/面试/Offer/CSV 导出会写入审计日志，上线后需定期巡检异常导出行为。
+- 访问日志不记录请求体和完整查询参数，避免简历、手机号、Token 等敏感内容进入日志。
 
 ## 备份和恢复
 

@@ -1,6 +1,7 @@
 from pathlib import Path
 from time import time
 from collections import defaultdict, deque
+import json
 import logging
 import uuid
 
@@ -54,6 +55,7 @@ def create_app(config_object=None):
     def attach_request_id():
         request_id = request.headers.get("X-Request-ID") or uuid.uuid4().hex
         g.request_id = request_id[:64]
+        g.request_started_at = time()
 
     @app.before_request
     def apply_rate_limit():
@@ -82,6 +84,7 @@ def create_app(config_object=None):
             if request.is_secure:
                 response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
         response.headers.setdefault("X-Request-ID", getattr(g, "request_id", ""))
+        write_access_log(app, response)
         return response
 
     @app.errorhandler(RequestEntityTooLarge)
@@ -142,6 +145,25 @@ def ensure_sqlite_schema():
 
 def configure_logging(app):
     logging.basicConfig(level=getattr(logging, str(app.config.get("LOG_LEVEL", "INFO")).upper(), logging.INFO))
+
+
+def write_access_log(app, response):
+    if not app.config.get("ACCESS_LOG_ENABLED", True):
+        return
+    duration_ms = int((time() - getattr(g, "request_started_at", time())) * 1000)
+    slow_ms = int(app.config.get("SLOW_REQUEST_MS", 1000))
+    payload = {
+        "event": "request.completed",
+        "request_id": getattr(g, "request_id", ""),
+        "method": request.method,
+        "path": request.path,
+        "status": response.status_code,
+        "duration_ms": duration_ms,
+        "slow": duration_ms >= slow_ms,
+        "remote_addr": request.remote_addr or "",
+        "user_agent": (request.user_agent.string or "")[:200],
+    }
+    app.logger.info(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
 
 
 def validate_production_config(app):

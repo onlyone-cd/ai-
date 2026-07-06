@@ -1,5 +1,6 @@
 from io import BytesIO
 import json
+import logging
 import urllib.error
 from datetime import datetime, timezone
 import zipfile
@@ -55,6 +56,24 @@ def test_healthz_reports_database_and_security_headers(client):
     assert response.get_json()["status"] == "ok"
     assert response.headers["X-Request-ID"] == "test-request-id"
     assert response.headers["X-Content-Type-Options"] == "nosniff"
+
+
+def test_access_log_records_request_metadata(client, caplog):
+    caplog.set_level(logging.INFO)
+
+    response = client.get("/healthz", headers={"X-Request-ID": "log-request-id", "User-Agent": "pytest-agent"})
+
+    assert response.status_code == 200
+    access_records = [record for record in caplog.records if '"event":"request.completed"' in record.getMessage()]
+    assert access_records
+    payload = json.loads(access_records[-1].getMessage())
+    assert payload["request_id"] == "log-request-id"
+    assert payload["method"] == "GET"
+    assert payload["path"] == "/healthz"
+    assert payload["status"] == 200
+    assert payload["duration_ms"] >= 0
+    assert payload["user_agent"] == "pytest-agent"
+    assert "?" not in payload["path"]
 
 
 def test_llm_status_does_not_expose_api_key(client, admin_headers):

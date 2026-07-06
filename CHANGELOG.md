@@ -31,6 +31,7 @@
 - 后端模块权限：BOSS、AI Agent、BI、Offer、流程总览接口限制为 admin/manager/recruiter，interviewer 不能绕过前端访问业务总览数据。
 - 数据库性能：新增常用查询索引和 Alembic 迁移 `0002_add_query_indexes`，覆盖候选人、标签、岗位、匹配、流程、面试、Offer、BOSS 和审计日志。
 - 数据量保护：核心列表接口统一支持 `limit`/`offset` 分页，并返回 `total`、`has_more`，避免生产环境一次性加载全量数据。
+- 生产观测：新增结构化访问日志，记录 request_id、方法、路径、状态码、耗时、慢请求标记和 UA，支持 `ACCESS_LOG_ENABLED`、`SLOW_REQUEST_MS` 配置。
 
 ### 接口变更记录
 

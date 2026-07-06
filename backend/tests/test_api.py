@@ -5,7 +5,8 @@ import pytest
 
 from app import create_app, db
 from app.config import Config
-from app.models import AuditLog, BossDraft, Candidate, CandidateTag, InterviewAssignment, InterviewFeedback, Job, Match, OfferRecord, PipelineStage
+from app.auth import verify_password
+from app.models import AuditLog, BossDraft, Candidate, CandidateTag, InterviewAssignment, InterviewFeedback, Job, Match, OfferRecord, PipelineStage, User
 
 
 def test_login_returns_user_permissions(client):
@@ -64,6 +65,40 @@ def test_admin_can_manage_users(client, admin_headers, recruiter_headers):
     updated = client.patch(f"/api/users/{user['id']}", headers=admin_headers, json={"active": False})
     assert updated.status_code == 200
     assert updated.get_json()["data"]["active"] is False
+
+
+def test_user_password_must_be_strong(client, admin_headers):
+    created = client.post(
+        "/api/users",
+        headers=admin_headers,
+        json={"username": "weak1", "name": "弱密码", "role": "recruiter", "password": "12345678"},
+    )
+
+    assert created.status_code == 400
+    assert created.get_json()["code"] == "WEAK_PASSWORD"
+
+    updated = client.patch("/api/users/1", headers=admin_headers, json={"password": "password123"})
+    assert updated.status_code == 400
+    assert updated.get_json()["code"] == "WEAK_PASSWORD"
+
+
+def test_cli_can_create_admin_and_reset_password(app, client):
+    runner = app.test_cli_runner()
+
+    created = runner.invoke(args=["create-admin", "--username", "prod_admin", "--name", "生产管理员", "--password", "Strong123"])
+    assert created.exit_code == 0
+    user = User.query.filter_by(username="prod_admin").first()
+    assert user is not None
+    assert user.role == "admin"
+    assert user.active is True
+
+    login = client.post("/api/auth/login", json={"username": "prod_admin", "password": "Strong123"})
+    assert login.status_code == 200
+
+    reset = runner.invoke(args=["reset-password", "--username", "prod_admin", "--password", "NewStrong123"])
+    assert reset.exit_code == 0
+    db.session.refresh(user)
+    assert verify_password("NewStrong123", user.password_hash)
 
 
 def test_audit_logs_record_sensitive_actions(client, admin_headers):

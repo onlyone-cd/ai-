@@ -12,7 +12,7 @@ from flask import Blueprint, Response, current_app, request
 from sqlalchemy.exc import IntegrityError
 
 from . import db
-from .auth import hash_password, issue_token, login_required, roles_required, verify_password
+from .auth import hash_password, issue_token, login_required, roles_required, validate_password_strength, verify_password
 from .job_service import build_jd_structured, ensure_jd_structured, persist_matches, preview_matches
 from .llm_client import LLMError, chat_json, llm_available
 from .matching import match_candidate
@@ -89,6 +89,9 @@ def create_user(user):
         return error("用户名、姓名和密码必填")
     if role not in ROLES:
         return error("角色不合法", details={"roles": ROLES})
+    password_error = validate_password_strength(password)
+    if password_error:
+        return error(password_error, "WEAK_PASSWORD")
 
     new_user = User(username=username, name=name, role=role, password_hash=hash_password(password), active=True)
     db.session.add(new_user)
@@ -120,6 +123,9 @@ def update_user(user, user_id):
             return error("不能禁用当前登录账号", "CONFLICT", 409)
         target.active = bool(payload["active"])
     if payload.get("password"):
+        password_error = validate_password_strength(payload["password"])
+        if password_error:
+            return error(password_error, "WEAK_PASSWORD")
         target.password_hash = hash_password(payload["password"])
     audit_log(user, "update", "user", target.id, target.name, {"role": target.role, "active": target.active})
     db.session.commit()

@@ -41,8 +41,10 @@ def create_app(config_object=None):
     migrate.init_app(app, db)
 
     from .routes import api
+    from .cli import register_cli
 
     app.register_blueprint(api, url_prefix="/api")
+    register_cli(app)
 
     @app.before_request
     def attach_request_id():

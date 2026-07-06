@@ -19,6 +19,18 @@ docker compose -f docker-compose.production.yml --env-file .env up -d --build
 flask --app run db upgrade
 ```
 
+首次部署完成后创建管理员：
+
+```powershell
+docker compose -f docker-compose.production.yml --env-file .env exec app flask --app run create-admin --username admin --name 系统管理员 --password "StrongPassword123"
+```
+
+后续重置密码：
+
+```powershell
+docker compose -f docker-compose.production.yml --env-file .env exec app flask --app run reset-password --username admin --password "NewStrongPassword123"
+```
+
 开发环境修改模型后生成迁移：
 
 ```powershell
@@ -39,6 +51,7 @@ curl https://your-domain.example/healthz
 
 - 数据库使用 PostgreSQL，生产不要使用 SQLite。
 - 生产环境设置 `AUTO_CREATE_DB=false`，只能通过迁移升级 schema。
+- 生产首个管理员使用 `flask --app run create-admin` 创建，不再依赖演示数据。
 - 上传文件保存在 `uploads` volume，需配置定期备份。
 - 简历、面试报告、导出文件都属于敏感数据，下载和导出只能给授权角色。
 

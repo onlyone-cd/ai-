@@ -10,6 +10,17 @@ from .models import User
 from .responses import error
 
 
+def validate_password_strength(password):
+    value = password or ""
+    if len(value) < 8:
+        return "密码至少需要 8 位"
+    if value.lower() in {"password", "password123", "admin123", "12345678"}:
+        return "密码过于常见"
+    if not any(char.isalpha() for char in value) or not any(char.isdigit() for char in value):
+        return "密码需要同时包含字母和数字"
+    return ""
+
+
 def issue_token(user):
     now = datetime.now(timezone.utc)
     expires_at = now + timedelta(hours=current_app.config["JWT_EXPIRY_HOURS"])

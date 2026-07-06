@@ -88,6 +88,10 @@ def infer_years_required(text):
 
 
 def infer_salary_range(text):
+    standard_match = re.search(r"(\d+(?:\.\d+)?)\s*[kK万]?\s*[-~至到]\s*(\d+(?:\.\d+)?)\s*[kK万]", text)
+    if standard_match:
+        low, high = standard_match.groups()
+        return {"min_k": float(low), "max_k": float(high)}
     match = re.search(r"(\d+(?:\.\d+)?)\s*[kK千]\s*[-~至]\s*(\d+(?:\.\d+)?)\s*[kK千]", text)
     if not match:
         return None

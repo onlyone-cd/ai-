@@ -17,7 +17,7 @@ from .auth import hash_password, issue_token, login_required, roles_required, va
 from .job_service import build_jd_structured, ensure_jd_structured, persist_matches, preview_matches
 from .llm_client import LLMError, chat_json, llm_available, llm_status
 from .matching import match_candidate
-from .models import AuditLog, BackgroundTask, BossAccount, BossDraft, Candidate, CandidateTag, InterviewAssignment, InterviewFeedback, Job, LLMUsage, Match, OfferRecord, PipelineStage, User
+from .models import AuditLog, BackgroundTask, BossAccount, BossDraft, Candidate, CandidateTag, EmployeeAnalysis, EmployeeCompensation, EmployeeProfile, EmployeeRecommendation, InterviewAssignment, InterviewFeedback, Job, LLMUsage, Match, OfferRecord, OrganizationUnit, PipelineStage, User
 from .rbac import ROLES, role_permissions
 from .resume_service import ARCHIVE_EXTENSIONS, parse_and_save_archive, parse_and_save_resume, parse_and_save_text, reparse_candidate
 from .responses import error, ok
@@ -284,6 +284,265 @@ def update_user(user, user_id):
     audit_log(user, "update", "user", target.id, target.name, {"role": target.role, "active": target.active})
     db.session.commit()
     return ok(with_permissions(target), "用户已更新")
+
+
+@api.get("/organization/tree")
+@login_required
+@roles_required("admin", "manager", "recruiter")
+def organization_tree(user):
+    ensure_default_organization(user)
+    units = OrganizationUnit.query.order_by(OrganizationUnit.parent_id.asc().nullsfirst(), OrganizationUnit.sort_order.asc(), OrganizationUnit.id.asc()).all()
+    return ok({"items": build_organization_tree(units)})
+
+
+@api.post("/organization/units")
+@login_required
+@roles_required("admin", "manager")
+def create_organization_unit(user):
+    payload = request.get_json(force=True)
+    name = str(payload.get("name") or "").strip()
+    if not name:
+        return error("组织名称必填")
+    unit = OrganizationUnit(
+        parent_id=payload.get("parent_id"),
+        name=name,
+        unit_type=payload.get("unit_type") or "department",
+        city=payload.get("city"),
+        headcount_plan=parse_optional_int(payload.get("headcount_plan"), 0) or None,
+        hrbp_user_id=payload.get("hrbp_user_id"),
+        sort_order=parse_optional_int(payload.get("sort_order"), 0),
+    )
+    db.session.add(unit)
+    db.session.flush()
+    audit_log(user, "create", "organization_unit", unit.id, unit.name)
+    db.session.commit()
+    return ok(unit.to_dict(include_counts=True), "组织节点已创建")
+
+
+@api.patch("/organization/units/<int:unit_id>")
+@login_required
+@roles_required("admin", "manager")
+def update_organization_unit(user, unit_id):
+    unit = db.session.get(OrganizationUnit, unit_id)
+    if not unit:
+        return error("组织节点不存在", "NOT_FOUND", 404)
+    payload = request.get_json(force=True)
+    for field in ["name", "unit_type", "city", "status"]:
+        if field in payload:
+            setattr(unit, field, str(payload.get(field) or "").strip())
+    for field in ["parent_id", "manager_employee_id", "hrbp_user_id"]:
+        if field in payload:
+            setattr(unit, field, payload.get(field) or None)
+    if "headcount_plan" in payload:
+        unit.headcount_plan = parse_optional_int(payload.get("headcount_plan"), 0) or None
+    if "sort_order" in payload:
+        unit.sort_order = parse_optional_int(payload.get("sort_order"), 0)
+    audit_log(user, "update", "organization_unit", unit.id, unit.name)
+    db.session.commit()
+    return ok(unit.to_dict(include_counts=True), "组织节点已更新")
+
+
+@api.get("/organization/units/<int:unit_id>/employees")
+@login_required
+@roles_required("admin", "manager", "recruiter")
+def organization_unit_employees(user, unit_id):
+    unit = db.session.get(OrganizationUnit, unit_id)
+    if not unit:
+        return error("组织节点不存在", "NOT_FOUND", 404)
+    unit_ids = organization_descendant_ids(unit_id)
+    employees = EmployeeProfile.query.filter(EmployeeProfile.organization_unit_id.in_(unit_ids)).order_by(EmployeeProfile.updated_at.desc()).all()
+    audit_log(user, "view", "organization_unit", unit.id, unit.name, {"scope": "employees"})
+    db.session.commit()
+    return ok({"unit": unit.to_dict(include_counts=True), "items": [employee.to_dict() for employee in employees]})
+
+
+@api.get("/organization/units/<int:unit_id>/overview")
+@login_required
+@roles_required("admin", "manager", "recruiter")
+def organization_unit_overview(user, unit_id):
+    unit = db.session.get(OrganizationUnit, unit_id)
+    if not unit:
+        return error("组织节点不存在", "NOT_FOUND", 404)
+    employees = EmployeeProfile.query.filter(EmployeeProfile.organization_unit_id.in_(organization_descendant_ids(unit_id))).all()
+    overview = employee_group_overview(employees)
+    overview["unit"] = unit.to_dict(include_counts=True)
+    return ok(overview)
+
+
+@api.get("/employees")
+@login_required
+@roles_required("admin", "manager", "recruiter")
+def list_employees(user):
+    ensure_default_organization(user)
+    query = EmployeeProfile.query.order_by(EmployeeProfile.updated_at.desc())
+    unit_id = request.args.get("organization_unit_id", type=int)
+    if unit_id:
+        query = query.filter(EmployeeProfile.organization_unit_id.in_(organization_descendant_ids(unit_id)))
+    status = request.args.get("status")
+    if status and status != "all":
+        query = query.filter_by(employment_status=status)
+    employees, meta = paginate_query(query)
+    return ok({"items": [employee.to_dict() for employee in employees], "overview": employee_group_overview(employees), **meta})
+
+
+@api.get("/employees/<int:employee_id>")
+@login_required
+@roles_required("admin", "manager", "recruiter")
+def get_employee(user, employee_id):
+    employee = db.session.get(EmployeeProfile, employee_id)
+    if not employee:
+        return error("员工不存在", "NOT_FOUND", 404)
+    audit_log(user, "view", "employee", employee.id, employee.name, {"detail": True})
+    db.session.commit()
+    return ok(employee.to_dict(detail=True))
+
+
+@api.post("/employees/from-candidate")
+@login_required
+@roles_required("admin", "manager", "recruiter")
+def create_employee_from_candidate(user):
+    payload = request.get_json(force=True)
+    candidate = db.session.get(Candidate, payload.get("candidate_id"))
+    if not candidate:
+        return error("候选人不存在", "NOT_FOUND", 404)
+    existing = EmployeeProfile.query.filter_by(candidate_id=candidate.id).first()
+    if existing:
+        return ok(existing.to_dict(detail=True), "候选人已转为内部员工，无需重复创建")
+    unit = db.session.get(OrganizationUnit, payload.get("organization_unit_id")) if payload.get("organization_unit_id") else ensure_default_organization(user)
+    job = db.session.get(Job, payload.get("current_job_id")) if payload.get("current_job_id") else None
+    employee = EmployeeProfile(
+        candidate_id=candidate.id,
+        organization_unit_id=unit.id if unit else None,
+        current_job_id=job.id if job else None,
+        owner_hr_id=user.id,
+        employee_no=str(payload.get("employee_no") or f"EMP-{candidate.id:05d}").strip(),
+        name=candidate.name_masked,
+        phone=candidate.phone_masked,
+        email=candidate.email_masked,
+        department=unit.name if unit else candidate.city,
+        current_title=job.title if job else candidate.title,
+        level=str(payload.get("level") or "").strip(),
+        city=payload.get("city") or candidate.city,
+        employment_status=payload.get("employment_status") or "active",
+        hire_date=parse_date(payload.get("hire_date")),
+        manager_name=str(payload.get("manager_name") or "").strip(),
+        raw_text=candidate.raw_text,
+        resume_json=candidate.resume_json or {},
+        parse_status=candidate.parse_status,
+    )
+    db.session.add(employee)
+    db.session.flush()
+    compensation = build_employee_compensation(employee.id, payload)
+    if compensation:
+        db.session.add(compensation)
+    audit_log(user, "create", "employee", employee.id, employee.name, {"candidate_id": candidate.id})
+    db.session.commit()
+    return ok(employee.to_dict(detail=True), "候选人已转为内部员工")
+
+
+@api.patch("/employees/<int:employee_id>")
+@login_required
+@roles_required("admin", "manager")
+def update_employee(user, employee_id):
+    employee = db.session.get(EmployeeProfile, employee_id)
+    if not employee:
+        return error("员工不存在", "NOT_FOUND", 404)
+    payload = request.get_json(force=True)
+    for field in ["employee_no", "name", "phone", "email", "department", "current_title", "level", "city", "employment_status", "manager_name"]:
+        if field in payload:
+            setattr(employee, field, str(payload.get(field) or "").strip())
+    for field in ["organization_unit_id", "current_job_id"]:
+        if field in payload:
+            setattr(employee, field, payload.get(field) or None)
+    if "hire_date" in payload:
+        employee.hire_date = parse_date(payload.get("hire_date"))
+    compensation = build_employee_compensation(employee.id, payload)
+    if compensation:
+        db.session.add(compensation)
+    audit_log(user, "update", "employee", employee.id, employee.name)
+    db.session.commit()
+    return ok(employee.to_dict(detail=True), "员工档案已更新")
+
+
+@api.delete("/employees/<int:employee_id>")
+@login_required
+@roles_required("admin", "manager")
+def delete_employee(user, employee_id):
+    employee = db.session.get(EmployeeProfile, employee_id)
+    if not employee:
+        return error("员工不存在", "NOT_FOUND", 404)
+    audit_log(user, "delete", "employee", employee.id, employee.name, {"candidate_id": employee.candidate_id})
+    db.session.delete(employee)
+    db.session.commit()
+    return ok({"deleted": employee_id}, "内部员工档案已删除，原候选人档案已保留")
+
+
+@api.post("/employees/<int:employee_id>/analyze-current-job")
+@login_required
+@roles_required("admin", "manager", "recruiter")
+def analyze_employee_current_job(user, employee_id):
+    employee = db.session.get(EmployeeProfile, employee_id)
+    if not employee:
+        return error("员工不存在", "NOT_FOUND", 404)
+    analysis = analyze_employee_against_job(employee, employee.current_job)
+    db.session.add(analysis)
+    audit_log(user, "analyze", "employee", employee.id, employee.name, {"job_id": employee.current_job_id})
+    db.session.commit()
+    return ok(analysis.to_dict(), "员工岗位与薪资分析已完成")
+
+
+@api.post("/employees/<int:employee_id>/recommend-transfer")
+@login_required
+@roles_required("admin", "manager", "recruiter")
+def recommend_employee_transfer(user, employee_id):
+    employee = db.session.get(EmployeeProfile, employee_id)
+    if not employee:
+        return error("员工不存在", "NOT_FOUND", 404)
+    EmployeeRecommendation.query.filter_by(employee_id=employee.id, recommendation_type="transfer").delete()
+    items = []
+    for job in Job.query.filter_by(status="active").order_by(Job.created_at.desc()).all():
+        if job.id == employee.current_job_id:
+            continue
+        reason = match_employee_to_job(employee, job)
+        if reason["score"] < 50:
+            continue
+        recommendation = EmployeeRecommendation(employee_id=employee.id, recommendation_type="transfer", target_job_id=job.id, score=reason["score"], reason_json=reason)
+        db.session.add(recommendation)
+        db.session.flush()
+        items.append(recommendation.to_dict())
+    items.sort(key=lambda item: item["score"], reverse=True)
+    audit_log(user, "recommend", "employee", employee.id, employee.name, {"type": "transfer", "count": len(items)})
+    db.session.commit()
+    return ok({"items": items}, "调岗推荐已生成")
+
+
+@api.post("/employees/<int:employee_id>/recommend-replacement")
+@login_required
+@roles_required("admin", "manager", "recruiter")
+def recommend_employee_replacement(user, employee_id):
+    employee = db.session.get(EmployeeProfile, employee_id)
+    if not employee:
+        return error("员工不存在", "NOT_FOUND", 404)
+    if not employee.current_job:
+        return error("员工未绑定当前岗位，无法推荐替补")
+    EmployeeRecommendation.query.filter_by(employee_id=employee.id, recommendation_type="replacement").delete()
+    items = []
+    for item in preview_matches(employee.current_job, limit=20):
+        if item["candidate_id"] == employee.candidate_id:
+            continue
+        candidate = db.session.get(Candidate, item["candidate_id"])
+        if not candidate or EmployeeProfile.query.filter_by(candidate_id=item["candidate_id"]).first():
+            continue
+        reason = item["reason"]
+        reason["summary"] = "候选人与员工当前岗位 JD 匹配，可作为离职替补候选。"
+        recommendation = EmployeeRecommendation(employee_id=employee.id, recommendation_type="replacement", candidate_id=candidate.id, score=item["score"], reason_json=reason)
+        db.session.add(recommendation)
+        db.session.flush()
+        items.append(recommendation.to_dict())
+    items.sort(key=lambda item: item["score"], reverse=True)
+    audit_log(user, "recommend", "employee", employee.id, employee.name, {"type": "replacement", "count": len(items)})
+    db.session.commit()
+    return ok({"items": items}, "离职替补推荐已生成")
 
 
 @api.get("/candidates")
@@ -2704,6 +2963,193 @@ def normalize_interview_questions(items):
         elif str(item).strip():
             questions.append({"type": "AI提问", "question": str(item).strip(), "rubric": "结合回答质量评分。"})
     return questions[:8]
+
+
+def ensure_default_organization(user):
+    root = OrganizationUnit.query.order_by(OrganizationUnit.id.asc()).first()
+    if root:
+        return root
+    root = OrganizationUnit(name="总公司", unit_type="company", city="", headcount_plan=None, sort_order=0)
+    db.session.add(root)
+    db.session.flush()
+    for name, unit_type, sort_order in [
+        ("技术中心", "business_unit", 1),
+        ("产品中心", "business_unit", 2),
+        ("人力资源部", "department", 3),
+        ("财务部", "department", 4),
+    ]:
+        db.session.add(OrganizationUnit(parent_id=root.id, name=name, unit_type=unit_type, sort_order=sort_order))
+    audit_log(user, "create", "organization_unit", root.id, root.name, {"seed": True})
+    db.session.commit()
+    return root
+
+
+def build_organization_tree(units):
+    nodes = {unit.id: {**unit.to_dict(include_counts=True), "children": []} for unit in units}
+    roots = []
+    for unit in units:
+        node = nodes[unit.id]
+        if unit.parent_id and unit.parent_id in nodes:
+            nodes[unit.parent_id]["children"].append(node)
+        else:
+            roots.append(node)
+    return roots
+
+
+def organization_descendant_ids(unit_id):
+    units = OrganizationUnit.query.all()
+    children_by_parent = {}
+    for unit in units:
+        children_by_parent.setdefault(unit.parent_id, []).append(unit.id)
+    result = []
+    stack = [unit_id]
+    while stack:
+        current = stack.pop()
+        result.append(current)
+        stack.extend(children_by_parent.get(current, []))
+    return result
+
+
+def employee_group_overview(employees):
+    total = len(employees)
+    active = len([employee for employee in employees if employee.employment_status == "active"])
+    with_compensation = len([employee for employee in employees if employee.latest_compensation()])
+    latest_analyses = [employee.analyses[0] for employee in employees if employee.analyses]
+    high_fit = len([analysis for analysis in latest_analyses if analysis.match_score >= 80])
+    salary_risk = len([analysis for analysis in latest_analyses if analysis.salary_status in {"low", "high"}])
+    avg_match = round(sum(analysis.match_score for analysis in latest_analyses) / len(latest_analyses), 1) if latest_analyses else 0
+    return {
+        "total": total,
+        "active": active,
+        "inactive": total - active,
+        "with_compensation": with_compensation,
+        "analyzed": len(latest_analyses),
+        "high_fit": high_fit,
+        "salary_risk": salary_risk,
+        "avg_match_score": avg_match,
+    }
+
+
+def build_employee_compensation(employee_id, payload):
+    keys = {"salary_monthly_k", "salary_annual_k", "salary_months", "bonus_k"}
+    if not any(key in payload and payload.get(key) not in (None, "") for key in keys):
+        return None
+    monthly = parse_optional_float(payload.get("salary_monthly_k"))
+    annual = parse_optional_float(payload.get("salary_annual_k"))
+    months = parse_optional_int(payload.get("salary_months"), 12)
+    bonus = parse_optional_float(payload.get("bonus_k"))
+    if annual is None and monthly is not None:
+        annual = monthly * months + (bonus or 0)
+    if monthly is None and annual is not None and months:
+        monthly = annual / months
+    return EmployeeCompensation(
+        employee_id=employee_id,
+        salary_monthly_k=monthly,
+        salary_annual_k=annual,
+        salary_months=months,
+        bonus_k=bonus,
+        currency=payload.get("currency") or "CNY",
+        source=payload.get("salary_source") or "manual",
+        effective_date=parse_date(payload.get("salary_effective_date")) or date.today(),
+    )
+
+
+def match_employee_to_job(employee, job):
+    if not job:
+        return {"score": 0, "hits": [], "missing_tags": [], "match_rate": 0, "capability_rate": 0, "summary": "员工未绑定岗位。"}
+    structured = ensure_jd_structured(job)
+    reason = match_candidate(
+        structured.get("skill_tags_raw"),
+        [tag.to_dict() for tag in employee.tags()],
+        years_required=structured.get("years_required"),
+        candidate_years=(employee.resume_json or {}).get("experience_analysis", {}).get("years"),
+        candidate_context=" ".join([employee.current_title or "", employee.raw_text or ""]),
+    )
+    if reason["score"] >= 85:
+        summary = "员工能力与岗位要求高度匹配，可作为核心人才关注。"
+    elif reason["score"] >= 70:
+        summary = "员工能力与岗位基本匹配，建议结合绩效继续观察。"
+    elif reason["score"] >= 50:
+        summary = "员工能力与岗位部分匹配，建议补齐缺失能力或评估调岗。"
+    else:
+        summary = "员工能力与岗位匹配度偏低，建议优先评估调岗或培训。"
+    reason["summary"] = summary
+    return reason
+
+
+def analyze_employee_salary(employee, match_score):
+    compensation = employee.latest_compensation()
+    job = employee.current_job
+    salary_range = (ensure_jd_structured(job).get("salary_range") if job else None) or None
+    if not compensation or not compensation.salary_monthly_k:
+        return {"score": 0, "status": "unknown", "label": "薪资数据不足", "summary": "员工未维护薪资，暂不能判断薪资合理性。"}
+    if not salary_range:
+        return {"score": 0, "status": "unknown", "label": "岗位薪资区间不足", "summary": "当前岗位未识别薪资范围，暂不能判断薪资是否合理。"}
+    monthly = float(compensation.salary_monthly_k or 0)
+    low = float(salary_range.get("min_k") or 0)
+    high = float(salary_range.get("max_k") or 0)
+    if low and monthly < low:
+        status = "low"
+        label = "薪资偏低"
+        score = 70 if match_score >= 80 else 82
+        summary = "员工薪资低于岗位区间下限。若岗位匹配分较高，存在保留风险。"
+    elif high and monthly > high:
+        status = "high"
+        label = "薪资偏高"
+        score = 70 if match_score < 60 else 85
+        summary = "员工薪资高于岗位区间上限。若岗位匹配分偏低，建议复核岗位产出。"
+    else:
+        status = "reasonable"
+        label = "薪资合理"
+        score = 95 if match_score >= 70 else 82
+        summary = "员工薪资处于岗位薪资区间内。"
+    return {"score": score, "status": status, "label": label, "summary": summary, "monthly_k": monthly, "range": salary_range}
+
+
+def analyze_employee_against_job(employee, job):
+    fit = match_employee_to_job(employee, job)
+    salary = analyze_employee_salary(employee, fit["score"])
+    if fit["score"] >= 80 and salary["status"] == "low":
+        risk = "retention"
+    elif fit["score"] < 50:
+        risk = "job_mismatch"
+    elif fit["score"] < 60 and salary["status"] == "high":
+        risk = "cost_mismatch"
+    else:
+        risk = "normal"
+    payload = {
+        "summary": f"{fit['summary']} {salary['summary']}",
+        "job_fit": fit,
+        "salary": salary,
+        "actions": employee_analysis_actions(fit["score"], salary["status"], risk),
+    }
+    return EmployeeAnalysis(
+        employee_id=employee.id,
+        job_id=job.id if job else None,
+        match_score=fit["score"],
+        salary_score=salary["score"],
+        salary_status=salary["status"],
+        risk_level=risk,
+        analysis_json=payload,
+        source="rules",
+    )
+
+
+def employee_analysis_actions(match_score, salary_status, risk):
+    actions = []
+    if match_score >= 85:
+        actions.append("列入高匹配人才池，可作为关键岗位继任或保留对象。")
+    elif match_score < 50:
+        actions.append("建议评估当前岗位适配，优先查看调岗推荐。")
+    else:
+        actions.append("建议结合绩效和项目产出继续观察，并补齐缺失能力。")
+    if salary_status == "low":
+        actions.append("建议结合绩效复核薪资，避免高匹配员工流失。")
+    elif salary_status == "high":
+        actions.append("建议复核薪资与岗位产出是否匹配。")
+    if risk == "retention":
+        actions.append("建议主管或 HRBP 主动沟通保留意愿。")
+    return actions
 
 
 def parse_datetime(value):

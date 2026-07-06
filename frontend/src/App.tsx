@@ -5,6 +5,7 @@ import {
   BarChart3,
   Bot,
   BriefcaseBusiness,
+  Building2,
   CalendarDays,
   Check,
   ChevronRight,
@@ -32,7 +33,7 @@ import {
   Wrench,
   Users
 } from "lucide-react";
-import { api, AgentResponse, AiInterviewPlan, AuditLog, BackgroundTask, BiOverview, BossInboxItem, Candidate, clearToken, InterviewAssignment, InterviewFeedback, InterviewMessage, Job, LLMUsageSummary, MatchResult, notify, OfferRecord, PipelineItem, PublicInterviewRoom, setToken, SkillTag, SystemReadiness, User } from "./lib/api";
+import { api, AgentResponse, AiInterviewPlan, AuditLog, BackgroundTask, BiOverview, BossInboxItem, Candidate, clearToken, EmployeeAnalysis, EmployeeProfile, EmployeeRecommendation, InterviewAssignment, InterviewFeedback, InterviewMessage, Job, LLMUsageSummary, MatchResult, notify, OfferRecord, OrganizationUnit, PipelineItem, PublicInterviewRoom, setToken, SkillTag, SystemReadiness, User } from "./lib/api";
 
 const stageLabels: Record<string, string> = {
   pending: "待处理",
@@ -54,7 +55,7 @@ const offerStatusLabels: Record<string, string> = {
   cancelled: "已取消"
 };
 
-type View = "candidates" | "jobs" | "pipeline" | "interviews" | "offers" | "boss" | "bi" | "agent" | "tasks" | "audit" | "users";
+type View = "candidates" | "internal" | "jobs" | "pipeline" | "interviews" | "offers" | "boss" | "bi" | "agent" | "tasks" | "audit" | "users";
 
 function App() {
   const roomToken = window.location.pathname.match(/^\/interview-room\/([^/]+)/)?.[1] || "";
@@ -104,6 +105,7 @@ function App() {
 
   const navItems = [
     { key: "candidates", icon: <Users size={17} />, label: "人才库" },
+    { key: "internal", icon: <Building2 size={17} />, label: "内部人才" },
     { key: "jobs", icon: <BriefcaseBusiness size={17} />, label: "岗位匹配" },
     { key: "pipeline", icon: <ChevronRight size={17} />, label: "流程看板" },
     { key: "interviews", icon: <CalendarDays size={17} />, label: "面试管理" },
@@ -164,6 +166,7 @@ function App() {
         <AntLayout.Content className="app-content p-4 lg:p-8">
           <MobileTabs view={view} setView={setView} isAdmin={user.role === "admin"} canUseTasks={user.role !== "interviewer"} />
           {view === "candidates" && <CandidatesPage />}
+          {view === "internal" && <InternalTalentPage />}
           {view === "jobs" && <JobsPage />}
           {view === "pipeline" && <PipelinePage />}
           {view === "interviews" && <InterviewsPage />}
@@ -2578,6 +2581,404 @@ function UsersPage({ currentUser }: { currentUser: User }) {
   );
 }
 
+function InternalTalentPage() {
+  const [units, setUnits] = useState<OrganizationUnit[]>([]);
+  const [employees, setEmployees] = useState<EmployeeProfile[]>([]);
+  const [candidates, setCandidates] = useState<Candidate[]>([]);
+  const [jobs, setJobs] = useState<Job[]>([]);
+  const [selectedUnitId, setSelectedUnitId] = useState<number>(0);
+  const [selectedEmployee, setSelectedEmployee] = useState<EmployeeProfile | null>(null);
+  const [message, setMessage] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [form, setForm] = useState({
+    candidate_id: 0,
+    organization_unit_id: 0,
+    current_job_id: 0,
+    employee_no: "",
+    level: "",
+    salary_monthly_k: "",
+    salary_months: "13",
+    hire_date: defaultDate()
+  });
+  const flatUnits = useMemo(() => flattenOrganizationUnits(units), [units]);
+  const currentUnit = flatUnits.find((unit) => unit.id === selectedUnitId);
+
+  async function load(unitId = selectedUnitId) {
+    const [tree, employeeData, candidateData, jobData] = await Promise.all([
+      api.organizationTree(),
+      api.employees(unitId || undefined),
+      api.candidates(),
+      api.jobs()
+    ]);
+    setUnits(tree.items);
+    setEmployees(employeeData.items);
+    setCandidates(candidateData.items);
+    setJobs(jobData.items);
+    const firstUnit = flattenOrganizationUnits(tree.items)[0];
+    setForm((current) => ({
+      ...current,
+      candidate_id: current.candidate_id || candidateData.items[0]?.id || 0,
+      organization_unit_id: current.organization_unit_id || unitId || firstUnit?.id || 0,
+      current_job_id: current.current_job_id || jobData.items[0]?.id || 0
+    }));
+    if (!selectedUnitId && firstUnit) setSelectedUnitId(firstUnit.id);
+  }
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  async function selectUnit(unitId: number) {
+    setSelectedUnitId(unitId);
+    setSelectedEmployee(null);
+    await load(unitId);
+  }
+
+  async function createEmployee(event: React.FormEvent) {
+    event.preventDefault();
+    if (!form.candidate_id) {
+      notify("error", "请先选择候选人");
+      return;
+    }
+    setBusy(true);
+    setMessage("");
+    try {
+      const employee = await api.createEmployeeFromCandidate(form);
+      setMessage(`${employee.name} 已转为内部员工`);
+      setSelectedEmployee(employee);
+      await load(selectedUnitId);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "转入内部员工失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (selectedEmployee) {
+    return (
+      <EmployeeDetailPage
+        employee={selectedEmployee}
+        onBack={() => setSelectedEmployee(null)}
+        onChanged={(employee) => {
+          setSelectedEmployee(employee);
+          load(selectedUnitId);
+        }}
+      />
+    );
+  }
+
+  return (
+    <section className="grid gap-5 xl:grid-cols-[320px_1fr]">
+      <aside className="space-y-4">
+        <div className="design-card">
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="font-semibold">组织架构</h2>
+              <p className="text-xs text-steel">点击部门查看员工和风险概览</p>
+            </div>
+            <button className="secondary-button" onClick={() => load()}>
+              <RefreshCw size={16} />
+            </button>
+          </div>
+          <div className="mt-4 space-y-1">
+            {units.map((unit) => (
+              <OrganizationNode key={unit.id} unit={unit} selectedId={selectedUnitId} onSelect={selectUnit} />
+            ))}
+          </div>
+        </div>
+
+        <form className="design-card" onSubmit={createEmployee}>
+          <h2 className="font-semibold">候选人转内部员工</h2>
+          <p className="mt-1 text-xs text-steel">不会复制成两份简历，只建立员工档案并关联原候选人。</p>
+          <label className="field-label mt-4">候选人</label>
+          <select className="select w-full" value={form.candidate_id} onChange={(event) => setForm({ ...form, candidate_id: Number(event.target.value) })}>
+            {candidates.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.name_masked} · {candidate.title}</option>)}
+          </select>
+          <label className="field-label mt-3">所属组织</label>
+          <select className="select w-full" value={form.organization_unit_id} onChange={(event) => setForm({ ...form, organization_unit_id: Number(event.target.value) })}>
+            {flatUnits.map((unit) => <option key={unit.id} value={unit.id}>{"　".repeat(unit.depth)}{unit.name}</option>)}
+          </select>
+          <label className="field-label mt-3">当前岗位</label>
+          <select className="select w-full" value={form.current_job_id} onChange={(event) => setForm({ ...form, current_job_id: Number(event.target.value) })}>
+            <option value={0}>暂不绑定岗位</option>
+            {jobs.map((job) => <option key={job.id} value={job.id}>{job.title}</option>)}
+          </select>
+          <div className="mt-3 grid grid-cols-2 gap-3">
+            <input className="input" placeholder="员工编号" value={form.employee_no} onChange={(event) => setForm({ ...form, employee_no: event.target.value })} />
+            <input className="input" placeholder="职级，如 P6" value={form.level} onChange={(event) => setForm({ ...form, level: event.target.value })} />
+            <input className="input" placeholder="月薪 K" value={form.salary_monthly_k} onChange={(event) => setForm({ ...form, salary_monthly_k: event.target.value })} />
+            <input className="input" placeholder="薪资月数" value={form.salary_months} onChange={(event) => setForm({ ...form, salary_months: event.target.value })} />
+          </div>
+          <label className="field-label mt-3">入职日期</label>
+          <input className="input" type="date" value={form.hire_date} onChange={(event) => setForm({ ...form, hire_date: event.target.value })} />
+          <button className="primary-button mt-4 w-full" type="submit" disabled={busy || !form.candidate_id}>
+            <Plus size={17} />
+            {busy ? "转入中" : "转为内部员工"}
+          </button>
+          {message && <p className="mt-3 text-sm text-mint">{message}</p>}
+        </form>
+      </aside>
+
+      <main className="space-y-4">
+        <div className="toolbar">
+          <div>
+            <h2 className="font-semibold">{currentUnit ? currentUnit.name : "全部内部人才"}</h2>
+            <p className="text-xs text-steel">内部员工独立管理，和外部人才库通过候选人来源关联。</p>
+          </div>
+          <button className="secondary-button" onClick={() => load(selectedUnitId)}>
+            <RefreshCw size={17} />
+            刷新
+          </button>
+        </div>
+
+        <div className="grid gap-3 md:grid-cols-4">
+          <KpiMini label="员工总数" value={employees.length} hint="当前组织范围" />
+          <KpiMini label="有薪资数据" value={employees.filter((item) => item.compensation).length} hint="可做薪资分析" />
+          <KpiMini label="已分析" value={employees.filter((item) => item.analyses?.length).length} hint="岗位/薪资分析" />
+          <KpiMini label="高匹配人才" value={employees.filter((item) => (item.analyses?.[0]?.match_score || 0) >= 80).length} hint="匹配分 >= 80" />
+        </div>
+
+        {employees.length === 0 ? (
+          <EmptyState icon={<Building2 size={22} />} text="暂无内部员工，请先从候选人转入或导入员工档案" />
+        ) : (
+          <div className="grid gap-3">
+            {employees.map((employee) => (
+              <div className="row-card" key={employee.id}>
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h3 className="font-semibold">{employee.name}</h3>
+                    <span className="badge">{employee.current_title}</span>
+                    <span className="badge muted">{employmentStatusLabel(employee.employment_status)}</span>
+                    {employee.analyses?.[0] && <span className="badge">匹配 {employee.analyses[0].match_score}/100</span>}
+                  </div>
+                  <p className="mt-1 text-sm text-steel">{employee.organization_unit?.name || employee.department || "未分配部门"} · {employee.level || "职级未维护"} · {employeeSalary(employee)}</p>
+                  <TagList tags={employee.tags} />
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button className="secondary-button" onClick={() => api.getEmployee(employee.id).then(setSelectedEmployee)}>
+                    <FileText size={16} />
+                    详细简历
+                  </button>
+                  <button className="primary-button" onClick={() => api.analyzeEmployeeCurrentJob(employee.id).then(() => load(selectedUnitId))}>
+                    <Sparkles size={16} />
+                    分析
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </main>
+    </section>
+  );
+}
+
+function EmployeeDetailPage({ employee, onBack, onChanged }: { employee: EmployeeProfile; onBack: () => void; onChanged: (employee: EmployeeProfile) => void }) {
+  const [detail, setDetail] = useState(employee);
+  const [analysis, setAnalysis] = useState<EmployeeAnalysis | null>(employee.analyses?.[0] || null);
+  const [transfer, setTransfer] = useState<EmployeeRecommendation[]>([]);
+  const [replacement, setReplacement] = useState<EmployeeRecommendation[]>([]);
+  const [busy, setBusy] = useState(false);
+  const resume = detail.resume_json || detail.candidate?.resume_json || {};
+  const experiences = resumeArray(resume, "experience");
+  const projects = resumeArray(resume, "projects");
+  const education = resumeArray(resume, "education");
+
+  useEffect(() => {
+    api.getEmployee(employee.id).then((data) => {
+      setDetail(data);
+      setAnalysis(data.analyses?.[0] || null);
+    });
+  }, [employee.id]);
+
+  async function runAnalysis() {
+    setBusy(true);
+    try {
+      const data = await api.analyzeEmployeeCurrentJob(detail.id);
+      setAnalysis(data);
+      const fresh = await api.getEmployee(detail.id);
+      setDetail(fresh);
+      onChanged(fresh);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function loadTransfer() {
+    setBusy(true);
+    try {
+      const data = await api.recommendEmployeeTransfer(detail.id);
+      setTransfer(data.items);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function loadReplacement() {
+    setBusy(true);
+    try {
+      const data = await api.recommendEmployeeReplacement(detail.id);
+      setReplacement(data.items);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="resume-page">
+      <div className="resume-hero">
+        <div className="resume-hero-top">
+          <button className="secondary-button" onClick={onBack}>
+            <ArrowLeft size={17} />
+            返回内部人才
+          </button>
+          <button className="primary-button" onClick={runAnalysis} disabled={busy}>
+            <Sparkles size={17} />
+            当前岗位/薪资分析
+          </button>
+          <button className="secondary-button" onClick={loadTransfer} disabled={busy}>
+            <BriefcaseBusiness size={17} />
+            调岗推荐
+          </button>
+          <button className="secondary-button" onClick={loadReplacement} disabled={busy}>
+            <Users size={17} />
+            离职替补
+          </button>
+        </div>
+        <div className="resume-profile">
+          <div className="resume-avatar">
+            <Building2 size={30} />
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <h2>{detail.name}</h2>
+              <span className="badge">{detail.current_title}</span>
+              <span className="badge muted">{employmentStatusLabel(detail.employment_status)}</span>
+              {analysis && <span className="badge">岗位匹配 {analysis.match_score}/100</span>}
+            </div>
+            <p>{detail.organization_unit?.name || detail.department || "未分配部门"} · {detail.level || "职级未维护"} · {employeeSalary(detail)}</p>
+            <div className="resume-contact-row">
+              <span><Phone size={14} />{detail.phone || "手机未维护"}</span>
+              <span><Mail size={14} />{detail.email || "邮箱未维护"}</span>
+              <span><BriefcaseBusiness size={14} />{detail.current_job?.title || "未绑定岗位"}</span>
+              <span><MapPin size={14} />{detail.city || "城市未维护"}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="resume-layout">
+        <main className="resume-main">
+          {analysis && (
+            <div className="resume-card">
+              <ResumeSectionTitle icon={<Sparkles size={18} />} title="AI 分析结论" />
+              <p className="resume-summary">{analysis.analysis.summary || "暂无分析摘要"}</p>
+              <div className="mt-4 grid gap-3 md:grid-cols-3">
+                <KpiMini label="岗位匹配" value={`${analysis.match_score}/100`} hint={riskLabel(analysis.risk_level)} />
+                <KpiMini label="薪资评分" value={`${analysis.salary_score}/100`} hint={salaryStatusLabel(analysis.salary_status)} />
+                <KpiMini label="分析来源" value={analysis.source} hint="规则 + 标签证据" />
+              </div>
+              <div className="mt-4 grid gap-2">
+                {(analysis.analysis.actions || []).map((action, index) => <div className="rounded-md bg-mint/10 px-3 py-2 text-sm text-ink" key={index}>{action}</div>)}
+              </div>
+            </div>
+          )}
+
+          <div className="resume-card">
+            <ResumeSectionTitle icon={<FileText size={18} />} title="个人简介" />
+            <p className="resume-summary">{String(resume.summary || detail.raw_text || "暂无简介")}</p>
+          </div>
+          <div className="resume-card">
+            <ResumeSectionTitle icon={<GraduationCap size={18} />} title="教育经历" />
+            <ResumeTimeline items={education} empty="暂无结构化教育经历" />
+          </div>
+          <div className="resume-card">
+            <ResumeSectionTitle icon={<BriefcaseBusiness size={18} />} title="工作经历" />
+            <ResumeTimeline items={experiences} empty="暂无结构化工作经历" />
+          </div>
+          <div className="resume-card">
+            <ResumeSectionTitle icon={<Database size={18} />} title="项目经历" />
+            <ResumeTimeline items={projects} empty="暂无结构化项目经历" />
+          </div>
+        </main>
+
+        <aside className="resume-side">
+          <div className="resume-card">
+            <ResumeSectionTitle icon={<UserRound size={18} />} title="员工信息" />
+            <div className="mt-4 grid gap-3">
+              <InfoItem label="员工编号" value={detail.employee_no || "-"} />
+              <InfoItem label="部门" value={detail.organization_unit?.name || detail.department || "-"} />
+              <InfoItem label="岗位" value={detail.current_job?.title || detail.current_title || "-"} />
+              <InfoItem label="薪资" value={employeeSalary(detail)} />
+              <InfoItem label="来源候选人" value={detail.candidate ? `${detail.candidate.name_masked} #${detail.candidate.id}` : "无关联候选人"} />
+            </div>
+          </div>
+          <SkillRadar tags={detail.tags} />
+          <SkillCategoryList tags={detail.tags} />
+          <RecommendationList title="调岗推荐" items={transfer} type="transfer" />
+          <RecommendationList title="离职替补推荐" items={replacement} type="replacement" />
+        </aside>
+      </div>
+    </section>
+  );
+}
+
+function OrganizationNode({ unit, selectedId, onSelect, depth = 0 }: { unit: OrganizationUnit; selectedId: number; onSelect: (id: number) => void; depth?: number }) {
+  return (
+    <div>
+      <button className={`w-full rounded-md px-3 py-2 text-left text-sm ${selectedId === unit.id ? "bg-mint text-white" : "hover:bg-slate-100"}`} type="button" onClick={() => onSelect(unit.id)}>
+        <span style={{ paddingLeft: depth * 14 }}>{unit.name}</span>
+        <span className="float-right text-xs opacity-75">{unit.employee_count || 0}</span>
+      </button>
+      {unit.children?.map((child) => <OrganizationNode key={child.id} unit={child} selectedId={selectedId} onSelect={onSelect} depth={depth + 1} />)}
+    </div>
+  );
+}
+
+function RecommendationList({ title, items, type }: { title: string; items: EmployeeRecommendation[]; type: "transfer" | "replacement" }) {
+  if (!items.length) return null;
+  return (
+    <div className="resume-card">
+      <ResumeSectionTitle icon={type === "transfer" ? <BriefcaseBusiness size={18} /> : <Users size={18} />} title={title} />
+      <div className="mt-4 grid gap-3">
+        {items.slice(0, 5).map((item) => (
+          <div className="rounded-md border border-line p-3" key={item.id}>
+            <div className="flex items-center justify-between gap-3">
+              <strong>{type === "transfer" ? item.target_job?.title : item.candidate?.name_masked}</strong>
+              <span className="badge">{item.score}/100</span>
+            </div>
+            <p className="mt-1 text-xs text-steel">{String(item.reason.summary || "基于岗位 JD 与技能标签匹配。")}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function flattenOrganizationUnits(units: OrganizationUnit[], depth = 0): (OrganizationUnit & { depth: number })[] {
+  return units.flatMap((unit) => [{ ...unit, depth }, ...flattenOrganizationUnits(unit.children || [], depth + 1)]);
+}
+
+function employeeSalary(employee: EmployeeProfile) {
+  const compensation = employee.compensation;
+  if (!compensation) return "薪资未维护";
+  if (compensation.salary_monthly_k) return `${Number(compensation.salary_monthly_k).toFixed(1)}K · ${compensation.salary_months}薪`;
+  if (compensation.salary_annual_k) return `年包 ${Number(compensation.salary_annual_k).toFixed(1)}K`;
+  return "薪资未维护";
+}
+
+function employmentStatusLabel(status: string) {
+  return { active: "在职", departed: "离职", leaving: "待离职", transfer: "调岗中" }[status] || status;
+}
+
+function salaryStatusLabel(status: string) {
+  return { low: "薪资偏低", high: "薪资偏高", reasonable: "薪资合理", unknown: "数据不足" }[status] || status;
+}
+
+function riskLabel(risk: string) {
+  return { normal: "正常", retention: "保留风险", job_mismatch: "岗位不匹配", cost_mismatch: "成本不匹配", unknown: "未分析" }[risk] || risk;
+}
+
 function UploadResumeModal({ onClose, onUploaded }: { onClose: () => void; onUploaded: () => void }) {
   const [files, setFiles] = useState<File[]>([]);
   const [message, setMessage] = useState("");
@@ -3146,7 +3547,7 @@ function parseInterviewDimensions(comment: string) {
 }
 
 function MobileTabs({ view, setView, isAdmin, canUseTasks }: { view: View; setView: (view: View) => void; isAdmin: boolean; canUseTasks: boolean }) {
-  const tabs: [View, string][] = [["candidates", "人才"], ["jobs", "岗位"], ["pipeline", "流程"], ["interviews", "面试"], ["offers", "Offer"], ["boss", "BOSS"], ["bi", "BI"], ["agent", "AI"]];
+  const tabs: [View, string][] = [["candidates", "人才"], ["internal", "内部"], ["jobs", "岗位"], ["pipeline", "流程"], ["interviews", "面试"], ["offers", "Offer"], ["boss", "BOSS"], ["bi", "BI"], ["agent", "AI"]];
   if (canUseTasks) tabs.push(["tasks", "任务"]);
   if (isAdmin) {
     tabs.push(["audit", "日志"]);
@@ -3181,6 +3582,7 @@ function EmptyState({ icon, text }: { icon: React.ReactNode; text: string }) {
 function titleFor(view: View) {
   return {
     candidates: "人才库",
+    internal: "内部人才",
     jobs: "岗位匹配",
     pipeline: "流程看板",
     interviews: "面试管理",

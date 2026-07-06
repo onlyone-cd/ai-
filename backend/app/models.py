@@ -157,6 +157,232 @@ class Job(db.Model):
         }
 
 
+class OrganizationUnit(db.Model):
+    __table_args__ = (
+        db.Index("ix_org_parent_sort", "parent_id", "sort_order"),
+        db.Index("ix_org_status_type", "status", "unit_type"),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    parent_id = db.Column(db.Integer, db.ForeignKey("organization_unit.id"), nullable=True)
+    name = db.Column(db.String(128), nullable=False)
+    unit_type = db.Column(db.String(32), nullable=False, default="department")
+    manager_employee_id = db.Column(db.Integer, nullable=True)
+    hrbp_user_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
+    city = db.Column(db.String(64), nullable=True)
+    headcount_plan = db.Column(db.Integer, nullable=True)
+    status = db.Column(db.String(24), nullable=False, default="active")
+    sort_order = db.Column(db.Integer, nullable=False, default=0)
+    created_at = db.Column(db.DateTime(timezone=True), default=utcnow)
+    updated_at = db.Column(db.DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+    parent = db.relationship("OrganizationUnit", remote_side=[id], backref="children", foreign_keys=[parent_id])
+    hrbp = db.relationship("User", foreign_keys=[hrbp_user_id])
+
+    def to_dict(self, include_counts=False):
+        data = {
+            "id": self.id,
+            "parent_id": self.parent_id,
+            "name": self.name,
+            "unit_type": self.unit_type,
+            "manager_employee_id": self.manager_employee_id,
+            "manager_name": db.session.get(EmployeeProfile, self.manager_employee_id).name if self.manager_employee_id and db.session.get(EmployeeProfile, self.manager_employee_id) else "",
+            "hrbp_user_id": self.hrbp_user_id,
+            "hrbp_name": self.hrbp.name if self.hrbp else "",
+            "city": self.city,
+            "headcount_plan": self.headcount_plan,
+            "status": self.status,
+            "sort_order": self.sort_order,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+        if include_counts:
+            employee_count = EmployeeProfile.query.filter_by(organization_unit_id=self.id).count()
+            data["employee_count"] = employee_count
+            data["vacancy_count"] = max((self.headcount_plan or 0) - employee_count, 0) if self.headcount_plan else 0
+        return data
+
+
+class EmployeeProfile(db.Model):
+    __table_args__ = (
+        db.Index("ix_employee_org_status", "organization_unit_id", "employment_status"),
+        db.Index("ix_employee_candidate", "candidate_id"),
+        db.Index("ix_employee_job_status", "current_job_id", "employment_status"),
+        db.UniqueConstraint("employee_no", name="uq_employee_no"),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    candidate_id = db.Column(db.Integer, db.ForeignKey("candidate.id"), nullable=True)
+    organization_unit_id = db.Column(db.Integer, db.ForeignKey("organization_unit.id"), nullable=True)
+    current_job_id = db.Column(db.Integer, db.ForeignKey("job.id"), nullable=True)
+    owner_hr_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
+    employee_no = db.Column(db.String(64), nullable=True)
+    name = db.Column(db.String(64), nullable=False)
+    phone = db.Column(db.String(64), nullable=True)
+    email = db.Column(db.String(128), nullable=True)
+    department = db.Column(db.String(128), nullable=True)
+    current_title = db.Column(db.String(128), nullable=False)
+    level = db.Column(db.String(64), nullable=True)
+    city = db.Column(db.String(64), nullable=True)
+    employment_status = db.Column(db.String(24), nullable=False, default="active")
+    hire_date = db.Column(db.Date, nullable=True)
+    manager_name = db.Column(db.String(64), nullable=True)
+    raw_text = db.Column(db.Text, nullable=False, default="")
+    resume_json = db.Column(db.JSON, nullable=False, default=dict)
+    parse_status = db.Column(db.String(24), nullable=False, default="ok")
+    created_at = db.Column(db.DateTime(timezone=True), default=utcnow)
+    updated_at = db.Column(db.DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+    candidate = db.relationship("Candidate")
+    organization_unit = db.relationship("OrganizationUnit", foreign_keys=[organization_unit_id], backref="employees")
+    current_job = db.relationship("Job")
+    owner = db.relationship("User")
+    compensations = db.relationship("EmployeeCompensation", cascade="all, delete-orphan", backref="employee", order_by="desc(EmployeeCompensation.effective_date)")
+    analyses = db.relationship("EmployeeAnalysis", cascade="all, delete-orphan", backref="employee", order_by="desc(EmployeeAnalysis.created_at)")
+
+    def latest_compensation(self):
+        return self.compensations[0] if self.compensations else None
+
+    def tags(self):
+        return self.candidate.tags if self.candidate else []
+
+    def to_dict(self, detail=False):
+        compensation = self.latest_compensation()
+        data = {
+            "id": self.id,
+            "candidate_id": self.candidate_id,
+            "organization_unit_id": self.organization_unit_id,
+            "organization_unit": self.organization_unit.to_dict() if self.organization_unit else None,
+            "current_job_id": self.current_job_id,
+            "current_job": self.current_job.to_dict() if self.current_job else None,
+            "owner_hr_id": self.owner_hr_id,
+            "owner_name": self.owner.name if self.owner else "",
+            "employee_no": self.employee_no,
+            "name": self.name,
+            "phone": self.phone,
+            "email": self.email,
+            "department": self.department,
+            "current_title": self.current_title,
+            "level": self.level,
+            "city": self.city,
+            "employment_status": self.employment_status,
+            "hire_date": self.hire_date.isoformat() if self.hire_date else None,
+            "manager_name": self.manager_name,
+            "parse_status": self.parse_status,
+            "compensation": compensation.to_dict() if compensation else None,
+            "tags": [tag.to_dict() for tag in self.tags()],
+            "experience_analysis": (self.resume_json or {}).get("experience_analysis", {}),
+            "analyses": [self.analyses[0].to_dict()] if self.analyses else [],
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+        if detail:
+            data["resume_json"] = self.resume_json or {}
+            data["raw_text"] = self.raw_text or ""
+            data["candidate"] = self.candidate.to_dict(detail=True) if self.candidate else None
+            data["analyses"] = [analysis.to_dict() for analysis in self.analyses]
+        return data
+
+
+class EmployeeCompensation(db.Model):
+    __table_args__ = (
+        db.Index("ix_employee_comp_employee_effective", "employee_id", "effective_date"),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    employee_id = db.Column(db.Integer, db.ForeignKey("employee_profile.id"), nullable=False)
+    salary_monthly_k = db.Column(db.Float, nullable=True)
+    salary_annual_k = db.Column(db.Float, nullable=True)
+    salary_months = db.Column(db.Integer, nullable=False, default=12)
+    bonus_k = db.Column(db.Float, nullable=True)
+    currency = db.Column(db.String(16), nullable=False, default="CNY")
+    source = db.Column(db.String(32), nullable=False, default="manual")
+    effective_date = db.Column(db.Date, nullable=True)
+    created_at = db.Column(db.DateTime(timezone=True), default=utcnow)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "employee_id": self.employee_id,
+            "salary_monthly_k": self.salary_monthly_k,
+            "salary_annual_k": self.salary_annual_k,
+            "salary_months": self.salary_months,
+            "bonus_k": self.bonus_k,
+            "currency": self.currency,
+            "source": self.source,
+            "effective_date": self.effective_date.isoformat() if self.effective_date else None,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+class EmployeeAnalysis(db.Model):
+    __table_args__ = (
+        db.Index("ix_employee_analysis_employee_created", "employee_id", "created_at"),
+        db.Index("ix_employee_analysis_job_score", "job_id", "match_score"),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    employee_id = db.Column(db.Integer, db.ForeignKey("employee_profile.id"), nullable=False)
+    job_id = db.Column(db.Integer, db.ForeignKey("job.id"), nullable=True)
+    match_score = db.Column(db.Integer, nullable=False, default=0)
+    salary_score = db.Column(db.Integer, nullable=False, default=0)
+    salary_status = db.Column(db.String(32), nullable=False, default="unknown")
+    risk_level = db.Column(db.String(32), nullable=False, default="unknown")
+    analysis_json = db.Column(db.JSON, nullable=False, default=dict)
+    source = db.Column(db.String(32), nullable=False, default="rules")
+    created_at = db.Column(db.DateTime(timezone=True), default=utcnow)
+
+    job = db.relationship("Job")
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "employee_id": self.employee_id,
+            "job_id": self.job_id,
+            "job": self.job.to_dict() if self.job else None,
+            "match_score": self.match_score,
+            "salary_score": self.salary_score,
+            "salary_status": self.salary_status,
+            "risk_level": self.risk_level,
+            "analysis": self.analysis_json or {},
+            "source": self.source,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+class EmployeeRecommendation(db.Model):
+    __table_args__ = (
+        db.Index("ix_employee_recommendation_employee_type", "employee_id", "recommendation_type"),
+        db.Index("ix_employee_recommendation_score", "score"),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    employee_id = db.Column(db.Integer, db.ForeignKey("employee_profile.id"), nullable=False)
+    recommendation_type = db.Column(db.String(32), nullable=False)
+    target_job_id = db.Column(db.Integer, db.ForeignKey("job.id"), nullable=True)
+    candidate_id = db.Column(db.Integer, db.ForeignKey("candidate.id"), nullable=True)
+    score = db.Column(db.Integer, nullable=False, default=0)
+    reason_json = db.Column(db.JSON, nullable=False, default=dict)
+    created_at = db.Column(db.DateTime(timezone=True), default=utcnow)
+
+    employee = db.relationship("EmployeeProfile")
+    target_job = db.relationship("Job")
+    candidate = db.relationship("Candidate")
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "employee_id": self.employee_id,
+            "recommendation_type": self.recommendation_type,
+            "target_job_id": self.target_job_id,
+            "target_job": self.target_job.to_dict() if self.target_job else None,
+            "candidate_id": self.candidate_id,
+            "candidate": self.candidate.to_dict() if self.candidate else None,
+            "score": self.score,
+            "reason": self.reason_json or {},
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
 class Match(db.Model):
     __table_args__ = (
         db.Index("ix_match_job_score", "job_id", "score"),

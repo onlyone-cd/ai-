@@ -9,6 +9,7 @@ $script:Token = ""
 $script:Results = @()
 $script:TempCandidateId = $null
 $script:TempJobId = $null
+$script:TempEmployeeId = $null
 $script:TempInterviewId = $null
 $script:TempOfferId = $null
 
@@ -115,6 +116,29 @@ Test-Step "pipeline.move_and_history" {
   "ok"
 }
 
+Test-Step "internal_talent.organization_employee_analysis" {
+  $tree = Invoke-Api "GET" "/api/organization/tree"
+  if (-not $tree.data.items -or $tree.data.items.Count -lt 1) { throw "organization tree empty" }
+  $unitId = $tree.data.items[0].id
+  $employee = Invoke-Api "POST" "/api/employees/from-candidate" @{
+    candidate_id = $script:TempCandidateId
+    organization_unit_id = $unitId
+    current_job_id = $script:TempJobId
+    employee_no = "SMOKE-$script:TempCandidateId"
+    level = "P6"
+    salary_monthly_k = 18
+    salary_months = 13
+    hire_date = (Get-Date).ToString("yyyy-MM-dd")
+  }
+  $script:TempEmployeeId = $employee.data.id
+  Invoke-Api "GET" "/api/employees/$script:TempEmployeeId" | Out-Null
+  Invoke-Api "GET" "/api/organization/units/$unitId/employees" | Out-Null
+  Invoke-Api "POST" "/api/employees/$script:TempEmployeeId/analyze-current-job" | Out-Null
+  Invoke-Api "POST" "/api/employees/$script:TempEmployeeId/recommend-transfer" | Out-Null
+  Invoke-Api "POST" "/api/employees/$script:TempEmployeeId/recommend-replacement" | Out-Null
+  "employee=$script:TempEmployeeId"
+}
+
 Test-Step "interview.public_room_and_report" {
   $interviewers = Invoke-Api "GET" "/api/users/interviewers"
   if (-not $interviewers.data.items) { throw "no interviewer account" }
@@ -186,6 +210,7 @@ Download-Step "boss.extension_download" "/api/boss/extension.zip"
 Test-Step "cleanup" {
   if ($script:TempOfferId) { Invoke-Api "DELETE" "/api/offers/$script:TempOfferId" | Out-Null }
   if ($script:TempInterviewId) { Invoke-Api "DELETE" "/api/interview/assignments/$script:TempInterviewId" | Out-Null }
+  if ($script:TempEmployeeId) { Invoke-Api "DELETE" "/api/employees/$script:TempEmployeeId" | Out-Null }
   if ($script:TempJobId) { Invoke-Api "DELETE" "/api/jobs/$script:TempJobId" | Out-Null }
   if ($script:TempCandidateId) { Invoke-Api "DELETE" "/api/candidates/$script:TempCandidateId" | Out-Null }
   "removed temp records"

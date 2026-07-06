@@ -39,6 +39,93 @@ export type Job = {
   match_count?: number;
   pipeline_count?: number;
 };
+
+export type OrganizationUnit = {
+  id: number;
+  parent_id?: number | null;
+  name: string;
+  unit_type: string;
+  manager_employee_id?: number | null;
+  manager_name?: string;
+  hrbp_user_id?: number | null;
+  hrbp_name?: string;
+  city?: string;
+  headcount_plan?: number | null;
+  employee_count?: number;
+  vacancy_count?: number;
+  status: string;
+  children?: OrganizationUnit[];
+};
+
+export type EmployeeCompensation = {
+  id: number;
+  employee_id: number;
+  salary_monthly_k?: number | null;
+  salary_annual_k?: number | null;
+  salary_months: number;
+  bonus_k?: number | null;
+  currency: string;
+  source: string;
+  effective_date?: string | null;
+};
+
+export type EmployeeProfile = {
+  id: number;
+  candidate_id?: number | null;
+  organization_unit_id?: number | null;
+  organization_unit?: OrganizationUnit | null;
+  current_job_id?: number | null;
+  current_job?: Job | null;
+  employee_no?: string;
+  name: string;
+  phone?: string;
+  email?: string;
+  department?: string;
+  current_title: string;
+  level?: string;
+  city?: string;
+  employment_status: string;
+  hire_date?: string | null;
+  manager_name?: string;
+  compensation?: EmployeeCompensation | null;
+  tags: CandidateTag[];
+  experience_analysis: { level: string; label: string; years: number; basis: string };
+  resume_json?: Record<string, unknown>;
+  raw_text?: string;
+  candidate?: Candidate | null;
+  analyses?: EmployeeAnalysis[];
+};
+
+export type EmployeeAnalysis = {
+  id: number;
+  employee_id: number;
+  job_id?: number | null;
+  job?: Job | null;
+  match_score: number;
+  salary_score: number;
+  salary_status: string;
+  risk_level: string;
+  analysis: {
+    summary?: string;
+    job_fit?: MatchResult["reason"] & { score: number; summary?: string };
+    salary?: Record<string, unknown>;
+    actions?: string[];
+  };
+  source: string;
+  created_at?: string;
+};
+
+export type EmployeeRecommendation = {
+  id: number;
+  employee_id: number;
+  recommendation_type: "transfer" | "replacement";
+  target_job_id?: number | null;
+  target_job?: Job | null;
+  candidate_id?: number | null;
+  candidate?: Candidate | null;
+  score: number;
+  reason: Record<string, unknown>;
+};
 export type MatchResult = {
   id?: number;
   candidate_id: number;
@@ -322,6 +409,20 @@ export const api = {
       failed_count: number;
     }>("/resume/upload", formData);
   },
+  organizationTree: () => request<{ items: OrganizationUnit[] }>("/organization/tree"),
+  createOrganizationUnit: (payload: Partial<OrganizationUnit>) =>
+    request<OrganizationUnit>("/organization/units", { method: "POST", body: JSON.stringify(payload) }),
+  organizationEmployees: (unitId: number) => request<{ unit: OrganizationUnit; items: EmployeeProfile[] }>(`/organization/units/${unitId}/employees`),
+  organizationOverview: (unitId: number) => request<{ total: number; active: number; inactive: number; with_compensation: number; analyzed: number; high_fit: number; salary_risk: number; avg_match_score: number; unit: OrganizationUnit }>(`/organization/units/${unitId}/overview`),
+  employees: (organizationUnitId?: number) => request<{ items: EmployeeProfile[]; overview: { total: number; active: number; inactive: number; with_compensation: number; analyzed: number; high_fit: number; salary_risk: number; avg_match_score: number } }>(`/employees${organizationUnitId ? `?organization_unit_id=${organizationUnitId}` : ""}`),
+  getEmployee: (id: number) => request<EmployeeProfile>(`/employees/${id}`),
+  createEmployeeFromCandidate: (payload: { candidate_id: number; organization_unit_id?: number; current_job_id?: number; employee_no?: string; level?: string; salary_monthly_k?: string | number; salary_annual_k?: string | number; salary_months?: string | number; hire_date?: string; manager_name?: string }) =>
+    request<EmployeeProfile>("/employees/from-candidate", { method: "POST", body: JSON.stringify(payload) }),
+  updateEmployee: (id: number, payload: Partial<EmployeeProfile> & { salary_monthly_k?: string | number; salary_annual_k?: string | number; salary_months?: string | number; bonus_k?: string | number }) =>
+    request<EmployeeProfile>(`/employees/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
+  analyzeEmployeeCurrentJob: (id: number) => request<EmployeeAnalysis>(`/employees/${id}/analyze-current-job`, { method: "POST" }),
+  recommendEmployeeTransfer: (id: number) => request<{ items: EmployeeRecommendation[] }>(`/employees/${id}/recommend-transfer`, { method: "POST" }),
+  recommendEmployeeReplacement: (id: number) => request<{ items: EmployeeRecommendation[] }>(`/employees/${id}/recommend-replacement`, { method: "POST" }),
   jobs: () => request<{ items: Job[] }>("/jobs"),
   getJob: (id: number) => request<Job>(`/jobs/${id}`),
   createJob: (payload: Partial<Job> & { skill_tags_raw: string }) =>

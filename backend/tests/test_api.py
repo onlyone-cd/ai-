@@ -13,7 +13,7 @@ from app import create_app, db
 from app.config import Config
 from app.auth import verify_password
 from app.llm_client import chat_json
-from app.models import AuditLog, BackgroundTask, BossDraft, Candidate, CandidateTag, InterviewAssignment, InterviewFeedback, Job, LLMUsage, Match, OfferRecord, PipelineStage, User
+from app.models import AuditLog, BackgroundTask, BossDraft, Candidate, CandidateTag, EmployeeProfile, InterviewAssignment, InterviewFeedback, Job, LLMUsage, Match, OfferRecord, OrganizationUnit, PipelineStage, User
 from app.task_service import run_next_task
 
 
@@ -257,6 +257,83 @@ def test_user_password_must_be_strong(client, admin_headers):
     updated = client.patch("/api/users/1", headers=admin_headers, json={"password": "password123"})
     assert updated.status_code == 400
     assert updated.get_json()["code"] == "WEAK_PASSWORD"
+
+
+def test_internal_talent_organization_employee_analysis_and_recommendations(client, admin_headers):
+    tree = client.get("/api/organization/tree", headers=admin_headers)
+    assert tree.status_code == 200
+    root = tree.get_json()["data"]["items"][0]
+    assert root["name"] == "总公司"
+
+    unit = client.post(
+        "/api/organization/units",
+        headers=admin_headers,
+        json={"parent_id": root["id"], "name": "后端研发部", "unit_type": "department", "headcount_plan": 8},
+    ).get_json()["data"]
+    job = client.post(
+        "/api/jobs",
+        headers=admin_headers,
+        json={
+            "title": "内部 Java 后端工程师",
+            "city": "上海",
+            "department": "后端研发部",
+            "jd_text": "负责 Java 后端服务开发，薪资 20-30K，要求 Spring Boot、MySQL、Redis。",
+            "skill_tags_raw": "Java 5\nSpring Boot 5\nMySQL 4\nRedis 4",
+        },
+    ).get_json()["data"]
+    candidate = client.post(
+        "/api/boss/candidates/batch-import",
+        headers=admin_headers,
+        json={"items": [{"external_id": "internal-java", "raw_text": "姓名：内部候选人\n男 13800009999 internal@example.com\n4 年 Java 后端开发经验，熟悉 Spring Boot、MySQL、Redis。"}]},
+    ).get_json()["data"]["items"][0]
+
+    created = client.post(
+        "/api/employees/from-candidate",
+        headers=admin_headers,
+        json={
+            "candidate_id": candidate["id"],
+            "organization_unit_id": unit["id"],
+            "current_job_id": job["id"],
+            "employee_no": "EMP-T-001",
+            "level": "P6",
+            "salary_monthly_k": 18,
+            "salary_months": 13,
+            "hire_date": "2026-07-06",
+        },
+    )
+    assert created.status_code == 200
+    employee = created.get_json()["data"]
+    assert employee["candidate_id"] == candidate["id"]
+    assert employee["organization_unit"]["name"] == "后端研发部"
+    assert employee["compensation"]["salary_annual_k"] == 234
+
+    duplicate = client.post("/api/employees/from-candidate", headers=admin_headers, json={"candidate_id": candidate["id"]})
+    assert duplicate.status_code == 200
+    assert duplicate.get_json()["data"]["id"] == employee["id"]
+    assert EmployeeProfile.query.filter_by(candidate_id=candidate["id"]).count() == 1
+
+    department_employees = client.get(f"/api/organization/units/{unit['id']}/employees", headers=admin_headers)
+    assert department_employees.status_code == 200
+    assert department_employees.get_json()["data"]["items"][0]["id"] == employee["id"]
+
+    analysis = client.post(f"/api/employees/{employee['id']}/analyze-current-job", headers=admin_headers)
+    assert analysis.status_code == 200
+    analysis_data = analysis.get_json()["data"]
+    assert analysis_data["match_score"] >= 50
+    assert analysis_data["salary_status"] == "low"
+
+    transfer = client.post(f"/api/employees/{employee['id']}/recommend-transfer", headers=admin_headers)
+    assert transfer.status_code == 200
+    assert "items" in transfer.get_json()["data"]
+
+    replacement = client.post(f"/api/employees/{employee['id']}/recommend-replacement", headers=admin_headers)
+    assert replacement.status_code == 200
+    assert "items" in replacement.get_json()["data"]
+
+    detail = client.get(f"/api/employees/{employee['id']}", headers=admin_headers)
+    assert detail.status_code == 200
+    assert detail.get_json()["data"]["candidate"]["id"] == candidate["id"]
+    assert AuditLog.query.filter_by(target_type="employee", target_id=employee["id"]).count() >= 2
 
 
 def test_cli_can_create_admin_and_reset_password(app, client):

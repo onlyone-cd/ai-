@@ -2593,6 +2593,8 @@ function OrganizationManagementPage() {
   const [resumeFiles, setResumeFiles] = useState<File[]>([]);
   const flatUnits = useMemo(() => flattenOrganizationUnits(units), [units]);
   const selectedUnit = flatUnits.find((unit) => unit.id === selectedId);
+  const selectedPath = useMemo(() => organizationPath(flatUnits, selectedId), [flatUnits, selectedId]);
+  const childUnits = selectedUnit?.children || [];
 
   async function load(nextSelectedId = selectedId) {
     const tree = await api.organizationTree();
@@ -2693,8 +2695,50 @@ function OrganizationManagementPage() {
   }
 
   return (
-    <section className="grid gap-5 xl:grid-cols-[340px_1fr]">
-      <aside className="space-y-4">
+    <section className="space-y-5">
+      <div className="design-card">
+        <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
+          <div className="min-w-0 flex-1">
+            <h2 className="font-semibold">组织架构</h2>
+            <p className="mt-1 text-xs text-steel">用下拉框定位部门，页面空间主要留给组织维护和员工列表。</p>
+            <label className="field-label mt-4">当前组织</label>
+            <select className="select w-full" value={selectedId} onChange={(event) => selectUnit(Number(event.target.value))}>
+              {flatUnits.map((unit) => (
+                <option key={unit.id} value={unit.id}>{"　".repeat(unit.depth)}{unit.name}（{unit.employee_count || 0} 人）</option>
+              ))}
+            </select>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button className="secondary-button" onClick={() => load()}>
+              <RefreshCw size={16} />
+              刷新
+            </button>
+            <label className="secondary-button cursor-pointer">
+              <Upload size={16} />
+              导入组织架构 Excel
+              <input className="hidden" type="file" accept=".xlsx" onChange={(event) => importExcel(event.target.files)} />
+            </label>
+          </div>
+        </div>
+        {selectedPath.length > 0 && (
+          <div className="mt-4 flex flex-wrap items-center gap-2 text-xs text-steel">
+            <span>路径</span>
+            {selectedPath.map((unit) => <span className="chip" key={unit.id}>{unit.name}</span>)}
+          </div>
+        )}
+        {childUnits.length > 0 && (
+          <div className="mt-3 flex flex-wrap gap-2">
+            {childUnits.map((unit) => (
+              <button className="secondary-button" key={unit.id} onClick={() => selectUnit(unit.id)}>
+                {unit.name}
+                <span className="badge muted">{unit.employee_count || 0}</span>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <aside className="hidden">
         <div className="design-card">
           <div className="flex items-center justify-between">
             <div>
@@ -2846,6 +2890,8 @@ function InternalTalentPage() {
   });
   const flatUnits = useMemo(() => flattenOrganizationUnits(units), [units]);
   const currentUnit = flatUnits.find((unit) => unit.id === selectedUnitId);
+  const currentPath = useMemo(() => organizationPath(flatUnits, selectedUnitId), [flatUnits, selectedUnitId]);
+  const currentChildren = currentUnit?.children || [];
 
   async function load(unitId = selectedUnitId) {
     const [tree, employeeData, candidateData, jobData] = await Promise.all([
@@ -2932,6 +2978,39 @@ function InternalTalentPage() {
     <section className="grid gap-5 xl:grid-cols-[320px_1fr]">
       <aside className="space-y-4">
         <div className="design-card">
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="font-semibold">组织筛选</h2>
+              <p className="text-xs text-steel">通过下拉框切换部门，减少组织树占用空间。</p>
+            </div>
+            <button className="secondary-button" onClick={() => load(selectedUnitId)}>
+              <RefreshCw size={16} />
+            </button>
+          </div>
+          <label className="field-label mt-4">当前组织</label>
+          <select className="select w-full" value={selectedUnitId} onChange={(event) => selectUnit(Number(event.target.value))}>
+            {flatUnits.map((unit) => (
+              <option key={unit.id} value={unit.id}>{"　".repeat(unit.depth)}{unit.name}（{unit.employee_count || 0} 人）</option>
+            ))}
+          </select>
+          {currentPath.length > 0 && (
+            <div className="mt-3 flex flex-wrap gap-2">
+              {currentPath.map((unit) => <span className="chip" key={unit.id}>{unit.name}</span>)}
+            </div>
+          )}
+          {currentChildren.length > 0 && (
+            <div className="mt-3 flex flex-wrap gap-2">
+              {currentChildren.map((unit) => (
+                <button className="secondary-button" key={unit.id} onClick={() => selectUnit(unit.id)}>
+                  {unit.name}
+                  <span className="badge muted">{unit.employee_count || 0}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="hidden">
           <div className="flex items-center justify-between">
             <div>
               <h2 className="font-semibold">组织架构</h2>
@@ -3238,6 +3317,17 @@ function RecommendationList({ title, items, type }: { title: string; items: Empl
 
 function flattenOrganizationUnits(units: OrganizationUnit[], depth = 0): (OrganizationUnit & { depth: number })[] {
   return units.flatMap((unit) => [{ ...unit, depth }, ...flattenOrganizationUnits(unit.children || [], depth + 1)]);
+}
+
+function organizationPath(units: (OrganizationUnit & { depth: number })[], selectedId: number) {
+  const byId = new Map(units.map((unit) => [unit.id, unit]));
+  const path: (OrganizationUnit & { depth: number })[] = [];
+  let current = selectedId ? byId.get(selectedId) : undefined;
+  while (current) {
+    path.unshift(current);
+    current = current.parent_id ? byId.get(current.parent_id) : undefined;
+  }
+  return path;
 }
 
 function employeeSalary(employee: EmployeeProfile) {

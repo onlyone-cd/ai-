@@ -400,6 +400,23 @@ def test_internal_talent_organization_employee_analysis_and_recommendations(clie
     detail = client.get(f"/api/employees/{employee['id']}", headers=admin_headers)
     assert detail.status_code == 200
     assert detail.get_json()["data"]["candidate"]["id"] == candidate["id"]
+
+    salary_csv = BytesIO(b"employee_no,salary_monthly_k,salary_months,bonus_k,effective_date\nEMP-T-001,26,14,8,2026-07-07\n")
+    salary_import = client.post(
+        "/api/employees/compensation-import",
+        headers=admin_headers,
+        data={"file": (salary_csv, "salary.csv")},
+        content_type="multipart/form-data",
+    )
+    assert salary_import.status_code == 200
+    salary_data = salary_import.get_json()["data"]
+    assert salary_data["updated_count"] == 1
+    detail_after_salary = client.get(f"/api/employees/{employee['id']}", headers=admin_headers)
+    compensation = detail_after_salary.get_json()["data"]["compensation"]
+    assert compensation["salary_monthly_k"] == 26
+    assert compensation["salary_annual_k"] == 372
+    assert compensation["source"] == "import"
+
     assert AuditLog.query.filter_by(target_type="employee", target_id=employee["id"]).count() >= 2
 
 

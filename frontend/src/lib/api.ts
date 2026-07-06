@@ -435,6 +435,11 @@ export const api = {
     request<EmployeeProfile>("/employees/from-candidate", { method: "POST", body: JSON.stringify(payload) }),
   updateEmployee: (id: number, payload: Partial<EmployeeProfile> & { salary_monthly_k?: string | number; salary_annual_k?: string | number; salary_months?: string | number; bonus_k?: string | number }) =>
     request<EmployeeProfile>(`/employees/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
+  importEmployeeCompensations: (file: File) => {
+    const formData = new FormData();
+    formData.append("file", file);
+    return upload<{ updated_count: number; skipped_count: number; failed_count: number; updated: { row: number; employee: EmployeeProfile; compensation: EmployeeCompensation }[]; skipped: { row: number; reason: string }[]; errors: { row: number; error: string }[] }>("/employees/compensation-import", formData);
+  },
   analyzeEmployeeCurrentJob: (id: number) => request<EmployeeAnalysis>(`/employees/${id}/analyze-current-job`, { method: "POST" }),
   recommendEmployeeTransfer: (id: number) => request<{ items: EmployeeRecommendation[] }>(`/employees/${id}/recommend-transfer`, { method: "POST" }),
   recommendEmployeeReplacement: (id: number) => request<{ items: EmployeeRecommendation[] }>(`/employees/${id}/recommend-replacement`, { method: "POST" }),

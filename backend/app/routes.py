@@ -11,6 +11,7 @@ import zipfile
 
 import jwt
 from flask import Blueprint, Response, current_app, request
+from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 
 from . import db, production_config_checks
@@ -564,6 +565,58 @@ def delete_employee(user, employee_id):
     db.session.delete(employee)
     db.session.commit()
     return ok({"deleted": employee_id}, "内部员工档案已删除，原候选人档案已保留")
+
+
+@api.post("/employees/compensation-import")
+@login_required
+@roles_required("admin", "manager")
+def import_employee_compensations(user):
+    file = request.files.get("file")
+    if not file:
+        return error("请上传员工薪资表")
+    suffix = Path(file.filename or "").suffix.lower()
+    try:
+        if suffix == ".csv":
+            rows = parse_csv_table(file.stream)
+        elif suffix == ".xlsx":
+            rows = parse_xlsx_table(file.stream)
+        else:
+            return error("仅支持 .csv 或 .xlsx 薪资表")
+    except ValueError as exc:
+        return error(str(exc))
+
+    updated = []
+    skipped = []
+    errors = []
+    for index, row in enumerate(rows, start=2):
+        try:
+            employee = find_employee_for_compensation_row(row)
+            if not employee:
+                skipped.append({"row": index, "reason": "未匹配到员工", "data": row})
+                continue
+            payload = compensation_payload_from_row(row)
+            compensation = build_employee_compensation(employee.id, payload)
+            if not compensation:
+                skipped.append({"row": index, "reason": "薪资字段为空", "employee": employee.name})
+                continue
+            db.session.add(compensation)
+            employee.updated_at = datetime.now(timezone.utc)
+            updated.append({"row": index, "employee": employee.to_dict(), "compensation": compensation.to_dict()})
+        except ValueError as exc:
+            errors.append({"row": index, "error": str(exc), "data": row})
+    audit_log(user, "import", "employee_compensation", None, file.filename, {"updated": len(updated), "skipped": len(skipped), "errors": len(errors)})
+    db.session.commit()
+    return ok(
+        {
+            "updated_count": len(updated),
+            "skipped_count": len(skipped),
+            "failed_count": len(errors),
+            "updated": updated,
+            "skipped": skipped,
+            "errors": errors,
+        },
+        "员工薪资已导入",
+    )
 
 
 @api.post("/employees/<int:employee_id>/analyze-current-job")
@@ -3143,6 +3196,125 @@ def build_employee_compensation(employee_id, payload):
     )
 
 
+def parse_csv_table(stream):
+    raw = stream.read()
+    if isinstance(raw, bytes):
+        text = raw.decode("utf-8-sig", errors="ignore")
+    else:
+        text = raw
+    reader = csv.DictReader(StringIO(text))
+    rows = [{str(key or "").strip(): str(value or "").strip() for key, value in row.items()} for row in reader]
+    if not rows:
+        raise ValueError("导入文件没有可读取的数据")
+    return rows
+
+
+def parse_xlsx_table(stream):
+    rows = read_xlsx_rows(stream)
+    if not rows:
+        raise ValueError("Excel 中没有可读取的数据")
+    header_index = next((index for index, row in enumerate(rows) if any(cell for cell in row)), None)
+    if header_index is None:
+        raise ValueError("Excel 中没有表头")
+    headers = [str(value or "").strip() for value in rows[header_index]]
+    parsed = []
+    for row in rows[header_index + 1 :]:
+        item = {}
+        for index, header in enumerate(headers):
+            if header:
+                item[header] = str(row[index] if index < len(row) else "").strip()
+        if any(item.values()):
+            parsed.append(item)
+    if not parsed:
+        raise ValueError("Excel 中没有可导入的数据")
+    return parsed
+
+
+def read_xlsx_rows(stream):
+    try:
+        with zipfile.ZipFile(stream) as archive:
+            shared_strings = read_xlsx_shared_strings(archive)
+            workbook = ElementTree.fromstring(archive.read("xl/workbook.xml"))
+            ns = {"m": "http://schemas.openxmlformats.org/spreadsheetml/2006/main", "r": "http://schemas.openxmlformats.org/officeDocument/2006/relationships"}
+            first_sheet = workbook.find("m:sheets/m:sheet", ns)
+            if first_sheet is None:
+                raise ValueError("Excel 中没有工作表")
+            rel_id = first_sheet.attrib.get("{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id")
+            rels = ElementTree.fromstring(archive.read("xl/_rels/workbook.xml.rels"))
+            rel_target = None
+            for rel in rels:
+                if rel.attrib.get("Id") == rel_id:
+                    rel_target = rel.attrib.get("Target")
+                    break
+            sheet_path = "xl/" + (rel_target or "worksheets/sheet1.xml").lstrip("/")
+            sheet = ElementTree.fromstring(archive.read(sheet_path))
+            rows = []
+            for row in sheet.findall(".//m:sheetData/m:row", ns):
+                values = {}
+                for cell in row.findall("m:c", ns):
+                    ref = cell.attrib.get("r", "")
+                    col = re.sub(r"\d+", "", ref)
+                    values[col] = read_xlsx_cell(cell, shared_strings, ns)
+                rows.append([values.get(col, "") for col in ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L"]])
+            return rows
+    except KeyError as exc:
+        raise ValueError("Excel 文件结构不完整") from exc
+    except zipfile.BadZipFile as exc:
+        raise ValueError("Excel 文件格式无效") from exc
+
+
+def row_value(row, aliases):
+    normalized = {re.sub(r"[\s_：:（）()/-]+", "", str(key or "")).lower(): value for key, value in row.items()}
+    for alias in aliases:
+        key = re.sub(r"[\s_：:（）()/-]+", "", alias).lower()
+        value = normalized.get(key)
+        if value not in (None, ""):
+            return str(value).strip()
+    return ""
+
+
+def find_employee_for_compensation_row(row):
+    employee_no = row_value(row, ["员工编号", "工号", "employee_no", "employee no"])
+    if employee_no:
+        employee = EmployeeProfile.query.filter_by(employee_no=employee_no).first()
+        if employee:
+            return employee
+    phone = only_digits(row_value(row, ["手机号", "手机", "电话", "phone", "mobile"]))
+    if phone:
+        employee = EmployeeProfile.query.filter_by(phone=phone).first()
+        if employee:
+            return employee
+    email_value = row_value(row, ["邮箱", "email", "mail"]).lower()
+    if email_value:
+        employee = EmployeeProfile.query.filter(func.lower(EmployeeProfile.email) == email_value).first()
+        if employee:
+            return employee
+    name = row_value(row, ["姓名", "员工姓名", "name"])
+    if name:
+        employees = EmployeeProfile.query.filter_by(name=name).all()
+        if len(employees) == 1:
+            return employees[0]
+        if len(employees) > 1:
+            raise ValueError(f"姓名「{name}」匹配到多个员工，请补充员工编号/手机号/邮箱")
+    return None
+
+
+def compensation_payload_from_row(row):
+    return {
+        "salary_monthly_k": row_value(row, ["月薪K", "月薪", "monthly_k", "salary_monthly_k", "salary monthly k"]),
+        "salary_annual_k": row_value(row, ["年包K", "年薪K", "年薪", "annual_k", "salary_annual_k", "salary annual k"]),
+        "salary_months": row_value(row, ["薪资月数", "几薪", "months", "salary_months"]),
+        "bonus_k": row_value(row, ["奖金K", "奖金", "bonus_k", "bonus"]),
+        "currency": row_value(row, ["币种", "currency"]) or "CNY",
+        "salary_source": "import",
+        "salary_effective_date": row_value(row, ["生效日期", "effective_date", "effective date", "日期"]),
+    }
+
+
+def only_digits(value):
+    return re.sub(r"\D+", "", str(value or ""))
+
+
 def employee_from_candidate_record(candidate, user, unit, job=None, payload=None):
     payload = payload or {}
     existing = EmployeeProfile.query.filter_by(candidate_id=candidate.id).first()
@@ -3180,35 +3352,7 @@ def employee_from_candidate_record(candidate, user, unit, job=None, payload=None
 
 
 def parse_organization_xlsx(stream):
-    try:
-        with zipfile.ZipFile(stream) as archive:
-            shared_strings = read_xlsx_shared_strings(archive)
-            workbook = ElementTree.fromstring(archive.read("xl/workbook.xml"))
-            ns = {"m": "http://schemas.openxmlformats.org/spreadsheetml/2006/main", "r": "http://schemas.openxmlformats.org/officeDocument/2006/relationships"}
-            first_sheet = workbook.find("m:sheets/m:sheet", ns)
-            if first_sheet is None:
-                raise ValueError("Excel 中没有工作表")
-            rel_id = first_sheet.attrib.get("{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id")
-            rels = ElementTree.fromstring(archive.read("xl/_rels/workbook.xml.rels"))
-            rel_target = None
-            for rel in rels:
-                if rel.attrib.get("Id") == rel_id:
-                    rel_target = rel.attrib.get("Target")
-                    break
-            sheet_path = "xl/" + (rel_target or "worksheets/sheet1.xml").lstrip("/")
-            sheet = ElementTree.fromstring(archive.read(sheet_path))
-            rows = []
-            for row in sheet.findall(".//m:sheetData/m:row", ns):
-                values = {}
-                for cell in row.findall("m:c", ns):
-                    ref = cell.attrib.get("r", "")
-                    col = re.sub(r"\d+", "", ref)
-                    values[col] = read_xlsx_cell(cell, shared_strings, ns)
-                rows.append([values.get(col, "") for col in ["A", "B", "C", "D", "E", "F"]])
-    except KeyError as exc:
-        raise ValueError("Excel 文件结构不完整") from exc
-    except zipfile.BadZipFile as exc:
-        raise ValueError("Excel 文件格式无效") from exc
+    rows = read_xlsx_rows(stream)
     header_index = next((index for index, row in enumerate(rows) if {"一级部门", "二级部门", "三级部门"} & set(row)), None)
     if header_index is None:
         raise ValueError("未找到一级部门/二级部门/三级部门表头")

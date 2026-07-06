@@ -2832,6 +2832,7 @@ function InternalTalentPage() {
   const [selectedUnitId, setSelectedUnitId] = useState<number>(0);
   const [selectedEmployee, setSelectedEmployee] = useState<EmployeeProfile | null>(null);
   const [message, setMessage] = useState("");
+  const [salaryImport, setSalaryImport] = useState<{ updated_count: number; skipped_count: number; failed_count: number } | null>(null);
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState({
     candidate_id: 0,
@@ -2892,6 +2893,23 @@ function InternalTalentPage() {
       await load(selectedUnitId);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "转入内部员工失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function importSalaryFile(files: FileList | null) {
+    const file = files?.[0];
+    if (!file) return;
+    setBusy(true);
+    setMessage("");
+    try {
+      const result = await api.importEmployeeCompensations(file);
+      setSalaryImport(result);
+      setMessage(`薪资表已导入：更新 ${result.updated_count} 人，跳过 ${result.skipped_count} 行，失败 ${result.failed_count} 行`);
+      await load(selectedUnitId);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "薪资导入失败");
     } finally {
       setBusy(false);
     }
@@ -2960,6 +2978,26 @@ function InternalTalentPage() {
           </button>
           {message && <p className="mt-3 text-sm text-mint">{message}</p>}
         </form>
+
+        <div className="design-card">
+          <h2 className="font-semibold">薪资表批量导入</h2>
+          <p className="mt-1 text-xs text-steel">支持 CSV/XLSX，按员工编号、手机号、邮箱或姓名匹配员工。</p>
+          <label className="secondary-button mt-4 w-full cursor-pointer">
+            <Upload size={16} />
+            选择薪资表
+            <input className="hidden" type="file" accept=".csv,.xlsx" onChange={(event) => importSalaryFile(event.target.files)} />
+          </label>
+          <div className="mt-3 rounded-md bg-slate-50 p-3 text-xs text-steel">
+            表头示例：employee_no、salary_monthly_k、salary_months、bonus_k、effective_date
+          </div>
+          {salaryImport && (
+            <div className="mt-3 grid grid-cols-3 gap-2 text-center text-xs">
+              <div className="rounded-md bg-green-50 p-2 text-green-700">更新 {salaryImport.updated_count}</div>
+              <div className="rounded-md bg-orange-50 p-2 text-orange-700">跳过 {salaryImport.skipped_count}</div>
+              <div className="rounded-md bg-red-50 p-2 text-red-700">失败 {salaryImport.failed_count}</div>
+            </div>
+          )}
+        </div>
       </aside>
 
       <main className="space-y-4">

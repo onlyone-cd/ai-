@@ -2589,6 +2589,7 @@ function OrganizationManagementPage() {
   const [selectedId, setSelectedId] = useState(0);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
+  const [orgFormOpen, setOrgFormOpen] = useState(false);
   const [unitForm, setUnitForm] = useState({ name: "", unit_type: "department", parent_id: 0, city: "", headcount_plan: "" });
   const [resumeFiles, setResumeFiles] = useState<File[]>([]);
   const flatUnits = useMemo(() => flattenOrganizationUnits(units), [units]);
@@ -2623,6 +2624,7 @@ function OrganizationManagementPage() {
   }, []);
 
   async function selectUnit(id: number) {
+    setOrgFormOpen(false);
     await load(id);
   }
 
@@ -2642,6 +2644,7 @@ function OrganizationManagementPage() {
       const unit = selectedId ? await api.updateOrganizationUnit(selectedId, payload) : await api.createOrganizationUnit(payload);
       setMessage(`${unit.name} 已保存`);
       await load(unit.id);
+      setOrgFormOpen(false);
     } finally {
       setBusy(false);
     }
@@ -2650,6 +2653,7 @@ function OrganizationManagementPage() {
   async function addChild() {
     setSelectedId(0);
     setUnitForm({ name: "", unit_type: "department", parent_id: selectedId, city: selectedUnit?.city || "", headcount_plan: "" });
+    setOrgFormOpen(true);
   }
 
   async function removeUnit() {
@@ -2771,13 +2775,19 @@ function OrganizationManagementPage() {
           <div className="flex flex-wrap gap-2">
             <button className="secondary-button" onClick={addChild}>
               <Plus size={17} />
-              新增下级
+              添加组织
             </button>
             {selectedUnit && (
-              <button className="secondary-button text-red-700" onClick={removeUnit}>
-                <Trash2 size={17} />
-                删除
-              </button>
+              <>
+                <button className="secondary-button" onClick={() => setOrgFormOpen(true)}>
+                  <Check size={17} />
+                  编辑组织
+                </button>
+                <button className="secondary-button text-red-700" onClick={removeUnit}>
+                  <Trash2 size={17} />
+                  删除
+                </button>
+              </>
             )}
           </div>
         </div>
@@ -2786,6 +2796,7 @@ function OrganizationManagementPage() {
 
         <section className="grid gap-4 xl:grid-cols-[360px_1fr]">
           <div className="space-y-4">
+            {orgFormOpen && (
             <form className="design-card" onSubmit={saveUnit}>
               <h3 className="font-semibold">组织信息</h3>
               <label className="field-label mt-4">组织名称</label>
@@ -2813,6 +2824,7 @@ function OrganizationManagementPage() {
                 保存组织
               </button>
             </form>
+            )}
 
             <form className="design-card" onSubmit={uploadEmployeeResumes}>
               <h3 className="font-semibold">上传当前部门员工简历</h3>

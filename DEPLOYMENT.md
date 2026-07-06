@@ -55,9 +55,25 @@ curl https://your-domain.example/healthz
 - 上传文件保存在 `uploads` volume，需配置定期备份。
 - 简历、面试报告、导出文件都属于敏感数据，下载和导出只能给授权角色。
 
+## 备份和恢复
+
+备份 PostgreSQL 和上传文件：
+
+```powershell
+.\scripts\backup-production.ps1
+```
+
+恢复前请确认目标环境可以被覆盖：
+
+```powershell
+.\scripts\restore-production.ps1 -DatabaseBackup .\backups\hireinsight-db-YYYYMMDD-HHMMSS.sql -UploadsBackup .\backups\hireinsight-uploads-YYYYMMDD-HHMMSS.tar
+```
+
+建议至少每天备份一次，并把备份文件同步到独立存储。
+
 ## 当前仍需继续补齐
 
 - 对象存储或专用文件服务。
 - Redis/Celery 异步任务队列，用于批量简历解析、AI 评分和 BOSS 批量同步。
 - 集中日志、错误告警、AI 调用费用统计。
-- E2E 自动化测试和 CI/CD 发布流水线。
+- E2E 自动化测试和正式发布流水线。

@@ -229,6 +229,41 @@ def test_sensitive_candidate_and_export_permissions(client, admin_headers, recru
     assert admin_export.status_code == 200
 
 
+def test_sensitive_module_permissions_for_interviewer(client, admin_headers, recruiter_headers):
+    created = client.post(
+        "/api/users",
+        headers=admin_headers,
+        json={"username": "module_interviewer", "name": "模块面试官", "role": "interviewer", "password": "Pass1234"},
+    )
+    assert created.status_code == 200
+    login = client.post("/api/auth/login", json={"username": "module_interviewer", "password": "Pass1234"})
+    interviewer_headers = {"Authorization": f"Bearer {login.get_json()['data']['token']}"}
+
+    protected_gets = [
+        "/api/offers",
+        "/api/offers/1",
+        "/api/offers/1/letter.txt",
+        "/api/bi/overview",
+        "/api/pipeline/overview",
+        "/api/boss/status",
+        "/api/boss/extension.zip",
+        "/api/boss/candidates/inbox",
+        "/api/boss/jobs",
+        "/api/boss/jobs/1/recommendations",
+        "/api/agent/tools",
+    ]
+    for path in protected_gets:
+        response = client.get(path, headers=interviewer_headers)
+        assert response.status_code == 403, path
+
+    chat = client.post("/api/agent/chat", headers=interviewer_headers, json={"message": "现在人才库有多少人"})
+    assert chat.status_code == 403
+
+    assert client.get("/api/bi/overview", headers=recruiter_headers).status_code == 200
+    assert client.get("/api/boss/status", headers=recruiter_headers).status_code == 200
+    assert client.get("/api/agent/tools", headers=recruiter_headers).status_code == 200
+
+
 def test_accounting_job_matches_accounting_candidate_first(client, admin_headers):
     jobs = client.get("/api/jobs", headers=admin_headers).get_json()["data"]["items"]
     accounting_job = next(job for job in jobs if job["title"] == "财务会计主管")

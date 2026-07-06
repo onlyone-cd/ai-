@@ -893,6 +893,7 @@ def export_interview_report(user, assignment_id):
 
 @api.get("/offers")
 @login_required
+@roles_required("admin", "manager", "recruiter")
 def list_offers(user):
     query = OfferRecord.query.order_by(OfferRecord.updated_at.desc(), OfferRecord.created_at.desc())
     status = request.args.get("status")
@@ -909,6 +910,7 @@ def list_offers(user):
 
 @api.get("/offers/<int:offer_id>")
 @login_required
+@roles_required("admin", "manager", "recruiter")
 def get_offer(user, offer_id):
     offer = db.session.get(OfferRecord, offer_id)
     if not offer:
@@ -918,6 +920,7 @@ def get_offer(user, offer_id):
 
 @api.get("/offers/<int:offer_id>/letter.txt")
 @login_required
+@roles_required("admin", "manager", "recruiter")
 def export_offer_letter(user, offer_id):
     offer = db.session.get(OfferRecord, offer_id)
     if not offer:
@@ -1018,6 +1021,7 @@ def delete_offer(user, offer_id):
 
 @api.get("/bi/overview")
 @login_required
+@roles_required("admin", "manager", "recruiter")
 def bi_overview(user):
     days = max(1, min(parse_optional_int(request.args.get("days"), 30), 365))
     since = datetime.now(timezone.utc) - timedelta(days=days)
@@ -1043,6 +1047,7 @@ def bi_overview(user):
 
 @api.get("/pipeline/overview")
 @login_required
+@roles_required("admin", "manager", "recruiter")
 def pipeline_overview(user):
     items = latest_pipeline_items()
     by_stage = Counter(item.stage for item in items)
@@ -1183,6 +1188,7 @@ def list_skill_tags(user):
 
 @api.get("/boss/status")
 @login_required
+@roles_required("admin", "manager", "recruiter")
 def boss_status(user):
     account = latest_boss_account(user)
     candidates = valid_boss_candidates(limit=1000)
@@ -1205,6 +1211,7 @@ def boss_status(user):
 
 @api.get("/boss/extension.zip")
 @login_required
+@roles_required("admin", "manager", "recruiter")
 def download_boss_extension(user):
     extension_dir = Path(__file__).resolve().parents[2] / "browser_extension" / "boss-importer"
     if not extension_dir.exists():
@@ -1260,6 +1267,7 @@ def verify_boss_account(user, account_id):
 
 @api.get("/boss/candidates/inbox")
 @login_required
+@roles_required("admin", "manager", "recruiter")
 def boss_inbox(user):
     candidates = valid_boss_candidates(limit=100)[:50]
     return ok({"items": [boss_inbox_item(candidate) for candidate in candidates]})
@@ -1267,6 +1275,7 @@ def boss_inbox(user):
 
 @api.get("/boss/jobs")
 @login_required
+@roles_required("admin", "manager", "recruiter")
 def boss_jobs(user):
     jobs = Job.query.filter(Job.job_code.like("BOSS-%")).order_by(Job.created_at.desc()).all()
     return ok({"items": [job.to_dict() for job in jobs]})
@@ -1303,6 +1312,7 @@ def boss_jobs_batch_import(user):
 
 @api.get("/boss/jobs/<int:job_id>/recommendations")
 @login_required
+@roles_required("admin", "manager", "recruiter")
 def boss_job_recommendations(user, job_id):
     job = db.session.get(Job, job_id)
     if not job:
@@ -1614,6 +1624,7 @@ def fallback_jd_text(title, city="", department=""):
 
 @api.post("/agent/chat")
 @login_required
+@roles_required("admin", "manager", "recruiter")
 def agent_chat(user):
     message = request.get_json(force=True).get("message", "")
     result = run_agent_tool(user, message)
@@ -1622,6 +1633,7 @@ def agent_chat(user):
 
 @api.get("/agent/tools")
 @login_required
+@roles_required("admin", "manager", "recruiter")
 def agent_tools(user):
     return ok(
         {

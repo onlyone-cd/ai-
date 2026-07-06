@@ -59,6 +59,7 @@ curl https://your-domain.example/healthz
 - 上传文件保存在 `uploads` volume，需配置定期备份。
 - 简历、面试报告、导出文件都属于敏感数据，下载和导出只能给授权角色。
 - 批量 CSV 导出仅允许 admin/manager；人才库详情和简历下载仅允许 admin/manager/recruiter。
+- BOSS、AI Agent、BI、Offer、流程总览等业务接口限制为 admin/manager/recruiter，interviewer 只能处理分配给自己的面试相关能力。
 - 候选人详情查看、简历/面试/Offer/CSV 导出会写入审计日志，上线后需定期巡检异常导出行为。
 
 ## 备份和恢复

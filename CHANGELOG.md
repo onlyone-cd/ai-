@@ -28,6 +28,7 @@
 - 面试间安全：候选人公开面试间 token 有效期改为配置项，并增加 token/IP 限流和提交内容大小限制。
 - 密钥防泄漏：新增仓库 secret 扫描脚本并接入 GitHub Actions，阻止 API Key、GitHub Token、私钥等敏感内容误提交。
 - 后端权限边界：人才库详情/简历下载限制为 admin/manager/recruiter，批量 CSV 导出限制为 admin/manager，避免只靠前端隐藏按钮。
+- 后端模块权限：BOSS、AI Agent、BI、Offer、流程总览接口限制为 admin/manager/recruiter，interviewer 不能绕过前端访问业务总览数据。
 
 ### 接口变更记录
 

@@ -1,5 +1,132 @@
 # 生产部署清单
 
+## 阿里云 Ubuntu 24.04 64 位部署
+
+推荐使用 Docker Compose 部署，应用、后台 worker 和 PostgreSQL 都由 `docker-compose.production.yml` 管理；Nginx 和 HTTPS 放在宿主机，方便接入阿里云安全组和证书续期。
+
+### 服务器和安全组
+
+- ECS 系统：Ubuntu 24.04 64 位。
+- 建议规格：至少 2 vCPU / 4 GB 内存；简历批量解析或 AI 面试较多时建议 4 vCPU / 8 GB。
+- 系统盘：至少 40 GB；上传简历较多时挂载独立数据盘并备份 `uploads` volume。
+- 阿里云安全组放行：`22/tcp`、`80/tcp`、`443/tcp`。
+- `5001/tcp` 只给本机 Nginx 反代使用，生产不要在安全组公网放行。
+
+### 安装系统依赖
+
+```bash
+sudo apt update
+sudo apt install -y git curl ca-certificates openssl nginx certbot python3-certbot-nginx docker.io docker-compose-v2
+sudo systemctl enable --now docker nginx
+sudo usermod -aG docker "$USER"
+```
+
+执行 `usermod` 后重新登录 SSH，让当前用户获得 Docker 权限。也可以继续在命令前加 `sudo`。
+
+### 拉取代码
+
+```bash
+sudo mkdir -p /opt/hireinsight
+sudo chown "$USER":"$USER" /opt/hireinsight
+git clone git@github.com:onlyone-cd/ai-.git /opt/hireinsight
+cd /opt/hireinsight
+```
+
+如果服务器未配置 GitHub SSH Key，也可以使用 HTTPS 地址克隆。
+
+### 配置生产环境变量
+
+```bash
+cp .env.example .env
+openssl rand -hex 32
+openssl rand -base64 32
+nano .env
+```
+
+上线前至少修改这些值：
+
+- `JWT_SECRET`：使用 `openssl rand -hex 32` 生成。
+- `POSTGRES_PASSWORD`：使用强密码，需和 `DATABASE_URL` 中的密码一致。
+- `DATABASE_URL`：Docker Compose 内部地址保持 `postgres:5432`，只替换密码即可。
+- `CORS_ORIGINS`：改成你的正式域名，例如 `https://hr.example.com`。
+- `DEEPSEEK_API_KEY`：填新的生产 Key，不要把真实 Key 提交到 Git。
+- `SEED_DEMO_DATA=false`、`AUTO_CREATE_DB=false`：生产保持关闭。
+
+### 构建并启动
+
+```bash
+docker compose -f docker-compose.production.yml --env-file .env up -d --build
+docker compose -f docker-compose.production.yml --env-file .env ps
+docker compose -f docker-compose.production.yml --env-file .env logs -f app
+```
+
+首次启动后创建管理员：
+
+```bash
+docker compose -f docker-compose.production.yml --env-file .env exec app \
+  flask --app run create-admin --username admin --name 系统管理员
+```
+
+### 配置 Nginx
+
+```bash
+sudo cp deploy/nginx.conf /etc/nginx/sites-available/hireinsight
+sudo sed -i 's/your-domain.example/hr.example.com/g' /etc/nginx/sites-available/hireinsight
+sudo ln -sf /etc/nginx/sites-available/hireinsight /etc/nginx/sites-enabled/hireinsight
+sudo nginx -t
+sudo systemctl reload nginx
+```
+
+把 `hr.example.com` 换成你的真实域名，并确保域名 A 记录已经指向 ECS 公网 IP。
+
+### 开启 HTTPS
+
+```bash
+sudo certbot --nginx -d hr.example.com
+sudo certbot renew --dry-run
+```
+
+HTTPS 生效后，把 `.env` 中的 `CORS_ORIGINS` 改成 `https://hr.example.com`，然后重启服务：
+
+```bash
+docker compose -f docker-compose.production.yml --env-file .env up -d
+```
+
+### 发布新版本
+
+```bash
+cd /opt/hireinsight
+git pull --ff-only
+python3 scripts/check_secrets.py
+docker compose -f docker-compose.production.yml --env-file .env up -d --build
+docker compose -f docker-compose.production.yml --env-file .env exec app flask --app run db upgrade
+curl -fsS https://hr.example.com/healthz
+```
+
+`app` 和 `worker` 容器启动时也会执行迁移；手动执行 `db upgrade` 是为了发布时更容易看到迁移错误。
+
+### 常用运维命令
+
+```bash
+docker compose -f docker-compose.production.yml --env-file .env logs -f app
+docker compose -f docker-compose.production.yml --env-file .env logs -f worker
+docker compose -f docker-compose.production.yml --env-file .env restart app worker
+docker compose -f docker-compose.production.yml --env-file .env exec app flask --app run prune-data
+docker compose -f docker-compose.production.yml --env-file .env exec app flask --app run prune-data --confirm
+```
+
+### 备份
+
+```bash
+mkdir -p backups
+docker compose -f docker-compose.production.yml --env-file .env exec -T postgres \
+  pg_dump -U hireinsight hireinsight > backups/hireinsight-db-$(date +%Y%m%d-%H%M%S).sql
+docker run --rm -v hireinsight_uploads:/data -v "$PWD/backups:/backups" alpine \
+  tar -cf /backups/hireinsight-uploads-$(date +%Y%m%d-%H%M%S).tar -C /data .
+```
+
+建议每天至少备份一次，并同步到阿里云 OSS 或另一台服务器。
+
 ## 上线前必须修改
 
 - 复制 `.env.example` 为 `.env`，替换 `JWT_SECRET`、`POSTGRES_PASSWORD`、`DEEPSEEK_API_KEY`、`CORS_ORIGINS` 和域名。

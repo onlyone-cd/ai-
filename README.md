@@ -33,6 +33,10 @@ pnpm run dev
 
 也可以先执行 `pnpm run build`，再只启动后端，Flask 会在 `http://localhost:5001` 同源托管前端和 `/api`。
 
+## 生产部署
+
+阿里云 ECS Ubuntu 24.04 64 位推荐使用 Docker Compose + PostgreSQL + 宿主机 Nginx 部署，完整步骤见 [DEPLOYMENT.md](DEPLOYMENT.md)。
+
 ## 核心能力
 
 - JWT 登录、RBAC 权限、管理员用户管理

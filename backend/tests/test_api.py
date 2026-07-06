@@ -87,6 +87,17 @@ def test_llm_status_does_not_expose_api_key(client, admin_headers):
     assert {"enabled", "available", "provider", "model", "timeout_seconds", "max_retries"} <= set(data)
 
 
+def test_system_readiness_reports_config_without_secrets(client, admin_headers):
+    response = client.get("/api/system/readiness", headers=admin_headers)
+
+    assert response.status_code == 200
+    data = response.get_json()["data"]
+    assert {"ready", "environment", "database", "checks", "summary"} <= set(data)
+    assert any(item["key"] == "jwt_secret" for item in data["checks"])
+    assert "DEEPSEEK_API_KEY" not in json.dumps(data)
+    assert "test-secret" not in json.dumps(data)
+
+
 def test_llm_chat_json_retries_transient_failure(app, monkeypatch):
     calls = {"count": 0}
 
@@ -1055,7 +1066,7 @@ def test_csv_exports_return_business_data(client, admin_headers):
         assert expected in response.data.decode("utf-8-sig")
 
 
-def test_agent_counts_candidate_segments_and_can_create_job(client, admin_headers):
+def test_agent_counts_candidate_segments_and_can_create_job_after_confirmation(client, admin_headers):
     count_response = client.post(
         "/api/agent/chat",
         headers=admin_headers,
@@ -1068,16 +1079,28 @@ def test_agent_counts_candidate_segments_and_can_create_job(client, admin_header
     assert count_data["result"]["segments"]["software"]["count"] >= 2
     assert count_data["result"]["segments"]["accounting"]["count"] >= 1
 
-    create_response = client.post(
+    before_jobs = Job.query.count()
+    draft_response = client.post(
         "/api/agent/chat",
         headers=admin_headers,
         json={"message": "创建岗位 数据分析师 城市上海 部门数据部 JD 要求 SQL、Python、报表分析，3 年以上经验"},
     )
-    assert create_response.status_code == 200
+    assert draft_response.status_code == 200
+    draft_data = draft_response.get_json()["data"]
+    assert draft_data["tool"] == "create_job"
+    assert draft_data["readonly"] is False
+    assert draft_data["result"]["created"] is False
+    assert draft_data["pending_action"]["type"] == "create_job"
+    assert Job.query.count() == before_jobs
+
+    create_response = client.post(
+        "/api/agent/chat",
+        headers=admin_headers,
+        json={"message": "确认创建", "pending_action": draft_data["pending_action"]},
+    )
     create_data = create_response.get_json()["data"]
-    assert create_data["tool"] == "create_job"
-    assert create_data["readonly"] is False
     assert create_data["result"]["created"] is True
+    assert create_data["pending_action"] is None
     assert create_data["result"]["job"]["title"] == "数据分析师"
     assert {"SQL", "Python"} <= {skill["tag"] for skill in create_data["result"]["job"]["jd_structured"]["skills"]}
 

@@ -12,7 +12,7 @@ import jwt
 from flask import Blueprint, Response, current_app, request
 from sqlalchemy.exc import IntegrityError
 
-from . import db
+from . import db, production_config_checks
 from .auth import hash_password, issue_token, login_required, roles_required, validate_password_strength, verify_password
 from .job_service import build_jd_structured, ensure_jd_structured, persist_matches, preview_matches
 from .llm_client import LLMError, chat_json, llm_available, llm_status
@@ -67,6 +67,24 @@ def permissions(user):
 @roles_required("admin", "manager")
 def system_llm_status(user):
     return ok(llm_status())
+
+
+@api.get("/system/readiness")
+@login_required
+@roles_required("admin", "manager")
+def system_readiness(user):
+    checks = production_config_checks(current_app)
+    error_count = sum(1 for item in checks if not item["ok"] and item["severity"] == "error")
+    warning_count = sum(1 for item in checks if not item["ok"] and item["severity"] == "warning")
+    return ok(
+        {
+            "ready": error_count == 0,
+            "environment": current_app.config["ENVIRONMENT"],
+            "database": db.engine.dialect.name,
+            "checks": checks,
+            "summary": {"errors": error_count, "warnings": warning_count, "total": len(checks)},
+        }
+    )
 
 
 @api.get("/system/llm/usage")
@@ -1763,8 +1781,9 @@ def fallback_jd_text(title, city="", department=""):
 @login_required
 @roles_required("admin", "manager", "recruiter")
 def agent_chat(user):
-    message = request.get_json(force=True).get("message", "")
-    result = run_agent_tool(user, message)
+    payload = request.get_json(force=True)
+    message = payload.get("message", "")
+    result = run_agent_tool(user, message, payload.get("pending_action"))
     audit_log(
         user,
         "agent_tool",
@@ -1809,7 +1828,7 @@ def with_permissions(user):
     return data
 
 
-def run_agent_tool(user, message):
+def run_agent_tool(user, message, pending_action=None):
     text = (message or "").strip()
     lowered = text.lower()
     suggestions = [
@@ -1818,6 +1837,9 @@ def run_agent_tool(user, message):
         "推荐财务会计主管候选人",
         "现在面试和 Offer 状态怎么样？",
     ]
+
+    if pending_action:
+        return continue_pending_agent_action(user, text, pending_action, suggestions)
 
     if is_greeting_or_smalltalk(text):
         return {
@@ -2051,6 +2073,38 @@ def is_create_job_request(text):
     return ("创建" in text or "新增" in text or "发布" in text or "生成" in text) and "岗位" in text
 
 
+def continue_pending_agent_action(user, text, pending_action, suggestions):
+    if not isinstance(pending_action, dict) or pending_action.get("type") != "create_job":
+        return free_agent_chat(text, suggestions)
+    if is_agent_cancel(text):
+        return {
+            "answer": "已取消当前岗位创建草案，没有写入系统。你可以重新描述一个岗位，或者继续让我查询人才库和推荐候选人。",
+            "tool": "create_job",
+            "result": {"created": False, "cancelled": True},
+            "pending_action": None,
+            "suggestions": suggestions,
+            "readonly": False,
+        }
+    payload = dict(pending_action.get("payload") or {})
+    if is_agent_confirm(text):
+        return create_job_from_payload(user, payload)
+    updates = parse_job_payload_from_message(text)
+    for key, value in updates.items():
+        if value:
+            payload[key] = value
+    return job_draft_response(payload, suggestions, prefix="我已根据你的补充更新岗位草案。")
+
+
+def is_agent_confirm(text):
+    compact = re.sub(r"\s+", "", text or "")
+    return any(word in compact for word in ["确认创建", "确认发布", "确认保存", "可以创建", "就这样", "没问题", "确认"])
+
+
+def is_agent_cancel(text):
+    compact = re.sub(r"\s+", "", text or "")
+    return any(word in compact for word in ["取消", "不用了", "先不创建", "停止"])
+
+
 def create_job_from_agent(user, text, suggestions):
     if user.role not in {"admin", "manager", "recruiter"}:
         return {
@@ -2069,6 +2123,28 @@ def create_job_from_agent(user, text, suggestions):
             "suggestions": suggestions,
             "readonly": False,
         }
+    return job_draft_response(payload, suggestions)
+
+
+def job_draft_response(payload, suggestions, prefix="我先整理成岗位草案，确认后再创建。"):
+    payload = enrich_agent_job_payload(payload)
+    missing = missing_agent_job_fields(payload)
+    answer = format_agent_job_draft(payload, prefix, missing)
+    return {
+        "answer": answer,
+        "tool": "create_job",
+        "result": {"created": False, "draft": payload, "missing": missing},
+        "pending_action": {"type": "create_job", "payload": payload},
+        "suggestions": ["确认创建", "补充薪资 20-30K", "补充要求 5 年以上经验，本科，熟悉 Spring Boot 和微服务", "取消"],
+        "readonly": False,
+    }
+
+
+def create_job_from_payload(user, payload):
+    payload = enrich_agent_job_payload(dict(payload or {}))
+    missing = missing_agent_job_fields(payload)
+    if missing:
+        return job_draft_response(payload, [], prefix="还差一些关键信息，我先不创建。")
     job = Job(
         owner_hr_id=user.id,
         title=payload["title"],
@@ -2084,9 +2160,83 @@ def create_job_from_agent(user, text, suggestions):
         "answer": f"已创建岗位「{job.title}」，城市 {job.city or '未填写'}，部门 {job.department or '未填写'}。JD 已完成结构化，可到岗位匹配模块继续查看和执行匹配。",
         "tool": "create_job",
         "result": {"created": True, "job": job.to_dict()},
+        "pending_action": None,
         "suggestions": ["推荐这个岗位的候选人", "现在岗位有多少个？", "现在人才库软件开发人员有多少？", "流程漏斗怎么样？"],
         "readonly": False,
     }
+
+
+def enrich_agent_job_payload(payload):
+    title = str(payload.get("title") or "").strip()
+    city = payload.get("city")
+    department = payload.get("department")
+    jd_text = str(payload.get("jd_text") or "").strip()
+    skill_tags_raw = str(payload.get("skill_tags_raw") or "").strip()
+    if title and len(jd_text) < 80:
+        jd_text = generate_agent_jd_text(title, city, department, jd_text)
+    structured = build_jd_structured(jd_text or title, skill_tags_raw or None)
+    payload.update(
+        {
+            "title": title[:128],
+            "city": city,
+            "department": department,
+            "job_code": payload.get("job_code"),
+            "skill_tags_raw": "|".join(f"{item['tag']} {item['weight']}" for item in structured.get("skills", [])),
+            "jd_text": jd_text,
+        }
+    )
+    return payload
+
+
+def generate_agent_jd_text(title, city="", department="", base=""):
+    context = f"用户补充：{base}" if base else ""
+    if llm_available():
+        try:
+            data = chat_json(
+                [
+                    {"role": "system", "content": "你是招聘岗位顾问。根据岗位名称和用户补充，生成具体 JD。输出 JSON：{\"jd_text\":\"\"}。JD 必须包含岗位职责、任职要求、加分项，不能空泛。"},
+                    {"role": "user", "content": f"岗位={title}\n城市={city or ''}\n部门={department or ''}\n{context}"},
+                ],
+                temperature=0.25,
+                timeout=30,
+                source="agent",
+                tool_name="create_job_draft",
+            )
+            jd_text = str(data.get("jd_text") or "").strip()
+            if jd_text:
+                return jd_text
+        except LLMError:
+            pass
+    return fallback_jd_text(title, city or "", department or "") + (f"\n补充要求：{base}" if base else "")
+
+
+def missing_agent_job_fields(payload):
+    missing = []
+    if not payload.get("title"):
+        missing.append("岗位名称")
+    if not payload.get("city"):
+        missing.append("工作城市")
+    if len(str(payload.get("jd_text") or "")) < 80:
+        missing.append("具体 JD 要求")
+    if not payload.get("skill_tags_raw"):
+        missing.append("技能权重")
+    return missing
+
+
+def format_agent_job_draft(payload, prefix, missing):
+    structured = build_jd_structured(payload.get("jd_text") or "", payload.get("skill_tags_raw") or None)
+    skills = "、".join(f"{item['tag']}({item['weight']}/5)" for item in structured.get("skills", [])[:8]) or "待补充"
+    missing_text = "；还需要补充：" + "、".join(missing) if missing else ""
+    return (
+        f"{prefix}\n"
+        f"岗位：{payload.get('title') or '待补充'}\n"
+        f"城市：{payload.get('city') or '待补充'}\n"
+        f"部门：{payload.get('department') or '未填写'}\n"
+        f"技能权重：{skills}\n"
+        f"JD 摘要：{summarize_text(payload.get('jd_text'), 260)}\n"
+        f"{missing_text}\n"
+        "如果没问题，请回复“确认创建”；如果要调整，直接补充城市、薪资、年限、学历、职责或技能要求。"
+    ).strip()
 
 
 def parse_job_payload_from_message(text):

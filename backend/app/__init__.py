@@ -171,16 +171,26 @@ def validate_production_config(app):
         return
     if app.config["ENVIRONMENT"].lower() != "production":
         return
-    problems = []
-    if app.config["JWT_SECRET"] in {"demo-secret", "test-secret"} or len(app.config["JWT_SECRET"]) < 32:
-        problems.append("JWT_SECRET 必须替换为至少 32 位随机字符串")
-    if app.config["CORS_ORIGINS"] == ["*"]:
-        problems.append("生产环境 CORS_ORIGINS 不能使用 *")
-    if app.config["SQLALCHEMY_DATABASE_URI"].startswith("sqlite"):
-        problems.append("生产环境必须使用 PostgreSQL/MySQL，不能使用 SQLite")
-    if app.config["SEED_DEMO_DATA"]:
-        problems.append("生产环境必须设置 SEED_DEMO_DATA=false")
-    if app.config["AUTO_CREATE_DB"]:
-        problems.append("生产环境必须设置 AUTO_CREATE_DB=false，并使用数据库迁移")
+    problems = [item["message"] for item in production_config_checks(app) if not item["ok"] and item["severity"] == "error"]
     if problems:
         raise RuntimeError("生产配置不安全：" + "；".join(problems))
+
+
+def production_config_checks(app):
+    checks = []
+
+    def add(key, ok, message, severity="error"):
+        checks.append({"key": key, "ok": bool(ok), "message": message, "severity": severity})
+
+    database_uri = app.config["SQLALCHEMY_DATABASE_URI"]
+    add("environment", app.config["ENVIRONMENT"].lower() == "production", "ENVIRONMENT 应设置为 production", "warning")
+    add("jwt_secret", app.config["JWT_SECRET"] not in {"demo-secret", "test-secret"} and len(app.config["JWT_SECRET"]) >= 32, "JWT_SECRET 必须替换为至少 32 位随机字符串")
+    add("cors_origins", app.config["CORS_ORIGINS"] != ["*"], "生产环境 CORS_ORIGINS 不能使用 *")
+    add("database", not database_uri.startswith("sqlite"), "生产环境必须使用 PostgreSQL/MySQL，不能使用 SQLite")
+    add("seed_demo_data", not app.config["SEED_DEMO_DATA"], "生产环境必须设置 SEED_DEMO_DATA=false")
+    add("auto_create_db", not app.config["AUTO_CREATE_DB"], "生产环境必须设置 AUTO_CREATE_DB=false，并使用数据库迁移")
+    add("rate_limit", app.config.get("RATE_LIMIT_ENABLED", True), "公网环境需要开启 RATE_LIMIT_ENABLED")
+    add("security_headers", app.config.get("SECURITY_HEADERS_ENABLED", True), "公网环境需要开启 SECURITY_HEADERS_ENABLED")
+    add("llm_key", (not app.config.get("LLM_ENABLED")) or bool(app.config.get("DEEPSEEK_API_KEY")), "启用大模型时必须配置生产 API Key")
+    add("upload_folder", bool(app.config.get("UPLOAD_FOLDER")), "必须配置 UPLOAD_FOLDER")
+    return checks

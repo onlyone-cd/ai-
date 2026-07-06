@@ -143,6 +143,14 @@ export type LLMUsageSummary = {
   };
 };
 
+export type SystemReadiness = {
+  ready: boolean;
+  environment: string;
+  database: string;
+  summary: { errors: number; warnings: number; total: number };
+  checks: { key: string; ok: boolean; message: string; severity: "error" | "warning" }[];
+};
+
 export type OfferRecord = {
   id: number;
   candidate_id: number;
@@ -165,6 +173,7 @@ export type AgentResponse = {
   answer: string;
   tool: string;
   result: unknown;
+  pending_action?: Record<string, unknown> | null;
   suggestions: string[];
   readonly: boolean;
 };
@@ -279,6 +288,7 @@ export const api = {
   me: () => request<User>("/auth/me"),
   users: () => request<{ items: User[] }>("/users"),
   auditLogs: () => request<{ items: AuditLog[] }>("/audit/logs"),
+  readiness: () => request<SystemReadiness>("/system/readiness"),
   llmUsage: (days = 30) => request<LLMUsageSummary>(`/system/llm/usage?days=${days}`),
   tasks: (status = "all") => request<{ items: BackgroundTask[]; status_counts: Record<string, number> }>(`/tasks?status=${status}`),
   retryTask: (id: number) => request<BackgroundTask>(`/tasks/${id}/retry`, { method: "POST" }),
@@ -388,7 +398,8 @@ export const api = {
   bossAiScreen: (payload: { job_id: number; candidate_ids?: number[]; limit?: number }) =>
     request<{ created: PipelineItem[]; skipped: { candidate_id: number; stage: string }[] }>("/boss/candidates/ai-screen", { method: "POST", body: JSON.stringify(payload) }),
   agentTools: () => request<{ items: { name: string; description: string }[]; readonly: boolean }>("/agent/tools"),
-  chat: (message: string) => request<AgentResponse>("/agent/chat", { method: "POST", body: JSON.stringify({ message }) })
+  chat: (message: string, pending_action?: Record<string, unknown> | null) =>
+    request<AgentResponse>("/agent/chat", { method: "POST", body: JSON.stringify({ message, pending_action }) })
 };
 
 export type PipelineItem = {

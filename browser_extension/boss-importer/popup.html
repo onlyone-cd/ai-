@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      body { width: 340px; margin: 0; padding: 14px; font: 14px/1.5 system-ui, "Microsoft YaHei", sans-serif; color: #17202a; }
+      label { display: block; margin: 10px 0 4px; font-size: 12px; color: #49657a; }
+      input { box-sizing: border-box; width: 100%; padding: 8px 10px; border: 1px solid #d8dee6; border-radius: 6px; }
+      button { width: 100%; margin-top: 12px; padding: 9px 12px; border: 0; border-radius: 6px; background: #111; color: #fff; font-weight: 700; cursor: pointer; }
+      button.secondary { background: #f1f5f9; color: #17202a; border: 1px solid #d8dee6; }
+      pre { white-space: pre-wrap; word-break: break-all; padding: 10px; border-radius: 6px; background: #f6f8fa; color: #49657a; font-size: 12px; }
+    </style>
+  </head>
+  <body>
+    <strong>BOSS 简历导入</strong>
+    <label>后端地址</label>
+    <input id="baseUrl" value="http://localhost:5001" />
+    <label>登录 Token</label>
+    <input id="token" placeholder="从系统 BOSS 页面复制插件 Token" />
+    <label>岗位 ID（选填，填写后用于 AI 初筛）</label>
+    <input id="jobId" placeholder="例如 1" />
+    <button id="bindCookieBtn" class="secondary">绑定当前 BOSS 登录态</button>
+    <button id="syncJobsBtn" class="secondary">同步当前 BOSS 岗位列表</button>
+    <button id="importBtn">采集当前页并导入</button>
+    <button id="batchImportBtn">批量采集沟通列表并导入</button>
+    <pre id="status">打开 BOSS 简历详情页或沟通列表后点击导入。</pre>
+    <script src="popup.js"></script>
+  </body>
+</html>

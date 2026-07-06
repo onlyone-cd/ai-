@@ -1,0 +1,372 @@
+const API_BASE = "/api";
+
+export type User = { id: number; username: string; name: string; role: string; active: boolean; permissions?: string[] };
+export type CandidateTag = { tag: string; score: number; category: string };
+export type Candidate = {
+  id: number;
+  name_masked: string;
+  title: string;
+  city: string;
+  source: string;
+  owner_name: string;
+  gender?: string;
+  email_masked?: string;
+  phone_masked?: string;
+  tags: CandidateTag[];
+  experience_analysis: { level: string; label: string; years: number; basis: string };
+  raw_text?: string;
+  resume_json?: Record<string, unknown>;
+  parse_status?: string;
+  parse_error?: string;
+};
+export type Job = {
+  id: number;
+  title: string;
+  city: string;
+  department: string;
+  job_code: string;
+  jd_text: string;
+  jd_structured: {
+    skill_tags_raw: string;
+    skills?: { tag: string; weight: number }[];
+    years_required?: number | null;
+    salary_range?: { min_k: number; max_k: number } | null;
+    education?: string | null;
+    must_have?: string[];
+    nice_to_have?: string[];
+  };
+  status: string;
+  match_count?: number;
+  pipeline_count?: number;
+};
+export type MatchResult = {
+  id?: number;
+  candidate_id: number;
+  candidate: Candidate;
+  score: number;
+  reason: {
+    hits: {
+      jd_tag: string;
+      job_weight: number;
+      candidate_tag: string;
+      candidate_score: number;
+      match_type: "exact" | "related";
+    }[];
+    missing_tags: string[];
+    match_rate: number;
+    capability_rate: number;
+  };
+};
+
+export type InterviewAssignment = {
+  id: number;
+  candidate_id: number;
+  candidate: Candidate;
+  job_id: number;
+  job: Job;
+  interviewer_id: number;
+  interviewer: User;
+  round: string;
+  scheduled_at: string;
+  location?: string;
+  note?: string;
+  status: string;
+  created_by: string;
+  created_at: string;
+};
+
+export type AiInterviewPlan = {
+  avatar: { name: string; role: string; voice: string };
+  meeting: { provider: string; location: string; auto_join: boolean; note: string };
+  opening: string;
+  questions: { type: string; question: string; rubric: string }[];
+  rubric: string[];
+  closing: string;
+  source: string;
+};
+
+export type PublicInterviewRoom = { assignment: InterviewAssignment; plan: AiInterviewPlan };
+export type InterviewTurnReply = { reply: string; source: string };
+export type InterviewMessage = { role: "ai" | "candidate"; text: string };
+
+export type InterviewFeedback = {
+  id: number;
+  assignment_id: number;
+  interviewer_id: number;
+  interviewer: User;
+  rating: number;
+  decision: string;
+  strengths?: string;
+  risks?: string;
+  comment?: string;
+  created_at: string;
+};
+
+export type AuditLog = {
+  id: number;
+  user_id: number;
+  user_name: string;
+  action: string;
+  target_type: string;
+  target_id?: number | null;
+  target_name?: string;
+  details: Record<string, unknown>;
+  created_at: string;
+};
+
+export type OfferRecord = {
+  id: number;
+  candidate_id: number;
+  candidate: Candidate;
+  job_id: number;
+  job: Job;
+  salary_min_k?: number | null;
+  salary_max_k?: number | null;
+  salary_months: number;
+  city?: string;
+  start_date?: string | null;
+  status: string;
+  note?: string;
+  created_by: string;
+  created_at: string;
+  updated_at?: string;
+};
+
+export type AgentResponse = {
+  answer: string;
+  tool: string;
+  result: unknown;
+  suggestions: string[];
+  readonly: boolean;
+};
+
+type ApiResponse<T> = { status: "ok"; data: T; message: string };
+type FeedbackType = "success" | "error";
+
+let token = localStorage.getItem("hireinsight_token") || "";
+
+export function setToken(value: string) {
+  token = value;
+  localStorage.setItem("hireinsight_token", value);
+}
+
+export function clearToken() {
+  token = "";
+  localStorage.removeItem("hireinsight_token");
+}
+
+export function notify(type: FeedbackType, text: string) {
+  const detail = { type, text };
+  try {
+    window.dispatchEvent(new CustomEvent("hireinsight-feedback", { detail }));
+  } catch {
+    const event = new Event("hireinsight-feedback") as CustomEvent<typeof detail>;
+    Object.defineProperty(event, "detail", { value: detail });
+    window.dispatchEvent(event);
+  }
+}
+
+function shouldNotify(init: RequestInit) {
+  return (init.method || "GET").toUpperCase() !== "GET";
+}
+
+async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  try {
+    const response = await fetch(`${API_BASE}${path}`, {
+      ...init,
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...init.headers
+      }
+    });
+    const body = await response.json();
+    if (!response.ok) {
+      const text = body.error || "请求失败";
+      notify("error", text);
+      throw new Error(text);
+    }
+    if (shouldNotify(init) && body.message) notify("success", body.message);
+    return (body as ApiResponse<T>).data;
+  } catch (error) {
+    if (error instanceof TypeError) notify("error", "网络连接失败");
+    throw error;
+  }
+}
+
+async function upload<T>(path: string, formData: FormData): Promise<T> {
+  try {
+    const response = await fetch(`${API_BASE}${path}`, {
+      method: "POST",
+      headers: {
+        ...(token ? { Authorization: `Bearer ${token}` } : {})
+      },
+      body: formData
+    });
+    const body = await response.json();
+    if (!response.ok) {
+      const text = body.error || "请求失败";
+      notify("error", text);
+      throw new Error(text);
+    }
+    if (body.message) notify("success", body.message);
+    return (body as ApiResponse<T>).data;
+  } catch (error) {
+    if (error instanceof TypeError) notify("error", "网络连接失败");
+    throw error;
+  }
+}
+
+async function download(path: string, filename: string) {
+  try {
+    const response = await fetch(`${API_BASE}${path}`, {
+      headers: {
+        ...(token ? { Authorization: `Bearer ${token}` } : {})
+      }
+    });
+    if (!response.ok) {
+      notify("error", "下载失败");
+      throw new Error("下载失败");
+    }
+    const url = URL.createObjectURL(await response.blob());
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    notify("success", "导出已开始下载");
+    link.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch (error) {
+    if (error instanceof TypeError) notify("error", "网络连接失败");
+    throw error;
+  }
+}
+
+export const api = {
+  login: (username: string, password: string) =>
+    request<{ token: string; user: User }>("/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ username, password })
+    }),
+  me: () => request<User>("/auth/me"),
+  users: () => request<{ items: User[] }>("/users"),
+  auditLogs: () => request<{ items: AuditLog[] }>("/audit/logs"),
+  interviewers: () => request<{ items: User[] }>("/users/interviewers"),
+  createUser: (payload: { username: string; name: string; role: string; password: string }) =>
+    request<User>("/users", { method: "POST", body: JSON.stringify(payload) }),
+  updateUser: (id: number, payload: Partial<Pick<User, "name" | "role" | "active">> & { password?: string }) =>
+    request<User>(`/users/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
+  candidates: (experience = "all") => request<{ items: Candidate[]; experience_stats: { key: string; label: string; count: number }[] }>(`/candidates?experience_level=${experience}`),
+  getCandidate: (id: number) => request<Candidate>(`/candidates/${id}`),
+  candidateResume: (id: number) => download(`/candidates/${id}/resume.txt`, `candidate-${id}-resume.txt`),
+  updateCandidate: (id: number, payload: Partial<Pick<Candidate, "name_masked" | "email_masked" | "phone_masked" | "title" | "city" | "gender">> & { summary?: string }) =>
+    request<Candidate>(`/candidates/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
+  updateCandidateTags: (id: number, tags: { tag: string; score: number }[]) =>
+    request<Candidate>(`/candidates/${id}/tags`, { method: "PUT", body: JSON.stringify({ tags }) }),
+  deleteCandidate: (id: number) => request<{ deleted: number }>(`/candidates/${id}`, { method: "DELETE" }),
+  retryParseResume: (id: number) => request<{ candidate: Candidate }>(`/resume/${id}/retry-parse`, { method: "POST" }),
+  uploadResume: (files: File | File[]) => {
+    const formData = new FormData();
+    for (const file of Array.isArray(files) ? files : [files]) {
+      formData.append("files", file);
+    }
+    return upload<{
+      candidate: Candidate;
+      candidates: Candidate[];
+      batch: { id: string; filename: string; status: string } | null;
+      batches: { id: string; filename: string; status: string }[];
+      errors: { filename: string; error: string }[];
+      success_count: number;
+      failed_count: number;
+    }>("/resume/upload", formData);
+  },
+  jobs: () => request<{ items: Job[] }>("/jobs"),
+  getJob: (id: number) => request<Job>(`/jobs/${id}`),
+  createJob: (payload: Partial<Job> & { skill_tags_raw: string }) =>
+    request<Job>("/jobs", { method: "POST", body: JSON.stringify(payload) }),
+  generateJobJd: (payload: Partial<Job> & { skill_tags_raw?: string }) =>
+    request<{ jd_text: string; skill_tags_raw: string; structured: Job["jd_structured"]; source: string }>("/jobs/ai-generate", { method: "POST", body: JSON.stringify(payload) }),
+  calibrateJobJd: (payload: Partial<Job> & { skill_tags_raw?: string }) =>
+    request<{ jd_text: string; skill_tags_raw: string; structured: Job["jd_structured"]; source: string }>("/jobs/ai-calibrate", { method: "POST", body: JSON.stringify(payload) }),
+  updateJob: (id: number, payload: Partial<Job> & { skill_tags_raw?: string }) =>
+    request<Job>(`/jobs/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
+  closeJob: (id: number) => request<Job>(`/jobs/${id}/close`, { method: "POST" }),
+  restoreJob: (id: number) => request<Job>(`/jobs/${id}/restore`, { method: "POST" }),
+  deleteJob: (id: number) => request<{ deleted: number }>(`/jobs/${id}`, { method: "DELETE" }),
+  matchPreview: (jobId: number, limit = 5) => request<{ job: Job; items: MatchResult[] }>(`/jobs/${jobId}/match-preview?limit=${limit}`),
+  matchJob: (jobId: number) => request<{ job: Job; items: MatchResult[] }>(`/jobs/${jobId}/match`, { method: "POST" }),
+  batchPipeline: (jobId: number, payload: { candidate_ids?: number[]; candidate_id?: number; stage?: string; note?: string }) =>
+    request<{ created: PipelineItem[]; skipped: { candidate_id: number; stage: string }[]; missing: number[] }>(`/jobs/${jobId}/batch-pipeline`, { method: "POST", body: JSON.stringify(payload) }),
+  pipeline: (jobId: number) => request<{ stages: string[]; columns: Record<string, PipelineItem[]> }>(`/pipeline/${jobId}/board`),
+  pipelineHistory: (jobId: number, candidateId: number) => request<{ items: PipelineItem[] }>(`/pipeline/${jobId}/history/${candidateId}`),
+  movePipeline: (payload: { candidate_id: number; job_id: number; stage: string; note?: string }) =>
+    request<PipelineItem>("/pipeline/move", { method: "POST", body: JSON.stringify(payload) }),
+  pipelineOverview: () => request<{ total: number; stages: Record<string, number>; jobs: Record<string, number>; items: PipelineItem[] }>("/pipeline/overview"),
+  interviewAssignments: () => request<{ items: InterviewAssignment[] }>("/interview/assignments"),
+  getInterviewAssignment: (id: number) => request<InterviewAssignment>(`/interview/assignments/${id}`),
+  createInterviewAssignment: (payload: { candidate_id: number; job_id: number; interviewer_id: number; round: string; scheduled_at: string; location?: string; note?: string }) =>
+    request<InterviewAssignment>("/interview/assignments", { method: "POST", body: JSON.stringify(payload) }),
+  updateInterviewAssignment: (id: number, payload: Partial<Pick<InterviewAssignment, "interviewer_id" | "round" | "scheduled_at" | "location" | "note">>) =>
+    request<InterviewAssignment>(`/interview/assignments/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
+  interviewAiPlan: (id: number) => request<AiInterviewPlan>(`/interview/assignments/${id}/ai-plan`, { method: "POST" }),
+  interviewRoomLink: (id: number) => request<{ token: string; path: string; url: string }>(`/interview/assignments/${id}/room-link`, { method: "POST" }),
+  publicInterviewRoom: (token: string) => request<PublicInterviewRoom>(`/public/interview-room/${token}`),
+  publicInterviewTurn: (token: string, payload: { question: string; answer?: string; intent?: "followup" | "clarify"; candidate_question?: string }) =>
+    request<InterviewTurnReply>(`/public/interview-room/${token}/turn`, { method: "POST", body: JSON.stringify(payload) }),
+  publicInterviewComplete: (token: string, payload: { answers: string[]; messages: InterviewMessage[]; cheat_events?: string[] }) =>
+    request<{ assignment: InterviewAssignment; feedback: InterviewFeedback; closing: string }>(`/public/interview-room/${token}/complete`, { method: "POST", body: JSON.stringify(payload) }),
+  cancelInterviewAssignment: (id: number) => request<InterviewAssignment>(`/interview/assignments/${id}/cancel`, { method: "POST" }),
+  deleteInterviewAssignment: (id: number) => request<{ deleted: number }>(`/interview/assignments/${id}`, { method: "DELETE" }),
+  submitInterviewFeedback: (payload: { assignment_id: number; rating: number; decision: string; strengths?: string; risks?: string; comment?: string }) =>
+    request<InterviewFeedback>("/interview/feedback", { method: "POST", body: JSON.stringify(payload) }),
+  interviewFeedback: (assignmentId: number) => request<{ items: InterviewFeedback[] }>(`/interview/feedback?assignment_id=${assignmentId}`),
+  interviewReport: (assignmentId: number) => download(`/interview/assignments/${assignmentId}/report.txt`, `interview-report-${assignmentId}.txt`),
+  offers: (status = "all") => request<{ items: OfferRecord[]; statuses: string[] }>(`/offers?status=${status}`),
+  getOffer: (id: number) => request<OfferRecord>(`/offers/${id}`),
+  createOffer: (payload: { candidate_id: number; job_id: number; salary_min_k?: number | string; salary_max_k?: number | string; salary_months?: number | string; city?: string; start_date?: string; status?: string; note?: string }) =>
+    request<OfferRecord>("/offers", { method: "POST", body: JSON.stringify(payload) }),
+  updateOffer: (id: number, payload: Partial<Pick<OfferRecord, "status" | "city" | "note" | "start_date" | "salary_min_k" | "salary_max_k" | "salary_months">>) =>
+    request<OfferRecord>(`/offers/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
+  deleteOffer: (id: number) => request<{ deleted: number }>(`/offers/${id}`, { method: "DELETE" }),
+  offerLetter: (id: number) => download(`/offers/${id}/letter.txt`, `offer-${id}.txt`),
+  bi: (days = 30) => request<BiOverview>(`/bi/overview?days=${days}`),
+  exportCsv: (kind: "candidates" | "jobs" | "interviews" | "offers" | "pipeline") => download(`/exports/${kind}.csv`, `${kind}.csv`),
+  tags: () => request<{ items: SkillTag[]; categories: string[] }>("/tags"),
+  bossStatus: () => request<{ cookie_bound: boolean; account: string; mode: string; can_auto_send: boolean; verified?: boolean; account_id?: number | null }>("/boss/status"),
+  bossExtension: () => download("/boss/extension.zip", "hireinsight-boss-importer.zip"),
+  verifyBossAccount: (id: number) =>
+    request<{ account: { id: number; account: string; verified: boolean } }>(`/boss/accounts/${id}/verify`, { method: "POST" }),
+  bossJobs: () => request<{ items: Job[] }>("/boss/jobs"),
+  bossJobImport: (items: { external_id?: string; title: string; city?: string; jd_text?: string; summary?: string }[]) =>
+    request<{ items: Job[]; errors: { title: string; error: string }[] }>("/boss/jobs/batch-import", { method: "POST", body: JSON.stringify({ items }) }),
+  bossJobRecommendations: (jobId: number, limit = 8) => request<{ job: Job; items: MatchResult[] }>(`/boss/jobs/${jobId}/recommendations?limit=${limit}`),
+  bossInbox: () => request<{ items: BossInboxItem[] }>("/boss/candidates/inbox"),
+  bossImport: (items: BossInboxItem[]) => request<{ items: Candidate[]; errors: { name: string; error: string }[] }>("/boss/candidates/batch-import", { method: "POST", body: JSON.stringify({ items }) }),
+  bossAiScreen: (payload: { job_id: number; candidate_ids?: number[]; limit?: number }) =>
+    request<{ created: PipelineItem[]; skipped: { candidate_id: number; stage: string }[] }>("/boss/candidates/ai-screen", { method: "POST", body: JSON.stringify(payload) }),
+  agentTools: () => request<{ items: { name: string; description: string }[]; readonly: boolean }>("/agent/tools"),
+  chat: (message: string) => request<AgentResponse>("/agent/chat", { method: "POST", body: JSON.stringify({ message }) })
+};
+
+export type PipelineItem = {
+  id: number;
+  candidate_id: number;
+  candidate: Candidate;
+  job_id: number;
+  stage: string;
+  note: string;
+  updated_by?: string;
+  ts?: string;
+};
+
+export type BossInboxItem = { external_id: string; name: string; title: string; summary: string; candidate_id?: number; imported?: boolean; created_at?: string };
+export type SkillTag = { tag: string; category: string; aliases: string[] };
+
+export type BiOverview = {
+  period_days: number;
+  total_candidates: number;
+  active_jobs: number;
+  source_quality: Record<string, number>;
+  pipeline_funnel: Record<string, number>;
+  experience_stats: { key: string; label: string; count: number }[];
+  top_tags: [string, number][];
+};

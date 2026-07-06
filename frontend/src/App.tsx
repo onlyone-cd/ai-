@@ -1,0 +1,3016 @@
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Button as AntButton, Card as AntCard, Empty as AntEmpty, Layout as AntLayout, Menu as AntMenu, Spin as AntSpin, Statistic as AntStatistic } from "antd";
+import {
+  ArrowLeft,
+  BarChart3,
+  Bot,
+  BriefcaseBusiness,
+  CalendarDays,
+  Check,
+  ChevronRight,
+  Clock3,
+  Database,
+  Download,
+  FileText,
+  GraduationCap,
+  HandCoins,
+  LogOut,
+  Mail,
+  MapPin,
+  MessageSquareText,
+  Phone,
+  Plus,
+  RefreshCw,
+  Search,
+  SendHorizontal,
+  ShieldCheck,
+  Sparkles,
+  Trash2,
+  Upload,
+  UserCog,
+  UserRound,
+  Wrench,
+  Users
+} from "lucide-react";
+import { api, AgentResponse, AiInterviewPlan, AuditLog, BiOverview, BossInboxItem, Candidate, clearToken, InterviewAssignment, InterviewFeedback, InterviewMessage, Job, MatchResult, notify, OfferRecord, PipelineItem, PublicInterviewRoom, setToken, SkillTag, User } from "./lib/api";
+
+const stageLabels: Record<string, string> = {
+  pending: "待处理",
+  ai_screen: "AI 初筛",
+  business_review: "业务复核",
+  interview_first: "一面",
+  interview_second: "二面",
+  interview_final: "终面",
+  offer: "Offer",
+  onboarded: "入职",
+  rejected: "淘汰"
+};
+
+const offerStatusLabels: Record<string, string> = {
+  draft: "草稿",
+  sent: "已发放",
+  accepted: "已接受",
+  declined: "已拒绝",
+  cancelled: "已取消"
+};
+
+type View = "candidates" | "jobs" | "pipeline" | "interviews" | "offers" | "boss" | "bi" | "agent" | "audit" | "users";
+
+function App() {
+  const roomToken = window.location.pathname.match(/^\/interview-room\/([^/]+)/)?.[1] || "";
+  const [user, setUser] = useState<User | null>(null);
+  const [view, setView] = useState<View>("candidates");
+  const [loading, setLoading] = useState(true);
+  const [feedbackToast, setFeedbackToast] = useState<{ type: "success" | "error"; text: string } | null>(null);
+
+  useEffect(() => {
+    const onFeedback = (event: Event) => {
+      const detail = (event as CustomEvent<{ type: "success" | "error"; text: string }>).detail;
+      setFeedbackToast(detail);
+    };
+    const onUnhandled = (event: PromiseRejectionEvent) => {
+      const text = event.reason instanceof Error ? event.reason.message : "操作失败";
+      setFeedbackToast({ type: "error", text });
+    };
+    window.addEventListener("hireinsight-feedback", onFeedback);
+    window.addEventListener("unhandledrejection", onUnhandled);
+    return () => {
+      window.removeEventListener("hireinsight-feedback", onFeedback);
+      window.removeEventListener("unhandledrejection", onUnhandled);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!feedbackToast) return;
+    const timer = window.setTimeout(() => setFeedbackToast(null), 2600);
+    return () => window.clearTimeout(timer);
+  }, [feedbackToast]);
+
+  useEffect(() => {
+    if (roomToken) {
+      setLoading(false);
+      return;
+    }
+    api
+      .me()
+      .then(setUser)
+      .catch(() => clearToken())
+      .finally(() => setLoading(false));
+  }, [roomToken]);
+
+  if (loading) return <div className="grid min-h-screen place-items-center text-sm text-steel"><AntSpin tip="正在连接服务" /></div>;
+  if (roomToken) return <CandidateInterviewRoom token={roomToken} />;
+  if (!user) return <Login onLogin={setUser} />;
+
+  const navItems = [
+    { key: "candidates", icon: <Users size={17} />, label: "人才库" },
+    { key: "jobs", icon: <BriefcaseBusiness size={17} />, label: "岗位匹配" },
+    { key: "pipeline", icon: <ChevronRight size={17} />, label: "流程看板" },
+    { key: "interviews", icon: <CalendarDays size={17} />, label: "面试管理" },
+    { key: "offers", icon: <HandCoins size={17} />, label: "Offer 管理" },
+    { key: "boss", icon: <MessageSquareText size={17} />, label: "BOSS 闭环" },
+    { key: "bi", icon: <BarChart3 size={17} />, label: "BI 看板" },
+    { key: "agent", icon: <Bot size={17} />, label: "AI 助手" },
+    ...(user.role === "admin" ? [{ key: "audit", icon: <Clock3 size={17} />, label: "操作日志" }] : []),
+    ...(user.role === "admin" ? [{ key: "users", icon: <UserCog size={17} />, label: "用户管理" }] : [])
+  ];
+
+  return (
+    <AntLayout className="min-h-screen bg-slate-50 text-ink">
+      <AntLayout.Sider width={256} className="fixed inset-y-0 left-0 z-10 hidden border-r border-slate-800 bg-slate-950 lg:block">
+        <div className="flex h-16 items-center gap-3 border-b border-white/10 px-5">
+          <div className="grid h-9 w-9 place-items-center rounded-md bg-white text-mint">
+            <Sparkles size={18} />
+          </div>
+          <div>
+            <div className="text-sm font-semibold text-white">HireInsight</div>
+            <div className="text-xs text-slate-400">AI 招聘系统</div>
+          </div>
+        </div>
+        <AntMenu
+          className="border-0 bg-transparent p-3"
+          items={navItems}
+          mode="inline"
+          selectedKeys={[view]}
+          theme="dark"
+          onClick={({ key }) => setView(key as View)}
+        />
+      </AntLayout.Sider>
+
+      <AntLayout className="min-h-screen bg-slate-50 lg:pl-64">
+        <AntLayout.Header className="sticky top-0 z-10 flex h-16 items-center justify-between border-b border-line bg-white/90 px-4 leading-normal backdrop-blur lg:px-8">
+          <div>
+            <h1 className="text-base font-semibold">{titleFor(view)}</h1>
+            <p className="text-xs text-steel">规则口径：标签证据、匹配公式、经验档位、BOSS 半自动</p>
+          </div>
+          <div className="flex items-center gap-3">
+            <div className="hidden items-center gap-2 rounded-md border border-line px-3 py-2 text-xs sm:flex">
+              <ShieldCheck size={15} className="text-mint" />
+              {user.name} · {user.role}
+            </div>
+            <AntButton
+              icon={<LogOut size={18} />}
+              title="退出登录"
+              onClick={() => {
+                clearToken();
+                setUser(null);
+                notify("success", "已退出登录");
+              }}
+            />
+          </div>
+        </AntLayout.Header>
+
+        <AntLayout.Content className="app-content p-4 lg:p-8">
+          <MobileTabs view={view} setView={setView} isAdmin={user.role === "admin"} />
+          {view === "candidates" && <CandidatesPage />}
+          {view === "jobs" && <JobsPage />}
+          {view === "pipeline" && <PipelinePage />}
+          {view === "interviews" && <InterviewsPage />}
+          {view === "offers" && <OffersPage />}
+          {view === "boss" && <BossPage />}
+          {view === "bi" && <BiPage />}
+          {view === "agent" && <AgentPage />}
+          {view === "audit" && <AuditLogsPage />}
+          {view === "users" && <UsersPage currentUser={user} />}
+        </AntLayout.Content>
+        {feedbackToast && <div className={`feedback-toast ${feedbackToast.type}`}>{feedbackToast.text}</div>}
+      </AntLayout>
+    </AntLayout>
+  );
+}
+
+function Login({ onLogin }: { onLogin: (user: User) => void }) {
+  const [username, setUsername] = useState("admin");
+  const [password, setPassword] = useState("admin123");
+  const [error, setError] = useState("");
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    setError("");
+    try {
+      const data = await api.login(username, password);
+      setToken(data.token);
+      onLogin(data.user);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "登录失败");
+    }
+  }
+
+  return (
+    <div className="grid min-h-screen place-items-center bg-slate-50 p-4">
+      <form onSubmit={submit} className="w-full max-w-sm rounded-lg border border-line bg-white p-6 shadow-panel">
+        <div className="mb-6 flex items-center gap-3">
+          <div className="grid h-10 w-10 place-items-center rounded-md bg-mint text-white">
+            <Sparkles size={19} />
+          </div>
+          <div>
+            <h1 className="font-semibold">HireInsight</h1>
+            <p className="text-xs text-steel">Flask + React 招聘管理系统</p>
+          </div>
+        </div>
+        <label className="field-label">用户名</label>
+        <input className="input" value={username} onChange={(event) => setUsername(event.target.value)} />
+        <label className="field-label mt-4">密码</label>
+        <input className="input" type="password" value={password} onChange={(event) => setPassword(event.target.value)} />
+        {error && <div className="mt-3 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>}
+        <button className="primary-button mt-5 w-full" type="submit">
+          <Check size={17} />
+          登录
+        </button>
+      </form>
+    </div>
+  );
+}
+
+function CandidateInterviewRoom({ token }: { token: string }) {
+  const [room, setRoom] = useState<PublicInterviewRoom | null>(null);
+  const [index, setIndex] = useState(0);
+  const [answers, setAnswers] = useState<string[]>([]);
+  const [reply, setReply] = useState("");
+  const [questionText, setQuestionText] = useState("");
+  const [messages, setMessages] = useState<InterviewMessage[]>([]);
+  const [listening, setListening] = useState(false);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [submitted, setSubmitted] = useState(false);
+  const [cheatEvents, setCheatEvents] = useState<string[]>([]);
+  const [speechSupport, setSpeechSupport] = useState({ recognition: false, synthesis: false });
+  const recognitionRef = useRef<any>(null);
+  const current = room?.plan.questions[index];
+
+  useEffect(() => {
+    setSpeechSupport({
+      recognition: Boolean((window as any).SpeechRecognition || (window as any).webkitSpeechRecognition),
+      synthesis: Boolean(window.speechSynthesis)
+    });
+    api.publicInterviewRoom(token)
+      .then((data) => {
+        setRoom(data);
+        setAnswers(Array(data.plan.questions.length).fill(""));
+        setMessages([{ role: "ai", text: data.plan.opening }]);
+        setSubmitted(data.assignment.status === "completed");
+      })
+      .catch((err) => setError(err instanceof Error ? err.message : "面试间不可用"));
+    return () => {
+      window.speechSynthesis?.cancel();
+      recognitionRef.current?.stop?.();
+    };
+  }, [token]);
+
+  useEffect(() => {
+    const record = (text: string) => {
+      const item = `${new Date().toLocaleTimeString()} ${text}`;
+      setCheatEvents((events) => [...events, item]);
+      setNotice(`防作弊提醒：${text}`);
+    };
+    const block = (event: Event) => {
+      event.preventDefault();
+      record("检测到复制/粘贴/右键等非语音操作");
+    };
+    const onVisibility = () => {
+      if (document.hidden) record("检测到离开面试页面");
+    };
+    const onBlur = () => record("检测到窗口失焦");
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("blur", onBlur);
+    window.addEventListener("paste", block);
+    window.addEventListener("copy", block);
+    window.addEventListener("cut", block);
+    window.addEventListener("contextmenu", block);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("blur", onBlur);
+      window.removeEventListener("paste", block);
+      window.removeEventListener("copy", block);
+      window.removeEventListener("cut", block);
+      window.removeEventListener("contextmenu", block);
+    };
+  }, []);
+
+  function speak(text: string) {
+    if (!window.speechSynthesis) {
+      setNotice("当前浏览器不支持语音合成，已切换为文字面试模式。请使用 Chrome 打开候选人链接体验语音播报。");
+      return;
+    }
+    window.speechSynthesis?.cancel();
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = "zh-CN";
+    utterance.rate = 0.95;
+    window.speechSynthesis?.speak(utterance);
+  }
+
+  function startQuestion() {
+    if (!room || !current) return;
+    setMessages((items) => items[items.length - 1]?.text === current.question ? items : [...items, { role: "ai", text: current.question }]);
+    speak(`${room.plan.opening}。第 ${index + 1} 题，${current.question}`);
+  }
+
+  function listen(mode: "answer" | "question" = "answer") {
+    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      setNotice("当前浏览器不支持语音识别，无法参加语音面试。请使用 Chrome 打开候选人链接。");
+      return;
+    }
+    const recognition = new SpeechRecognition();
+    recognition.lang = "zh-CN";
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.onresult = (event: any) => {
+      const text = Array.from(event.results).map((result: any) => result[0]?.transcript || "").join("");
+      if (mode === "question") {
+        setQuestionText(text);
+      } else {
+        setAnswers((items) => items.map((item, itemIndex) => itemIndex === index ? text : item));
+      }
+    };
+    recognition.onend = () => setListening(false);
+    recognitionRef.current = recognition;
+    setListening(true);
+    recognition.start();
+  }
+
+  async function askFollowUp() {
+    if (!current) return;
+    const answer = answers[index] || "";
+    const data = await api.publicInterviewTurn(token, { question: current.question, answer, intent: "followup" });
+    setReply(data.reply);
+    setMessages((items) => [...items, { role: "candidate", text: answer || "（未作答）" }, { role: "ai", text: data.reply }]);
+    speak(data.reply);
+  }
+
+  async function clarifyQuestion() {
+    if (!current) return;
+    const data = await api.publicInterviewTurn(token, { question: current.question, intent: "clarify", candidate_question: questionText });
+    setQuestionText("");
+    setReply(data.reply);
+    setMessages((items) => [...items, { role: "candidate", text: questionText || "我没理解这道题" }, { role: "ai", text: data.reply }]);
+    speak(data.reply);
+  }
+
+  async function completeInterview() {
+    const data = await api.publicInterviewComplete(token, { answers, messages, cheat_events: cheatEvents });
+    setRoom((currentRoom) => currentRoom ? { ...currentRoom, assignment: data.assignment } : currentRoom);
+    setSubmitted(true);
+    setNotice(data.closing);
+    setMessages((items) => [...items, { role: "ai", text: data.closing }]);
+    speak(data.closing);
+  }
+
+  function next() {
+    const nextIndex = Math.min(index + 1, (room?.plan.questions.length || 1) - 1);
+    setIndex(nextIndex);
+    setReply("");
+    if (room?.plan.questions[nextIndex]) {
+      setMessages((items) => [...items, { role: "ai", text: room.plan.questions[nextIndex].question }]);
+    }
+    window.setTimeout(() => room?.plan.questions[nextIndex] && speak(`第 ${nextIndex + 1} 题，${room.plan.questions[nextIndex].question}`), 0);
+  }
+
+  if (error) return <div className="grid min-h-screen place-items-center bg-slate-50 p-4 text-sm text-red-700">{error}</div>;
+  if (!room) return <div className="grid min-h-screen place-items-center bg-slate-50 text-sm text-steel">正在进入 AI 面试间...</div>;
+
+  const answered = answers.filter((item) => item.trim()).length;
+  const progress = Math.round((answered / room.plan.questions.length) * 100);
+
+  return (
+    <main className="min-h-screen bg-slate-50 p-4 lg:p-8">
+      <section className="mx-auto grid max-w-6xl gap-5 lg:grid-cols-[320px_1fr]">
+        <aside className="rounded-lg border border-line bg-white p-5 shadow-panel">
+          <div className="grid place-items-center text-center">
+            <div className={`grid h-24 w-24 place-items-center rounded-full bg-blue-50 text-mint ${listening ? "ring-4 ring-blue-200" : ""}`}>
+              <Bot size={44} />
+            </div>
+            <h1 className="mt-4 text-lg font-semibold">AI 模拟面试官</h1>
+            <p className="mt-1 text-sm text-steel">{room.assignment.job.title} · {stageLabels[room.assignment.round]}</p>
+          </div>
+            <div className="mt-5 rounded-md bg-slate-50 p-3 text-sm text-steel">
+              <div>候选人：{room.assignment.candidate.name_masked}</div>
+              <div className="mt-1">面试方式：网页面试</div>
+              <div className="mt-1">答题进度：{progress}/100</div>
+              <div className="mt-1">异常操作记录：{cheatEvents.length} 次</div>
+            </div>
+            {!speechSupport.recognition && (
+              <div className="mt-3 rounded-md bg-orange-50 px-3 py-2 text-xs text-orange-700">
+                当前浏览器不支持语音识别，不能参加语音面试。请使用 Chrome 打开候选人链接。
+              </div>
+            )}
+          <button className="primary-button mt-4 w-full" onClick={startQuestion} disabled={submitted}>
+            <Sparkles size={17} />
+            {speechSupport.synthesis ? "开始播报" : "查看题目"}
+          </button>
+        </aside>
+
+        <section className="rounded-lg border border-line bg-white p-5 shadow-panel">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="badge">{current?.type}</span>
+            <span className="text-xs text-steel">第 {index + 1} / {room.plan.questions.length} 题</span>
+            {submitted && <span className="badge">已结束</span>}
+          </div>
+          <h2 className="mt-4 text-xl font-semibold">{current?.question}</h2>
+          <p className="mt-2 text-sm text-steel">评分点：{current?.rubric}</p>
+          <div className="mt-4 max-h-64 space-y-2 overflow-auto rounded-lg border border-line bg-slate-50 p-3">
+            {messages.map((item, itemIndex) => (
+              <div className={`rounded-md px-3 py-2 text-sm ${item.role === "ai" ? "bg-white text-ink" : "ml-auto bg-blue-50 text-blue-800"}`} key={`${item.role}-${itemIndex}`}>
+                <div className="mb-1 text-xs font-semibold text-steel">{item.role === "ai" ? "AI 面试官" : "候选人"}</div>
+                {item.text}
+              </div>
+            ))}
+          </div>
+          <textarea
+            className="input mt-5 min-h-40"
+            value={answers[index] || ""}
+            readOnly
+            onPaste={(event) => event.preventDefault()}
+            placeholder="这里只显示语音识别结果，不能手动输入或粘贴"
+          />
+          <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+            <div className="input flex items-center text-steel">{questionText || "没听懂时，点击“语音提问”后直接说出问题"}</div>
+            <button className="secondary-button shrink-0" onClick={() => listen("question")} disabled={submitted || !speechSupport.recognition || listening}>语音提问</button>
+            <button className="secondary-button shrink-0" onClick={clarifyQuestion} disabled={submitted}>解释题目</button>
+          </div>
+          {notice && <div className="mt-4 rounded-md bg-orange-50 px-3 py-2 text-sm text-orange-700">{notice}</div>}
+          {reply && <div className="mt-4 rounded-md bg-blue-50 px-3 py-2 text-sm text-blue-800">{reply}</div>}
+          <div className="mt-5 flex flex-wrap justify-between gap-2">
+            <div className="flex flex-wrap gap-2">
+              <button className="secondary-button" onClick={() => listen("answer")} disabled={submitted || !speechSupport.recognition || listening}>开始语音识别</button>
+              <button className="secondary-button" onClick={() => recognitionRef.current?.stop?.()} disabled={submitted || !listening}>停止识别</button>
+              <button className="secondary-button" onClick={askFollowUp} disabled={submitted}>继续追问</button>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button className="secondary-button" onClick={completeInterview} disabled={submitted}>结束面试</button>
+              <button className="primary-button" onClick={next} disabled={submitted || index >= room.plan.questions.length - 1}>下一题</button>
+            </div>
+          </div>
+        </section>
+      </section>
+    </main>
+  );
+}
+
+function CandidatesPage() {
+  const [candidates, setCandidates] = useState<Candidate[]>([]);
+  const [stats, setStats] = useState<{ key: string; label: string; count: number }[]>([]);
+  const [filter, setFilter] = useState("all");
+  const [query, setQuery] = useState("");
+  const [jobs, setJobs] = useState<Job[]>([]);
+  const [jobQuery, setJobQuery] = useState("");
+  const [selectedJobId, setSelectedJobId] = useState(0);
+  const [matchResults, setMatchResults] = useState<MatchResult[]>([]);
+  const [matchMessage, setMatchMessage] = useState("");
+  const [selected, setSelected] = useState<Candidate | null>(null);
+  const [uploadOpen, setUploadOpen] = useState(false);
+
+  function loadCandidates() {
+    api.candidates(filter).then((data) => {
+      setCandidates(data.items);
+      setStats(data.experience_stats);
+    });
+  }
+
+  useEffect(() => {
+    loadCandidates();
+  }, [filter]);
+
+  useEffect(() => {
+    api.jobs().then((data) => {
+      setJobs(data.items);
+      setSelectedJobId((current) => current || data.items[0]?.id || 0);
+    });
+  }, []);
+
+  const filteredJobs = useMemo(() => {
+    const keyword = jobQuery.trim().toLowerCase();
+    if (!keyword) return jobs;
+    return jobs.filter((job) =>
+      [job.title, job.city, job.department, job.job_code, job.jd_structured?.skill_tags_raw]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase()
+        .includes(keyword)
+    );
+  }, [jobs, jobQuery]);
+
+  const selectedJob = jobs.find((job) => job.id === selectedJobId);
+  const scoreByCandidate = useMemo(() => new Map(matchResults.map((item) => [item.candidate_id, item])), [matchResults]);
+  const activeJobCount = jobs.filter((job) => job.status === "active").length;
+  const parseFailedCount = candidates.filter((candidate) => candidate.parse_status === "failed").length;
+  const taggedCount = candidates.filter((candidate) => candidate.tags.length > 0).length;
+
+  const visibleCandidates = useMemo(() => {
+    const keyword = query.trim().toLowerCase();
+    const matched = keyword ? candidates.filter((candidate) =>
+      [
+        candidate.name_masked,
+        candidate.title,
+        candidate.city,
+        candidate.source,
+        candidate.owner_name,
+        candidate.gender,
+        candidate.email_masked,
+        candidate.phone_masked,
+        candidate.experience_analysis?.label,
+        ...candidate.tags.flatMap((tag) => [tag.tag, tag.category])
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase()
+        .includes(keyword)
+    ) : candidates;
+    return matched
+      .filter((candidate) => !matchResults.length || (scoreByCandidate.get(candidate.id)?.score || 0) >= 50)
+      .sort((a, b) => {
+        const scoreA = matchResults.length ? (scoreByCandidate.get(a.id)?.score || 0) : resumeScore(a.tags);
+        const scoreB = matchResults.length ? (scoreByCandidate.get(b.id)?.score || 0) : resumeScore(b.tags);
+        return scoreB - scoreA;
+      });
+  }, [candidates, query, matchResults.length, scoreByCandidate]);
+
+  async function runTalentMatch() {
+    if (!selectedJobId) {
+      setMatchMessage("请先选择一个岗位");
+      notify("error", "请先选择一个岗位");
+      return;
+    }
+    const data = await api.matchPreview(selectedJobId, 20);
+    const items = data.items.filter((item) => item.score >= 50);
+    setMatchResults(items);
+    setMatchMessage(`已按「${data.job.title}」完成匹配预览，候选人已按匹配分排序。`);
+    notify("success", `已匹配 ${items.length} 位候选人`);
+  }
+
+  async function addCandidateToPipeline(candidate: Candidate) {
+    if (!selectedJobId) {
+      setMatchMessage("请先选择一个岗位，再加入流程");
+      notify("error", "请先选择一个岗位，再加入流程");
+      return;
+    }
+    try {
+      const result = await api.batchPipeline(selectedJobId, {
+        candidate_id: candidate.id,
+        note: "从人才库加入流程"
+      });
+      setMatchMessage(result.created.length
+        ? `${candidate.name_masked} 已加入「${selectedJob?.title || "当前岗位"}」流程`
+        : `${candidate.name_masked} 已在该岗位流程中，无需重复加入`);
+      if (!result.created.length) notify("success", "候选人已在该岗位流程中");
+    } catch (error) {
+      setMatchMessage(error instanceof Error ? error.message : "加入流程失败");
+    }
+  }
+
+  if (selected) {
+    return (
+      <CandidateDetailPage
+        candidate={selected}
+        onBack={() => {
+          setSelected(null);
+          loadCandidates();
+        }}
+        onDeleted={() => {
+          setSelected(null);
+          loadCandidates();
+        }}
+      />
+    );
+  }
+
+  return (
+    <section className="talent-page">
+      <aside className="talent-filter">
+        <div className="talent-filter-title">
+          <BriefcaseBusiness size={16} />
+          <span>人才库</span>
+        </div>
+        <button className="talent-filter-active" onClick={() => setFilter("all")}>
+          <Users size={16} />
+          全部人才
+          <ChevronRight size={16} />
+        </button>
+        <div className="talent-filter-group">
+          <div>任职岗位</div>
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-3 top-2.5 text-steel" size={16} />
+            <input className="input pl-9" value={jobQuery} onChange={(event) => setJobQuery(event.target.value)} placeholder="搜索岗位、城市、技能" />
+          </div>
+          <select className="select w-full" value={selectedJobId} onChange={(event) => { setSelectedJobId(Number(event.target.value)); setMatchResults([]); setMatchMessage(""); }}>
+            <option value={0}>不限岗位</option>
+            {filteredJobs.map((job) => (
+              <option value={job.id} key={job.id}>
+                {job.title} · {job.city || "未填城市"} · {job.status === "active" ? "开放" : "关闭"}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="talent-filter-group">
+          <div>应聘职位</div>
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-3 top-2.5 text-steel" size={16} />
+            <input className="input pl-9" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="姓名、公司、学校、技能" />
+          </div>
+        </div>
+        <div className="talent-filter-group">
+          <div>工作经验</div>
+          <div className="talent-experience-grid">
+            <button className={filter === "all" ? "active" : ""} onClick={() => setFilter("all")}>全部 {candidates.length}</button>
+            {stats.map((item) => (
+              <button className={filter === item.key ? "active" : ""} key={item.key} onClick={() => setFilter(item.key)}>
+                {item.label} {item.count}
+              </button>
+            ))}
+          </div>
+        </div>
+        <button className="secondary-button w-full" onClick={() => { setFilter("all"); setQuery(""); setJobQuery(""); setMatchResults([]); setMatchMessage(""); notify("success", "筛选已重置"); }}>
+          <RefreshCw size={16} />
+          重置筛选
+        </button>
+      </aside>
+
+      <main className="talent-main">
+        <div className="talent-toolbar">
+          <div className="relative min-w-0 flex-1">
+            <Search className="pointer-events-none absolute left-3 top-2.5 text-steel" size={17} />
+            <input className="input pl-9" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索人才库" />
+          </div>
+          <button className="secondary-button" onClick={runTalentMatch} disabled={!selectedJobId}>
+            <Sparkles size={17} />
+            岗位匹配
+          </button>
+          <button className="secondary-button" onClick={() => setUploadOpen(true)}>
+            <Upload size={17} />
+            上传简历
+          </button>
+          <button className="secondary-button" onClick={() => api.exportCsv("candidates")}>
+            <Download size={17} />
+            导出人才
+          </button>
+        </div>
+
+        <div className="talent-title-row">
+          <div>
+            <h1>人才库概览</h1>
+            <p>{selectedJob ? `当前匹配岗位：${selectedJob.title}` : "使用左侧筛选快速定位候选人，选择岗位后可查看 AI 匹配并加入流程。"}</p>
+          </div>
+          <span>当前显示 {visibleCandidates.length} / {candidates.length} 人</span>
+        </div>
+
+        {matchMessage && (
+          <div className="talent-match-panel">
+            <strong>{matchMessage}</strong>
+            <p>规则：简历评分为技能熟练度折算，岗位匹配分为 JD 技能权重 × 候选人技能分，满分均为 100。</p>
+          </div>
+        )}
+
+        <div className="talent-summary-grid">
+          <KpiMini label="候选人总数" value={candidates.length} hint="今日归档 0" />
+          <KpiMini label="有标签人才" value={taggedCount} hint={`当前显示 ${visibleCandidates.length} 人`} />
+          <KpiMini label="解析异常" value={parseFailedCount} hint="可在详情页重试解析" />
+          <KpiMini label="在招岗位" value={activeJobCount} hint="可用于岗位匹配" />
+        </div>
+
+        <div className="talent-list-card">
+          <div className="talent-list-head">
+            <span>候选人</span>
+            <span>画像与标签</span>
+            <span>归档与申请</span>
+            <span>操作</span>
+          </div>
+          {visibleCandidates.map((candidate) => (
+            <div className="talent-row" key={candidate.id}>
+              <div className="talent-person">
+                <div>
+                  <h3>{candidate.name_masked}</h3>
+                  <p>{candidate.title} · {candidate.city || "城市未识别"}</p>
+                  <p>{candidate.email_masked || "-"} · {candidate.phone_masked || "-"}</p>
+                </div>
+              </div>
+              <div>
+                <div className="flex flex-wrap gap-1.5">
+                  <span className="badge muted">简历评分 {resumeScore(candidate.tags)}/100</span>
+                  <span className="badge">{candidate.experience_analysis.label}</span>
+                  {scoreByCandidate.has(candidate.id) && <span className="badge">匹配 {scoreByCandidate.get(candidate.id)?.score}/100</span>}
+                </div>
+                <TagList tags={candidate.tags} />
+                {scoreByCandidate.has(candidate.id) && (
+                  <p className="mt-2 text-xs text-steel">
+                    命中：{scoreByCandidate.get(candidate.id)?.reason.hits.slice(0, 4).map((hit) => hit.candidate_tag).join("、") || "无"}；
+                    缺失：{scoreByCandidate.get(candidate.id)?.reason.missing_tags.slice(0, 3).join("、") || "无"}
+                  </p>
+                )}
+              </div>
+              <div className="talent-archive">
+                <p>来源渠道：{candidate.source}</p>
+                <p>目标职位：待分配职位</p>
+                <p>归档人：{candidate.owner_name}</p>
+              </div>
+              <div className="talent-actions">
+                <button className="secondary-button" onClick={() => setSelected(candidate)}>查看详情</button>
+                <button className="primary-button" onClick={() => addCandidateToPipeline(candidate)}>加入流程</button>
+              </div>
+            </div>
+          ))}
+          {visibleCandidates.length === 0 && <EmptyState icon={<Search size={22} />} text="没有匹配的候选人" />}
+        </div>
+      </main>
+
+      {uploadOpen && <UploadResumeModal onClose={() => setUploadOpen(false)} onUploaded={loadCandidates} />}
+    </section>
+  );
+}
+
+function JobsPage() {
+  const [jobs, setJobs] = useState<Job[]>([]);
+  const [jobId, setJobId] = useState<number | null>(null);
+  const [selectedJob, setSelectedJob] = useState<Job | null>(null);
+  const [matches, setMatches] = useState<MatchResult[]>([]);
+  const [preview, setPreview] = useState<MatchResult[]>([]);
+  const [formOpen, setFormOpen] = useState(false);
+  const [error, setError] = useState("");
+  const [pipelineMessage, setPipelineMessage] = useState("");
+  const [query, setQuery] = useState("");
+
+  function load() {
+    api.jobs().then((data) => {
+      setJobs(data.items);
+      setJobId((current) => current ?? data.items[0]?.id ?? null);
+    });
+  }
+
+  useEffect(load, []);
+
+  useEffect(() => {
+    if (!jobId) return;
+    setError("");
+    api.getJob(jobId).then(setSelectedJob);
+    api.matchPreview(jobId, 5).then((data) => setPreview(data.items));
+  }, [jobId]);
+
+  async function runMatch() {
+    if (!jobId) return;
+    setError("");
+    try {
+      const data = await api.matchJob(jobId);
+      setMatches(data.items);
+      setSelectedJob(data.job);
+      notify("success", `岗位匹配已完成，返回 ${data.items.filter((item) => item.score >= 50).length} 位候选人`);
+      load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "匹配失败");
+    }
+  }
+
+  async function addToPipeline(candidateIds: number[]) {
+    if (!jobId || !candidateIds.length) return;
+    setPipelineMessage("");
+    const result = await api.batchPipeline(jobId, {
+      candidate_ids: candidateIds,
+      stage: "pending",
+      note: "从岗位匹配页加入流程"
+    });
+    setPipelineMessage(`已加入 ${result.created.length} 人，跳过 ${result.skipped.length} 人`);
+    if (!result.created.length) notify("success", "候选人已在流程中");
+  }
+
+  async function setJobStatus(next: "active" | "closed") {
+    if (!selectedJob) return;
+    const updated = next === "closed" ? await api.closeJob(selectedJob.id) : await api.restoreJob(selectedJob.id);
+    setSelectedJob(updated);
+    setJobs(jobs.map((job) => (job.id === updated.id ? updated : job)));
+    setMatches([]);
+  }
+
+  async function removeJob() {
+    if (!selectedJob || !window.confirm(`确认删除岗位「${selectedJob.title}」及其匹配、流程、面试、Offer、BOSS 草稿？`)) return;
+    await api.deleteJob(selectedJob.id);
+    const nextJobs = jobs.filter((job) => job.id !== selectedJob.id);
+    setJobs(nextJobs);
+    setSelectedJob(null);
+    setMatches([]);
+    setPreview([]);
+    setJobId(nextJobs[0]?.id ?? null);
+  }
+
+  const visibleJobs = useMemo(() => {
+    const keyword = query.trim().toLowerCase();
+    if (!keyword) return jobs;
+    return jobs.filter((job) =>
+      [
+        job.title,
+        job.city,
+        job.department,
+        job.job_code,
+        job.status,
+        job.jd_text,
+        job.jd_structured?.skill_tags_raw,
+        ...(job.jd_structured?.skills || []).map((skill) => skill.tag)
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase()
+        .includes(keyword)
+    );
+  }, [jobs, query]);
+  const visibleMatches = useMemo(() => (matches.length ? matches : preview).filter((item) => item.score >= 50), [matches, preview]);
+
+  return (
+    <section className="grid gap-5 xl:grid-cols-[360px_1fr]">
+      <div className="space-y-3">
+        <div className="relative">
+          <Search className="pointer-events-none absolute left-3 top-2.5 text-steel" size={17} />
+          <input className="input pl-9" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索岗位、技能、城市" />
+        </div>
+        <button className="primary-button w-full" onClick={() => { setFormOpen(!formOpen); notify("success", formOpen ? "已收起新建岗位" : "已打开新建岗位"); }}>
+          <Plus size={17} />
+          新建岗位
+        </button>
+        {formOpen && <JobForm onCreated={(job) => { setJobs([job, ...jobs]); setJobId(job.id); setFormOpen(false); }} />}
+        {visibleJobs.map((job) => (
+          <button key={job.id} onClick={() => { setJobId(job.id); notify("success", `已选择岗位：${job.title}`); }} className={`row-card w-full text-left ${jobId === job.id ? "ring-2 ring-mint" : ""}`}>
+            <div>
+              <div className="flex flex-wrap items-center gap-2">
+                <h3 className="font-semibold">{job.title}</h3>
+                <span className={`badge ${job.status === "active" ? "" : "muted"}`}>{job.status === "active" ? "开放" : "关闭"}</span>
+              </div>
+              <p className="text-sm text-steel">{job.department} · {job.city} · {job.job_code}</p>
+              <p className="mt-2 text-xs text-steel">{job.jd_structured.skill_tags_raw}</p>
+            </div>
+          </button>
+        ))}
+        {visibleJobs.length === 0 && <EmptyState icon={<Search size={22} />} text="没有匹配的岗位" />}
+      </div>
+      <div className="space-y-4">
+        {selectedJob && (
+          <div className="rounded-lg border border-line bg-white p-4 shadow-panel">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <h2 className="font-semibold">{selectedJob.title}</h2>
+                  <span className={`badge ${selectedJob.status === "active" ? "" : "muted"}`}>{selectedJob.status === "active" ? "开放" : "关闭"}</span>
+                </div>
+                <p className="mt-1 text-sm text-steel">{selectedJob.department} · {selectedJob.city} · {selectedJob.job_code}</p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button className="secondary-button" onClick={() => setJobStatus(selectedJob.status === "active" ? "closed" : "active")}>
+                  {selectedJob.status === "active" ? "关闭岗位" : "恢复岗位"}
+                </button>
+                <button className="secondary-button text-red-700" onClick={removeJob}>
+                  <Trash2 size={17} />
+                  删除岗位
+                </button>
+                <button className="secondary-button" onClick={() => api.exportCsv("jobs")}>
+                  <Download size={17} />
+                  导出岗位
+                </button>
+              </div>
+            </div>
+            <div className="mt-4 grid gap-3 md:grid-cols-3">
+              <InfoItem label="要求年限" value={selectedJob.jd_structured.years_required ? `${selectedJob.jd_structured.years_required} 年以上` : "未识别"} />
+              <InfoItem label="学历" value={selectedJob.jd_structured.education || "未识别"} />
+              <InfoItem label="薪资" value={selectedJob.jd_structured.salary_range ? `${selectedJob.jd_structured.salary_range.min_k}-${selectedJob.jd_structured.salary_range.max_k}K` : "未识别"} />
+            </div>
+            <div className="mt-4">
+              <p className="text-xs font-medium text-steel">岗位技能权重</p>
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {(selectedJob.jd_structured.skills || []).map((skill) => <span className="chip" key={skill.tag}>{skill.tag} · {skill.weight}</span>)}
+              </div>
+            </div>
+            <div className="mt-4 grid gap-3 md:grid-cols-2">
+              <RequirementList title="关键要求" items={selectedJob.jd_structured.must_have || []} />
+              <RequirementList title="加分项" items={selectedJob.jd_structured.nice_to_have || []} />
+            </div>
+          </div>
+        )}
+        <div className="toolbar">
+          <div>
+            <h2 className="font-semibold">匹配结果</h2>
+            <p className="text-xs text-steel">公式：75% 覆盖率 + 25% 熟练度，预览不写库，执行匹配会保存结果</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button className="secondary-button" onClick={() => addToPipeline(visibleMatches.slice(0, 5).map((item) => item.candidate_id))} disabled={!jobId || !visibleMatches.length}>
+              <Plus size={17} />
+              批量加入前 5
+            </button>
+            <button className="primary-button" onClick={runMatch} disabled={!jobId || selectedJob?.status === "closed"}>
+              <RefreshCw size={17} />
+              执行匹配
+            </button>
+          </div>
+        </div>
+        {error && <div className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>}
+        {pipelineMessage && <div className="rounded-md bg-blue-50 px-3 py-2 text-sm text-blue-700">{pipelineMessage}</div>}
+        {visibleMatches.length === 0 ? (
+          <EmptyState icon={<Database size={22} />} text="暂无 50 分以上候选人" />
+        ) : (
+          <div className="grid gap-3">
+            {visibleMatches.map((match) => (
+              <div className="row-card" key={match.id ?? `${match.candidate_id}-${match.score}`}>
+                <div className="score-ring">{match.score}</div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h3 className="font-semibold">{match.candidate.name_masked}</h3>
+                    <span className="badge">{match.candidate.title}</span>
+                    {!matches.length && <span className="badge muted">预览</span>}
+                  </div>
+                  <div className="mt-3">
+                    <button className="secondary-button" onClick={() => addToPipeline([match.candidate_id])}>
+                      <Plus size={17} />
+                      加入流程
+                    </button>
+                  </div>
+                  <div className="mt-3 grid gap-2 md:grid-cols-2">
+                    <div>
+                      <p className="text-xs font-medium text-steel">命中标签</p>
+                      <div className="mt-1 flex flex-wrap gap-1.5">
+                        {match.reason.hits.map((hit) => (
+                          <span className="chip good" key={`${hit.jd_tag}-${hit.candidate_tag}`}>
+                            {hit.jd_tag} / {hit.candidate_tag} · {hit.match_type}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                    <div>
+                      <p className="text-xs font-medium text-steel">缺失标签</p>
+                      <div className="mt-1 flex flex-wrap gap-1.5">
+                        {match.reason.missing_tags.length ? match.reason.missing_tags.map((tag) => <span className="chip warn" key={tag}>{tag}</span>) : <span className="chip good">无</span>}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function JobForm({ onCreated }: { onCreated: (job: Job) => void }) {
+  const cities = ["上海", "北京", "深圳", "广州", "杭州", "南京", "苏州", "成都", "武汉", "西安", "远程"];
+  const [payload, setPayload] = useState({ title: "", city: "上海", job_code: "", jd_text: "", skill_tags_raw: "" });
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    onCreated(await api.createJob(payload));
+  }
+  async function aiFill(action: "generate" | "calibrate") {
+    setBusy(true);
+    setMessage(action === "generate" ? "AI 正在生成 JD..." : "AI 正在校准 JD...");
+    try {
+      const data = action === "generate" ? await api.generateJobJd(payload) : await api.calibrateJobJd(payload);
+      setPayload({ ...payload, jd_text: data.jd_text, skill_tags_raw: data.skill_tags_raw });
+      setMessage(data.source === "deepseek" ? "DeepSeek 已完成" : "已用本地规则完成");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "AI 处理失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <form onSubmit={submit} className="rounded-lg border border-line bg-white p-4 shadow-panel">
+      <label className="field-label">岗位名称</label>
+      <input className="input" value={payload.title} onChange={(event) => setPayload({ ...payload, title: event.target.value })} placeholder="例如：Java 后端工程师" />
+      <div className="mt-3 grid grid-cols-2 gap-3">
+        <select className="select w-full" value={payload.city} onChange={(event) => setPayload({ ...payload, city: event.target.value })}>
+          {cities.map((city) => <option value={city} key={city}>{city}</option>)}
+        </select>
+        <input className="input" value={payload.job_code} onChange={(event) => setPayload({ ...payload, job_code: event.target.value })} placeholder="岗位编号，可不填" />
+      </div>
+      <label className="field-label mt-3">JD</label>
+      <textarea className="input min-h-20" value={payload.jd_text} onChange={(event) => setPayload({ ...payload, jd_text: event.target.value })} />
+      <label className="field-label mt-3">技能权重</label>
+      <input className="input" value={payload.skill_tags_raw} onChange={(event) => setPayload({ ...payload, skill_tags_raw: event.target.value })} />
+      {message && <div className="mt-3 rounded-md bg-blue-50 px-3 py-2 text-sm text-blue-700">{message}</div>}
+      <div className="mt-4 grid grid-cols-2 gap-2">
+        <button className="secondary-button" type="button" onClick={() => aiFill("generate")} disabled={busy || !payload.title.trim()}>
+          <Sparkles size={17} />
+          AI 生成 JD
+        </button>
+        <button className="secondary-button" type="button" onClick={() => aiFill("calibrate")} disabled={busy || (!payload.title.trim() && !payload.jd_text.trim())}>
+          <Wrench size={17} />
+          AI 校准 JD
+        </button>
+      </div>
+      <button className="primary-button mt-4 w-full" type="submit">
+        <Check size={17} />
+        保存岗位
+      </button>
+    </form>
+  );
+}
+
+function RequirementList({ title, items }: { title: string; items: string[] }) {
+  return (
+    <div className="rounded-md border border-line p-3">
+      <h3 className="text-sm font-semibold">{title}</h3>
+      {items.length ? (
+        <ul className="mt-2 space-y-1 text-sm text-steel">
+          {items.map((item) => <li key={item}>{item}</li>)}
+        </ul>
+      ) : (
+        <p className="mt-2 text-sm text-steel">未识别</p>
+      )}
+    </div>
+  );
+}
+
+function PipelinePage() {
+  const [jobs, setJobs] = useState<Job[]>([]);
+  const [jobId, setJobId] = useState<number | null>(null);
+  const [board, setBoard] = useState<{ stages: string[]; columns: Record<string, PipelineItem[]> } | null>(null);
+  const [historyTarget, setHistoryTarget] = useState<PipelineItem | null>(null);
+  const [history, setHistory] = useState<PipelineItem[]>([]);
+  const [notes, setNotes] = useState<Record<number, string>>({});
+  const [message, setMessage] = useState("");
+
+  useEffect(() => {
+    api.jobs().then((data) => {
+      setJobs(data.items);
+      setJobId(data.items[0]?.id ?? null);
+    });
+  }, []);
+
+  useEffect(() => {
+    if (jobId) {
+      api.pipeline(jobId).then(setBoard);
+      setHistoryTarget(null);
+      setHistory([]);
+    }
+  }, [jobId]);
+
+  async function loadBoard(silent = false) {
+    if (!jobId) return;
+    setBoard(await api.pipeline(jobId));
+    if (!silent) notify("success", "流程看板已刷新");
+  }
+
+  async function move(item: PipelineItem, stage: string) {
+    const note = notes[item.id] || `推进到${stageLabels[stage]}`;
+    await api.movePipeline({ candidate_id: item.candidate_id, job_id: item.job_id, stage, note });
+    setNotes({ ...notes, [item.id]: "" });
+    setMessage(`${item.candidate.name_masked} 已推进到 ${stageLabels[stage]}`);
+    await loadBoard(true);
+    if (historyTarget?.candidate_id === item.candidate_id) {
+      await showHistory(item);
+    }
+  }
+
+  async function showHistory(item: PipelineItem) {
+    setHistoryTarget(item);
+    const data = await api.pipelineHistory(item.job_id, item.candidate_id);
+    setHistory(data.items);
+  }
+
+  function nextStages(stage: string) {
+    if (!board) return [];
+    const index = board.stages.indexOf(stage);
+    const forward = board.stages.slice(index + 1, index + 3);
+    return [...forward, "rejected"].filter((value, idx, array) => value !== stage && array.indexOf(value) === idx);
+  }
+
+  const totals = board?.stages.reduce((sum, stage) => sum + (board.columns[stage]?.length || 0), 0) || 0;
+  const selectedJob = jobs.find((job) => job.id === jobId);
+
+  return (
+    <section className="space-y-5">
+      <div className="toolbar">
+        <div>
+          <h2 className="font-semibold">{selectedJob?.title || "流程看板"}</h2>
+          <p className="text-xs text-steel">当前流程候选人 {totals} 人，阶段变更会保留历史记录</p>
+        </div>
+        <select className="select" value={jobId ?? ""} onChange={(event) => setJobId(Number(event.target.value))}>
+          {jobs.map((job) => <option value={job.id} key={job.id}>{job.title}</option>)}
+        </select>
+        <div className="flex flex-wrap gap-2">
+          <button className="secondary-button" onClick={() => loadBoard()} disabled={!jobId}>
+            <RefreshCw size={17} />
+            刷新
+          </button>
+          <button className="secondary-button" onClick={() => api.exportCsv("pipeline")}>
+            <Download size={17} />
+            导出流程
+          </button>
+        </div>
+      </div>
+      {message && <div className="rounded-md bg-blue-50 px-3 py-2 text-sm text-blue-700">{message}</div>}
+      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
+        <div className="grid gap-3 overflow-x-auto pb-2 xl:grid-cols-4">
+          {board?.stages.map((stage) => (
+            <div key={stage} className="min-h-72 rounded-lg border border-line bg-white p-3 shadow-panel">
+              <div className="mb-3 flex items-center justify-between">
+                <h3 className="text-sm font-semibold">{stageLabels[stage]}</h3>
+                <span className="badge muted">{board.columns[stage]?.length || 0}</span>
+              </div>
+              <div className="space-y-3">
+                {(board.columns[stage] || []).map((item) => (
+                  <div className="rounded-md border border-line p-3" key={item.id}>
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="font-medium">{item.candidate.name_masked}</div>
+                        <div className="text-xs text-steel">{item.candidate.title} · {item.candidate.experience_analysis?.label || "经验未识别"}</div>
+                      </div>
+                      <button className="icon-button h-8 w-8" title="流程历史" onClick={() => showHistory(item)}>
+                        <Clock3 size={15} />
+                      </button>
+                    </div>
+                    <TagList tags={item.candidate.tags.slice(0, 4)} />
+                    <input
+                      className="input mt-3"
+                      placeholder="推进备注"
+                      value={notes[item.id] || ""}
+                      onChange={(event) => setNotes({ ...notes, [item.id]: event.target.value })}
+                    />
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {nextStages(stage).map((next) => (
+                        <button className={next === "rejected" ? "secondary-button text-red-700" : "secondary-button"} key={next} onClick={() => move(item, next)}>
+                          {stageLabels[next]}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+        <PipelineHistoryPanel target={historyTarget} history={history} onClose={() => setHistoryTarget(null)} />
+      </div>
+    </section>
+  );
+}
+
+function PipelineHistoryPanel({ target, history, onClose }: { target: PipelineItem | null; history: PipelineItem[]; onClose: () => void }) {
+  if (!target) {
+    return (
+      <aside className="rounded-lg border border-line bg-white p-5 shadow-panel">
+        <h3 className="font-semibold">流程历史</h3>
+        <p className="mt-3 text-sm text-steel">点击候选人卡片上的时钟查看完整阶段记录。</p>
+      </aside>
+    );
+  }
+  return (
+    <aside className="rounded-lg border border-line bg-white p-5 shadow-panel">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h3 className="font-semibold">{target.candidate.name_masked}</h3>
+          <p className="mt-1 text-xs text-steel">{target.candidate.title}</p>
+        </div>
+        <button className="secondary-button" onClick={onClose}>关闭</button>
+      </div>
+      <div className="mt-5 space-y-3">
+        {history.map((item) => (
+          <div className="border-l-2 border-mint pl-3" key={item.id}>
+            <div className="flex items-center gap-2">
+              <span className="badge">{stageLabels[item.stage]}</span>
+              <span className="text-xs text-steel">{item.updated_by}</span>
+            </div>
+            <p className="mt-1 text-sm text-steel">{item.note || "无备注"}</p>
+            <p className="mt-1 text-xs text-steel">{formatDateTime(item.ts)}</p>
+          </div>
+        ))}
+      </div>
+    </aside>
+  );
+}
+
+function InterviewsPage() {
+  const [assignments, setAssignments] = useState<InterviewAssignment[]>([]);
+  const [jobs, setJobs] = useState<Job[]>([]);
+  const [candidates, setCandidates] = useState<Candidate[]>([]);
+  const [interviewers, setInterviewers] = useState<User[]>([]);
+  const [message, setMessage] = useState("");
+  const [selected, setSelected] = useState<InterviewAssignment | null>(null);
+  const [aiInterview, setAiInterview] = useState<InterviewAssignment | null>(null);
+  const [resultAssignment, setResultAssignment] = useState<InterviewAssignment | null>(null);
+  const [query, setQuery] = useState("");
+  const [status, setStatus] = useState("all");
+  const [busy, setBusy] = useState(false);
+  const [form, setForm] = useState({
+    candidate_id: 0,
+    job_id: 0,
+    interviewer_id: 0,
+    round: "interview_first",
+    scheduled_at: "",
+    location: "腾讯会议",
+    note: ""
+  });
+
+  async function load(silent = false) {
+    const [assignmentData, jobData, candidateData, interviewerData] = await Promise.all([
+      api.interviewAssignments(),
+      api.jobs(),
+      api.candidates(),
+      api.interviewers()
+    ]);
+    setAssignments(assignmentData.items);
+    setJobs(jobData.items);
+    setCandidates(candidateData.items);
+    setInterviewers(interviewerData.items);
+    setForm((current) => ({
+      ...current,
+      candidate_id: current.candidate_id || candidateData.items[0]?.id || 0,
+      job_id: current.job_id || jobData.items[0]?.id || 0,
+      interviewer_id: current.interviewer_id || interviewerData.items[0]?.id || 0,
+      scheduled_at: current.scheduled_at || defaultDateTimeLocal()
+    }));
+    if (!silent) notify("success", "面试安排已刷新");
+  }
+
+  useEffect(() => {
+    load(true);
+  }, []);
+
+  async function create(event: React.FormEvent) {
+    event.preventDefault();
+    if (busy) return;
+    setBusy(true);
+    setMessage("");
+    try {
+      const created = await api.createInterviewAssignment(form);
+      setAssignments([created, ...assignments]);
+      setMessage("面试已安排，并已同步推进流程阶段");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "面试安排失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function cancelAssignment(assignment: InterviewAssignment) {
+    const updated = await api.cancelInterviewAssignment(assignment.id);
+    setAssignments(assignments.map((item) => (item.id === updated.id ? updated : item)));
+    setMessage("面试已取消");
+  }
+
+  async function editAssignment(assignment: InterviewAssignment) {
+    const location = window.prompt("修改地点/会议链接", assignment.location || "");
+    if (location === null) return;
+    const updated = await api.updateInterviewAssignment(assignment.id, { location });
+    setAssignments(assignments.map((item) => (item.id === updated.id ? updated : item)));
+    setMessage("面试安排已更新");
+  }
+
+  async function removeAssignment(assignment: InterviewAssignment) {
+    if (!window.confirm(`确认删除 ${assignment.candidate.name_masked} 的面试安排？`)) return;
+    await api.deleteInterviewAssignment(assignment.id);
+    setAssignments(assignments.filter((item) => item.id !== assignment.id));
+    setMessage("面试安排已删除");
+  }
+
+  async function copyRoomLink(assignment: InterviewAssignment) {
+    const data = await api.interviewRoomLink(assignment.id);
+    await navigator.clipboard.writeText(data.url);
+    notify("success", "候选人面试间链接已复制");
+  }
+
+  const visibleAssignments = useMemo(() => {
+    const keyword = query.trim().toLowerCase();
+    return assignments.filter((assignment) => {
+      if (status !== "all" && assignment.status !== status) return false;
+      if (!keyword) return true;
+      return [
+        assignment.candidate.name_masked,
+        assignment.candidate.title,
+        assignment.job.title,
+        assignment.interviewer.name,
+        stageLabels[assignment.round] || assignment.round,
+        assignment.location,
+        assignment.note,
+        assignment.status
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase()
+        .includes(keyword);
+    });
+  }, [assignments, query, status]);
+
+  return (
+    <section className="grid gap-5 xl:grid-cols-[380px_1fr]">
+      <form onSubmit={create} className="rounded-lg border border-line bg-white p-5 shadow-panel">
+        <h2 className="font-semibold">安排面试</h2>
+        <label className="field-label mt-4">候选人</label>
+        <select className="select w-full" value={form.candidate_id} onChange={(event) => setForm({ ...form, candidate_id: Number(event.target.value) })}>
+          {candidates.map((candidate) => <option value={candidate.id} key={candidate.id}>{candidate.name_masked} · {candidate.title}</option>)}
+        </select>
+        <label className="field-label mt-3">岗位</label>
+        <select className="select w-full" value={form.job_id} onChange={(event) => setForm({ ...form, job_id: Number(event.target.value) })}>
+          {jobs.map((job) => <option value={job.id} key={job.id}>{job.title}</option>)}
+        </select>
+        <label className="field-label mt-3">面试官</label>
+        <select className="select w-full" value={form.interviewer_id} onChange={(event) => setForm({ ...form, interviewer_id: Number(event.target.value) })}>
+          {interviewers.map((interviewer) => <option value={interviewer.id} key={interviewer.id}>{interviewer.name} · {interviewer.role}</option>)}
+        </select>
+        <div className="mt-3 grid grid-cols-2 gap-3">
+          <div>
+            <label className="field-label">轮次</label>
+            <select className="select w-full" value={form.round} onChange={(event) => setForm({ ...form, round: event.target.value })}>
+              <option value="interview_first">一面</option>
+              <option value="interview_second">二面</option>
+              <option value="interview_final">终面</option>
+            </select>
+          </div>
+          <div>
+            <label className="field-label">时间</label>
+            <input className="input" type="datetime-local" value={form.scheduled_at} onChange={(event) => setForm({ ...form, scheduled_at: event.target.value })} />
+          </div>
+        </div>
+        <label className="field-label mt-3">地点/会议链接</label>
+        <input className="input" value={form.location} onChange={(event) => setForm({ ...form, location: event.target.value })} />
+        <label className="field-label mt-3">备注</label>
+        <textarea className="input min-h-20" value={form.note} onChange={(event) => setForm({ ...form, note: event.target.value })} />
+        <button className="primary-button mt-4 w-full" type="submit" disabled={busy || !form.candidate_id || !form.job_id || !form.interviewer_id}>
+          <CalendarDays size={17} />
+          {busy ? "安排中" : "安排面试"}
+        </button>
+        {message && <p className="mt-3 text-sm text-mint">{message}</p>}
+      </form>
+
+      <div className="space-y-4">
+        <div className="toolbar">
+          <div>
+            <h2 className="font-semibold">面试安排</h2>
+            <p className="text-xs text-steel">安排后会同步推进到对应面试阶段，反馈提交后继续推进流程。</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-3 top-2.5 text-steel" size={17} />
+              <input className="input w-56 pl-9" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索候选人、岗位、面试官" />
+            </div>
+            <select className="select" value={status} onChange={(event) => setStatus(event.target.value)}>
+              <option value="all">全部状态</option>
+              <option value="scheduled">待反馈</option>
+              <option value="completed">已反馈</option>
+              <option value="cancelled">已取消</option>
+            </select>
+            <button className="secondary-button" onClick={() => load()}>
+              <RefreshCw size={17} />
+              刷新
+            </button>
+            <button className="secondary-button" onClick={() => api.exportCsv("interviews")}>
+              <Download size={17} />
+              导出面试
+            </button>
+          </div>
+        </div>
+        <div className="grid gap-3">
+          {visibleAssignments.map((assignment) => (
+            <div className="row-card flex-col items-stretch sm:flex-row sm:items-center" key={assignment.id}>
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <h3 className="font-semibold">{assignment.candidate.name_masked}</h3>
+                  <span className="badge">{stageLabels[assignment.round] || assignment.round}</span>
+                  <span className={`badge ${assignment.status === "completed" ? "" : "muted"}`}>{assignment.status === "completed" ? "已反馈" : assignment.status === "cancelled" ? "已取消" : "待反馈"}</span>
+                </div>
+                <p className="mt-1 text-sm text-steel">{assignment.job.title} · {assignment.interviewer.name} · {formatDateTime(assignment.scheduled_at)}</p>
+                <p className="mt-2 text-sm text-steel">{assignment.location || "未填写地点"}</p>
+              </div>
+              <div className="flex flex-wrap justify-start gap-2 sm:justify-end">
+                <button className="secondary-button" onClick={() => setResultAssignment(assignment)} disabled={assignment.status !== "completed"}>
+                  查看结果
+                </button>
+                {assignment.status === "scheduled" && (
+                  <>
+                    <button className="secondary-button" onClick={() => setSelected(assignment)}>
+                      提交反馈
+                    </button>
+                    <button className="secondary-button" onClick={() => setAiInterview(assignment)} title="后台预览 AI 面试题和模拟问答，不是候选人入口">
+                      <Bot size={17} />
+                      面试官预览
+                    </button>
+                    <button className="secondary-button" onClick={() => copyRoomLink(assignment)}>
+                      复制面试间
+                    </button>
+                    <button className="secondary-button" onClick={() => editAssignment(assignment)}>编辑</button>
+                    <button className="secondary-button" onClick={() => cancelAssignment(assignment)}>取消</button>
+                  </>
+                )}
+                <button className="secondary-button text-red-700" onClick={() => removeAssignment(assignment)}>
+                  <Trash2 size={17} />
+                  删除
+                </button>
+              </div>
+            </div>
+          ))}
+          {visibleAssignments.length === 0 && <EmptyState icon={<Search size={22} />} text="没有匹配的面试安排" />}
+        </div>
+      </div>
+      {selected && <FeedbackModal assignment={selected} onClose={() => setSelected(null)} onSubmitted={() => { setSelected(null); load(); }} />}
+      {aiInterview && <AiInterviewModal assignment={aiInterview} onClose={() => setAiInterview(null)} />}
+      {resultAssignment && <InterviewResultModal assignment={resultAssignment} onClose={() => setResultAssignment(null)} />}
+    </section>
+  );
+}
+
+function InterviewResultModal({ assignment, onClose }: { assignment: InterviewAssignment; onClose: () => void }) {
+  const [feedback, setFeedback] = useState<InterviewFeedback | null>(null);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    api.interviewFeedback(assignment.id)
+      .then((data) => setFeedback(data.items[0] || null))
+      .catch((err) => setError(err instanceof Error ? err.message : "面试结果加载失败"));
+  }, [assignment.id]);
+
+  const scoreMatch = feedback?.comment?.match(/AI评分：(\d+)\/100/);
+  const score = scoreMatch?.[1] || (feedback ? String(feedback.rating * 20) : "");
+  const dimensions = parseInterviewDimensions(feedback?.comment || "");
+
+  return (
+    <div className="fixed inset-0 z-20 grid place-items-center bg-black/20 p-4" onClick={onClose}>
+      <div className="max-h-[88vh] w-full max-w-3xl overflow-auto rounded-lg border border-line bg-white p-5 shadow-panel" onClick={(event) => event.stopPropagation()}>
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h2 className="font-semibold">AI 面试结果</h2>
+            <p className="mt-1 text-sm text-steel">{assignment.candidate.name_masked} · {assignment.job.title} · {stageLabels[assignment.round]}</p>
+          </div>
+          <div className="flex gap-2">
+            {feedback && (
+              <button className="secondary-button" onClick={() => api.interviewReport(assignment.id)}>
+                <Download size={17} /> 导出报告
+              </button>
+            )}
+            <button className="secondary-button" onClick={onClose}>关闭</button>
+          </div>
+        </div>
+        {error && <div className="mt-4 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>}
+        {!feedback ? (
+          <div className="py-8 text-center text-sm text-steel">正在加载面试结果...</div>
+        ) : (
+          <div className="mt-5 space-y-4">
+            <div className="grid gap-3 sm:grid-cols-3">
+              <InfoItem label="AI评分" value={`${score}/100`} />
+              <InfoItem label="面试官评分" value={`${feedback.rating}/5`} />
+              <InfoItem label="结论" value={feedback.decision === "pass" ? "通过" : feedback.decision === "reject" ? "淘汰" : "待定"} />
+            </div>
+            {dimensions.length > 0 && (
+              <div className="grid gap-3 sm:grid-cols-5">
+                {dimensions.map((item) => <InfoItem label={item.label} value={`${item.value}/100`} key={item.label} />)}
+              </div>
+            )}
+            <div className="rounded-lg border border-line p-4">
+              <p className="text-xs font-medium text-steel">优势</p>
+              <p className="mt-2 whitespace-pre-wrap text-sm text-ink">{feedback.strengths || "暂无"}</p>
+            </div>
+            <div className="rounded-lg border border-line p-4">
+              <p className="text-xs font-medium text-steel">风险</p>
+              <p className="mt-2 whitespace-pre-wrap text-sm text-ink">{feedback.risks || "暂无"}</p>
+            </div>
+            <div className="rounded-lg border border-line p-4">
+              <p className="text-xs font-medium text-steel">面试内容</p>
+              <pre className="mt-2 whitespace-pre-wrap text-sm leading-7 text-ink">{feedback.comment || "暂无记录"}</pre>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function AiInterviewModal({ assignment, onClose }: { assignment: InterviewAssignment; onClose: () => void }) {
+  const [plan, setPlan] = useState<AiInterviewPlan | null>(null);
+  const [index, setIndex] = useState(0);
+  const [answers, setAnswers] = useState<string[]>([]);
+  const [auto, setAuto] = useState(false);
+  const [error, setError] = useState("");
+  const current = plan?.questions[index];
+
+  useEffect(() => {
+    setError("");
+    api.interviewAiPlan(assignment.id)
+      .then((data) => {
+        setPlan(data);
+        setAnswers(Array(data.questions.length).fill(""));
+      })
+      .catch((err) => setError(err instanceof Error ? err.message : "AI 面试方案生成失败"));
+    return () => window.speechSynthesis?.cancel();
+  }, [assignment.id]);
+
+  function speak(text: string) {
+    window.speechSynthesis?.cancel();
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = "zh-CN";
+    window.speechSynthesis?.speak(utterance);
+  }
+
+  function startAuto() {
+    if (!plan) return;
+    setAuto(true);
+    speak(`${plan.opening}。第 ${index + 1} 题，${current?.question || ""}`);
+  }
+
+  function next() {
+    if (!plan) return;
+    const nextIndex = Math.min(index + 1, plan.questions.length - 1);
+    setIndex(nextIndex);
+    if (auto) speak(`第 ${nextIndex + 1} 题，${plan.questions[nextIndex].question}`);
+  }
+
+  const answered = answers.filter((item) => item.trim()).length;
+  const score = plan?.questions.length ? Math.round((answered / plan.questions.length) * 100) : 0;
+
+  return (
+    <div className="fixed inset-0 z-20 grid place-items-center bg-black/20 p-4" onClick={onClose}>
+      <div className="w-full max-w-4xl rounded-lg border border-line bg-white p-5 shadow-panel" onClick={(event) => event.stopPropagation()}>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <h2 className="font-semibold">AI 模拟人面试</h2>
+            <p className="mt-1 text-sm text-steel">{assignment.candidate.name_masked} · {assignment.job.title} · {stageLabels[assignment.round]}</p>
+          </div>
+          <button className="secondary-button" onClick={onClose}>关闭</button>
+        </div>
+        {error ? (
+          <div className="mt-5 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>
+        ) : !plan ? (
+          <div className="py-10 text-center text-sm text-steel">正在生成 AI 面试方案...</div>
+        ) : (
+          <div className="mt-5 grid gap-4 lg:grid-cols-[260px_1fr]">
+            <aside className="rounded-lg border border-line bg-slate-50 p-4">
+              <div className="grid place-items-center">
+                <div className="grid h-20 w-20 place-items-center rounded-full bg-blue-50 text-mint">
+                  <Bot size={36} />
+                </div>
+                <h3 className="mt-3 font-semibold">{plan.avatar.name}</h3>
+                <p className="text-xs text-steel">{plan.avatar.role} · {plan.source === "deepseek" ? "AI 已生成" : "本地兜底"}</p>
+              </div>
+              <div className="mt-4 rounded-md bg-white p-3 text-xs text-steel">
+                <div className="font-medium text-ink">{plan.meeting.provider}</div>
+                <div className="mt-1">{plan.meeting.location}</div>
+                <div className="mt-2">{plan.meeting.note}</div>
+              </div>
+              <button className="primary-button mt-4 w-full" onClick={startAuto}>
+                <Sparkles size={17} />
+                开始自动提问
+              </button>
+              <div className="mt-3 text-center text-xs text-steel">完成度 {score}/100</div>
+            </aside>
+            <main className="min-w-0">
+              <p className="rounded-md bg-blue-50 px-3 py-2 text-sm text-blue-800">{plan.opening}</p>
+              <div className="mt-4 rounded-lg border border-line p-4">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="badge">{current?.type}</span>
+                  <span className="text-xs text-steel">第 {index + 1} / {plan.questions.length} 题</span>
+                </div>
+                <h3 className="mt-3 text-lg font-semibold">{current?.question}</h3>
+                <p className="mt-2 text-sm text-steel">评分点：{current?.rubric}</p>
+                <textarea
+                  className="input mt-4 min-h-32"
+                  value={answers[index] || ""}
+                  onChange={(event) => setAnswers(answers.map((item, itemIndex) => itemIndex === index ? event.target.value : item))}
+                  placeholder="候选人回答记录"
+                />
+                <div className="mt-4 flex flex-wrap justify-between gap-2">
+                  <button className="secondary-button" onClick={() => speak(current?.question || "")}>重播问题</button>
+                  <div className="flex gap-2">
+                    <button className="secondary-button" onClick={() => setIndex(Math.max(index - 1, 0))} disabled={index === 0}>上一题</button>
+                    <button className="primary-button" onClick={next} disabled={index >= plan.questions.length - 1}>下一题</button>
+                  </div>
+                </div>
+              </div>
+              <div className="mt-4 flex flex-wrap gap-1.5">
+                {plan.rubric.map((item) => <span className="chip" key={item}>{item}</span>)}
+              </div>
+              {answered === plan.questions.length && <p className="mt-4 rounded-md bg-green-50 px-3 py-2 text-sm text-green-700">{plan.closing}</p>}
+            </main>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function FeedbackModal({ assignment, onClose, onSubmitted }: { assignment: InterviewAssignment; onClose: () => void; onSubmitted: () => void }) {
+  const [form, setForm] = useState({ rating: 4, decision: "pass", strengths: "", risks: "", comment: "" });
+  const [busy, setBusy] = useState(false);
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    setBusy(true);
+    await api.submitInterviewFeedback({ assignment_id: assignment.id, ...form });
+    setBusy(false);
+    onSubmitted();
+  }
+
+  return (
+    <div className="fixed inset-0 z-20 grid place-items-center bg-black/20 p-4" onClick={onClose}>
+      <form className="w-full max-w-2xl rounded-lg border border-line bg-white p-5 shadow-panel" onSubmit={submit} onClick={(event) => event.stopPropagation()}>
+        <h2 className="font-semibold">面试反馈</h2>
+        <p className="mt-1 text-sm text-steel">{assignment.candidate.name_masked} · {assignment.job.title} · {stageLabels[assignment.round]}</p>
+        <div className="mt-4 grid grid-cols-2 gap-3">
+          <div>
+            <label className="field-label">评分</label>
+            <input className="input" type="number" min={1} max={5} value={form.rating} onChange={(event) => setForm({ ...form, rating: Number(event.target.value) })} />
+          </div>
+          <div>
+            <label className="field-label">结论</label>
+            <select className="select w-full" value={form.decision} onChange={(event) => setForm({ ...form, decision: event.target.value })}>
+              <option value="pass">通过</option>
+              <option value="hold">待定</option>
+              <option value="reject">淘汰</option>
+            </select>
+          </div>
+        </div>
+        <label className="field-label mt-3">优势</label>
+        <textarea className="input min-h-20" value={form.strengths} onChange={(event) => setForm({ ...form, strengths: event.target.value })} />
+        <label className="field-label mt-3">风险</label>
+        <textarea className="input min-h-20" value={form.risks} onChange={(event) => setForm({ ...form, risks: event.target.value })} />
+        <label className="field-label mt-3">综合评价</label>
+        <textarea className="input min-h-24" value={form.comment} onChange={(event) => setForm({ ...form, comment: event.target.value })} />
+        <div className="mt-5 flex justify-end gap-3">
+          <button className="secondary-button" type="button" onClick={onClose}>关闭</button>
+          <button className="primary-button" type="submit" disabled={busy}>
+            <Check size={17} />
+            提交反馈
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function OffersPage() {
+  const [offers, setOffers] = useState<OfferRecord[]>([]);
+  const [jobs, setJobs] = useState<Job[]>([]);
+  const [candidates, setCandidates] = useState<Candidate[]>([]);
+  const [filter, setFilter] = useState("all");
+  const [message, setMessage] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [form, setForm] = useState({
+    candidate_id: 0,
+    job_id: 0,
+    salary_min_k: "18",
+    salary_max_k: "25",
+    salary_months: "13",
+    city: "",
+    start_date: defaultDate(),
+    status: "draft",
+    note: ""
+  });
+
+  async function load(silent = false) {
+    const [offerData, jobData, candidateData] = await Promise.all([api.offers(filter), api.jobs(), api.candidates()]);
+    setOffers(offerData.items);
+    setJobs(jobData.items);
+    setCandidates(candidateData.items);
+    setForm((current) => ({
+      ...current,
+      candidate_id: current.candidate_id || candidateData.items[0]?.id || 0,
+      job_id: current.job_id || jobData.items[0]?.id || 0,
+      city: current.city || jobData.items[0]?.city || ""
+    }));
+    if (!silent) notify("success", "Offer 台账已刷新");
+  }
+
+  useEffect(() => {
+    load(true);
+  }, [filter]);
+
+  async function create(event: React.FormEvent) {
+    event.preventDefault();
+    if (busy) return;
+    setBusy(true);
+    setMessage("");
+    try {
+      const created = await api.createOffer(form);
+      setOffers([created, ...offers]);
+      setMessage("Offer 已创建，并已同步到流程看板");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Offer 创建失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function setOfferStatus(offer: OfferRecord, status: string) {
+    const updated = await api.updateOffer(offer.id, { status });
+    setOffers(offers.map((item) => (item.id === updated.id ? updated : item)));
+    setMessage(`Offer 状态已更新为：${offerStatusLabels[status]}`);
+  }
+
+  async function editOffer(offer: OfferRecord) {
+    const note = window.prompt("修改 Offer 备注", offer.note || "");
+    if (note === null) return;
+    const updated = await api.updateOffer(offer.id, { note });
+    setOffers(offers.map((item) => (item.id === updated.id ? updated : item)));
+    setMessage("Offer 已更新");
+  }
+
+  async function removeOffer(offer: OfferRecord) {
+    if (!window.confirm(`确认删除 ${offer.candidate.name_masked} 的 Offer？`)) return;
+    await api.deleteOffer(offer.id);
+    setOffers(offers.filter((item) => item.id !== offer.id));
+    setMessage("Offer 已删除");
+  }
+
+  return (
+    <section className="grid gap-5 xl:grid-cols-[380px_1fr]">
+      <form onSubmit={create} className="rounded-lg border border-line bg-white p-5 shadow-panel">
+        <h2 className="font-semibold">创建 Offer</h2>
+        <label className="field-label mt-4">候选人</label>
+        <select className="select w-full" value={form.candidate_id} onChange={(event) => setForm({ ...form, candidate_id: Number(event.target.value) })}>
+          {candidates.map((candidate) => <option value={candidate.id} key={candidate.id}>{candidate.name_masked} · {candidate.title}</option>)}
+        </select>
+        <label className="field-label mt-3">岗位</label>
+        <select className="select w-full" value={form.job_id} onChange={(event) => {
+          const job = jobs.find((item) => item.id === Number(event.target.value));
+          setForm({ ...form, job_id: Number(event.target.value), city: job?.city || form.city });
+        }}>
+          {jobs.map((job) => <option value={job.id} key={job.id}>{job.title}</option>)}
+        </select>
+        <div className="mt-3 grid grid-cols-3 gap-3">
+          <div>
+            <label className="field-label">最低月薪 K</label>
+            <input className="input" value={form.salary_min_k} onChange={(event) => setForm({ ...form, salary_min_k: event.target.value })} />
+          </div>
+          <div>
+            <label className="field-label">最高月薪 K</label>
+            <input className="input" value={form.salary_max_k} onChange={(event) => setForm({ ...form, salary_max_k: event.target.value })} />
+          </div>
+          <div>
+            <label className="field-label">薪资月数</label>
+            <input className="input" value={form.salary_months} onChange={(event) => setForm({ ...form, salary_months: event.target.value })} />
+          </div>
+        </div>
+        <div className="mt-3 grid grid-cols-2 gap-3">
+          <div>
+            <label className="field-label">城市</label>
+            <input className="input" value={form.city} onChange={(event) => setForm({ ...form, city: event.target.value })} />
+          </div>
+          <div>
+            <label className="field-label">预计入职</label>
+            <input className="input" type="date" value={form.start_date} onChange={(event) => setForm({ ...form, start_date: event.target.value })} />
+          </div>
+        </div>
+        <label className="field-label mt-3">状态</label>
+        <select className="select w-full" value={form.status} onChange={(event) => setForm({ ...form, status: event.target.value })}>
+          {Object.entries(offerStatusLabels).map(([key, label]) => <option value={key} key={key}>{label}</option>)}
+        </select>
+        <label className="field-label mt-3">备注</label>
+        <textarea className="input min-h-20" value={form.note} onChange={(event) => setForm({ ...form, note: event.target.value })} />
+        <button className="primary-button mt-4 w-full" type="submit" disabled={busy || !form.candidate_id || !form.job_id}>
+          <HandCoins size={17} />
+          {busy ? "创建中" : "创建 Offer"}
+        </button>
+        {message && <p className="mt-3 text-sm text-mint">{message}</p>}
+      </form>
+
+      <div className="space-y-4">
+        <div className="toolbar">
+          <div>
+            <h2 className="font-semibold">Offer 台账</h2>
+            <p className="text-xs text-steel">创建、发放、接受或拒绝都会写入流程历史，接受后进入入职阶段。</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <select className="select" value={filter} onChange={(event) => setFilter(event.target.value)}>
+              <option value="all">全部状态</option>
+              {Object.entries(offerStatusLabels).map(([key, label]) => <option value={key} key={key}>{label}</option>)}
+            </select>
+            <button className="secondary-button" onClick={() => load()}>
+              <RefreshCw size={17} />
+              刷新
+            </button>
+            <button className="secondary-button" onClick={() => api.exportCsv("offers")}>
+              <Download size={17} />
+              导出 Offer
+            </button>
+          </div>
+        </div>
+        {offers.length === 0 ? (
+          <EmptyState icon={<HandCoins size={22} />} text="暂无 Offer 记录" />
+        ) : (
+          <div className="grid gap-3">
+            {offers.map((offer) => (
+              <div className="row-card" key={offer.id}>
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <h3 className="font-semibold">{offer.candidate.name_masked}</h3>
+                    <span className="badge">{offerStatusLabels[offer.status] || offer.status}</span>
+                    <span className="badge muted">{offer.job.title}</span>
+                  </div>
+                  <p className="mt-1 text-sm text-steel">{offer.city || offer.job.city} · {formatSalary(offer)} · 预计入职 {offer.start_date || "待定"}</p>
+                  <p className="mt-2 text-sm text-steel">{offer.note || "无备注"}</p>
+                </div>
+                <div className="flex shrink-0 flex-wrap justify-end gap-2">
+                  <button className="secondary-button" onClick={() => setOfferStatus(offer, "sent")} disabled={offer.status === "sent" || offer.status === "accepted"}>
+                    已发放
+                  </button>
+                  <button className="secondary-button" onClick={() => setOfferStatus(offer, "accepted")} disabled={offer.status === "accepted"}>
+                    已接受
+                  </button>
+                  <button className="secondary-button" onClick={() => setOfferStatus(offer, "declined")} disabled={offer.status === "declined"}>
+                    已拒绝
+                  </button>
+                  <button className="secondary-button" onClick={() => setOfferStatus(offer, "cancelled")} disabled={offer.status === "cancelled" || offer.status === "accepted"}>
+                    取消
+                  </button>
+                  <button className="secondary-button" onClick={() => editOffer(offer)}>
+                    编辑
+                  </button>
+                  <button className="secondary-button" onClick={() => api.offerLetter(offer.id)}>
+                    <Download size={17} />
+                    导出确认函
+                  </button>
+                  <button className="secondary-button text-red-700" onClick={() => removeOffer(offer)}>
+                    <Trash2 size={17} />
+                    删除
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function BossPage() {
+  const [status, setStatus] = useState<{ cookie_bound: boolean; account: string; mode: string; can_auto_send: boolean; verified?: boolean; account_id?: number | null } | null>(null);
+  const [tab, setTab] = useState<"inbox" | "recommend" | "jobs">("inbox");
+  const [inbox, setInbox] = useState<BossInboxItem[]>([]);
+  const [inboxQuery, setInboxQuery] = useState("");
+  const [message, setMessage] = useState("");
+  const [jobs, setJobs] = useState<Job[]>([]);
+  const [recommendations, setRecommendations] = useState<MatchResult[]>([]);
+  const [candidateId, setCandidateId] = useState(0);
+  const [jobId, setJobId] = useState(0);
+
+  async function load(silent = false) {
+    const [statusData, inboxData, jobData] = await Promise.all([
+      api.bossStatus(),
+      api.bossInbox(),
+      api.bossJobs()
+    ]);
+    setStatus(statusData);
+    setInbox(inboxData.items);
+    setJobs(jobData.items);
+    setCandidateId((current) => current || inboxData.items.find((item) => item.candidate_id)?.candidate_id || 0);
+    setJobId((current) => current || jobData.items[0]?.id || 0);
+    if (!silent) notify("success", "BOSS 数据已刷新");
+  }
+
+  useEffect(() => {
+    load(true);
+  }, []);
+
+  useEffect(() => {
+    if (!jobId) {
+      setRecommendations([]);
+      return;
+    }
+    api.bossJobRecommendations(jobId, 8).then((data) => setRecommendations(data.items));
+  }, [jobId]);
+
+  const visibleInbox = inbox.filter((item) => [item.name, item.title, item.summary].join(" ").toLowerCase().includes(inboxQuery.trim().toLowerCase()));
+
+  async function runAiScreen() {
+    if (!candidateId || !jobId) return;
+    const data = await api.bossAiScreen({ job_id: jobId, candidate_ids: [candidateId] });
+    setMessage(`AI 初筛已写入流程 ${data.created.length} 人，跳过 ${data.skipped.length} 人`);
+  }
+
+  async function verifyBoss() {
+    if (!status?.account_id) return;
+    const data = await api.verifyBossAccount(status.account_id);
+    setStatus({ ...status, verified: data.account.verified });
+    setMessage(data.account.verified ? "BOSS 登录态校验通过" : "BOSS 登录态待重新绑定");
+  }
+
+  async function copyPluginToken() {
+    await navigator.clipboard.writeText(localStorage.getItem("hireinsight_token") || "");
+    setMessage("插件 Token 已复制，请粘贴到 Chrome 扩展中");
+    notify("success", "插件 Token 已复制");
+  }
+
+  function openBoss() {
+    window.open("https://www.zhipin.com/web/geek/chat", "_blank", "noopener,noreferrer");
+    notify("success", "已打开 BOSS 页面");
+  }
+
+  function switchBossTab(next: typeof tab) {
+    setTab(next);
+  }
+
+  return (
+    <section className="design-page">
+      <div className="design-title">
+        <h1>BOSS 直聘</h1>
+        <p>扫码登录即用：收件箱闭环、推荐候选人、查看/下载简历、岗位列表。</p>
+      </div>
+
+      <div className="boss-status-bar">
+        <div className="flex flex-wrap items-center gap-3">
+          <span className="status-pill">{status?.cookie_bound ? "已激活" : "未激活"}</span>
+          <span>账号 {status?.account || "-"}</span>
+          <span className="text-sm text-steel">{status?.mode || "-"} · {status?.verified ? "已校验" : "待校验"} · 自动发送{status?.can_auto_send ? "允许" : "禁止"}</span>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <button className="secondary-button" onClick={() => api.bossExtension()}>
+            <Download size={17} />
+            下载插件
+          </button>
+          <button className="secondary-button" onClick={copyPluginToken}>复制插件 Token</button>
+          <button className="secondary-button" onClick={verifyBoss} disabled={!status?.account_id}>校验登录态</button>
+          <button className="black-button" onClick={openBoss}>打开 BOSS</button>
+        </div>
+      </div>
+
+      <div className="boss-tabs">
+        <button className={tab === "inbox" ? "active" : ""} onClick={() => switchBossTab("inbox")}>收件箱闭环</button>
+        <button className={tab === "recommend" ? "active" : ""} onClick={() => switchBossTab("recommend")}>推荐候选人</button>
+        <button className={tab === "jobs" ? "active" : ""} onClick={() => switchBossTab("jobs")}>岗位列表</button>
+      </div>
+
+      <div className="grid gap-4">
+        <div className="space-y-4">
+          {tab !== "jobs" && <div className="design-card">
+            <div className="grid gap-3 md:grid-cols-2">
+              <div>
+                <label className="field-label">BOSS 岗位</label>
+                <select className="select w-full" value={jobId} onChange={(event) => setJobId(Number(event.target.value))}>
+                  {jobs.map((job) => <option value={job.id} key={job.id}>{job.title}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="field-label">BOSS 候选人</label>
+                <select className="select w-full" value={candidateId} onChange={(event) => setCandidateId(Number(event.target.value))}>
+                  {inbox.filter((item) => item.candidate_id).map((item) => <option value={item.candidate_id} key={item.candidate_id}>{item.name} · {item.title}</option>)}
+                </select>
+              </div>
+            </div>
+            <button className="secondary-button mt-4" onClick={runAiScreen} disabled={!candidateId || !jobId}>
+              <Check size={17} />
+              AI 初筛入流程
+            </button>
+          </div>}
+
+          {tab === "inbox" && <div className="design-card">
+            <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <h2 className="font-semibold">收件箱候选人</h2>
+                <p className="mt-1 text-sm text-steel">这里只显示已通过 BOSS 插件同步并解析入库的候选人。</p>
+              </div>
+              <button className="secondary-button" onClick={() => load()}>
+                <RefreshCw size={17} />
+                刷新
+              </button>
+            </div>
+            <div className="relative mb-4">
+              <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-steel" size={16} />
+              <input className="input pl-9" value={inboxQuery} onChange={(event) => setInboxQuery(event.target.value)} placeholder="搜索 BOSS 候选人、岗位、简历摘要" />
+            </div>
+            {message && <div className="mb-3 rounded-md bg-blue-50 px-3 py-2 text-sm text-blue-700">{message}</div>}
+            <div className="grid gap-3">
+              {visibleInbox.length === 0 ? <EmptyState icon={<Users size={22} />} text="暂无匹配的 BOSS 候选人" /> : visibleInbox.map((item) => (
+                <div className="boss-inbox-row" key={item.external_id}>
+                  <div>
+                    <h3>{item.name}</h3>
+                    <p>{item.title}</p>
+                    <span>{item.summary}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>}
+
+          {tab === "recommend" && <div className="design-card">
+            <h2 className="font-semibold">推荐候选人</h2>
+            <p className="mt-1 text-sm text-steel">只从 BOSS 已导入的沟通过候选人里匹配当前 BOSS 岗位。</p>
+            <div className="mt-4 grid gap-3">
+              {recommendations.length === 0 ? <EmptyState icon={<Users size={22} />} text="当前岗位暂无 50 分以上推荐候选人" /> : recommendations.map((item) => (
+                <button className={`row-card text-left ${candidateId === item.candidate_id ? "ring-2 ring-mint" : ""}`} key={item.candidate_id} onClick={() => { setCandidateId(item.candidate_id); notify("success", `已选择候选人：${item.candidate.name_masked}`); }}>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h3 className="font-semibold">{item.candidate.name_masked}</h3>
+                      <span className="badge">{item.score}/100</span>
+                    </div>
+                    <p className="text-sm text-steel">{item.candidate.title} · {item.candidate.city || "城市未识别"}</p>
+                    <p className="mt-2 text-xs text-steel">
+                      命中：{item.reason.hits.slice(0, 4).map((hit) => hit.candidate_tag).join("、") || "暂无"}；缺失：{item.reason.missing_tags.slice(0, 3).join("、") || "无"}
+                    </p>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>}
+
+          {tab === "jobs" && <div className="design-card">
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <h2 className="font-semibold">BOSS 岗位列表</h2>
+              <button className="secondary-button" onClick={() => load()}>
+                <RefreshCw size={17} />
+                刷新
+              </button>
+            </div>
+            <div className="mt-4 grid gap-3">
+              {jobs.length === 0 ? <EmptyState icon={<BriefcaseBusiness size={22} />} text="暂无同步的 BOSS 岗位，请先用浏览器插件同步岗位列表" /> : jobs.map((job) => (
+                <button className={`row-card text-left ${jobId === job.id ? "ring-2 ring-mint" : ""}`} key={job.id} onClick={() => { setJobId(job.id); notify("success", `已选择岗位：${job.title}`); }}>
+                  <div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h3 className="font-semibold">{job.title}</h3>
+                      <span className={`badge ${job.status === "active" ? "" : "muted"}`}>{job.status === "active" ? "开放" : "关闭"}</span>
+                    </div>
+                    <p className="text-sm text-steel">{job.city || "未填城市"} · {job.job_code || "无编号"}</p>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function BiPage() {
+  const [data, setData] = useState<BiOverview | null>(null);
+  const [periodDays, setPeriodDays] = useState(30);
+  useEffect(() => {
+    api.bi(periodDays).then(setData);
+  }, [periodDays]);
+  if (!data) return <EmptyState icon={<BarChart3 size={22} />} text="正在加载 BI 数据" />;
+  const funnel = data.pipeline_funnel;
+  const inFlow = Object.entries(funnel).reduce((sum, [stage, count]) => sum + (["onboarded", "rejected"].includes(stage) ? 0 : count), 0);
+  const onboarded = funnel.onboarded || 0;
+  const interviews = (funnel.interview_first || 0) + (funnel.interview_second || 0) + (funnel.interview_final || 0);
+  const offers = funnel.offer || 0;
+
+  return (
+    <section className="design-page">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="design-title">
+          <h1>数据看板</h1>
+          <p>看团队招聘进度、卡点和协同跟进</p>
+        </div>
+        <div className="period-tabs">
+          {[7, 30, 90].map((days) => (
+            <button key={days} className={periodDays === days ? "active" : ""} onClick={() => setPeriodDays(days)}>
+              近 {days} 天
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="kpi-grid">
+        <KpiCard label="在招专员" value={data.active_jobs} hint="开放岗位" tone="blue" />
+        <KpiCard label="当前入职" value={onboarded} hint="归档结果" tone="green" />
+        <KpiCard label="全流程入职占比" value={`${data.total_candidates ? ((onboarded / data.total_candidates) * 100).toFixed(1) : "0.0"}%`} hint="活跃流程 + 归档结果" tone="purple" />
+        <KpiCard label="当前流程人数" value={inFlow} hint="不含已入职/已淘汰" tone="yellow" />
+        <KpiCard label="有效推荐" value={data.total_candidates} hint="人才库候选人" tone="orange" />
+        <KpiCard label="推荐成功面试" value={interviews} hint="进入面试中阶段" tone="blue" />
+        <KpiCard label="面试通过" value={`${offers} / ${interviews}`} hint={`通过率 ${interviews ? ((offers / interviews) * 100).toFixed(1) : "0.0"}%`} tone="purple" />
+        <KpiCard label="待补反馈" value={funnel.business_review || 0} hint="业务复核中" tone="red" />
+      </div>
+
+      <div className="grid gap-5 xl:grid-cols-2">
+        <div className="design-card">
+          <div className="mb-4 flex items-center justify-between">
+            <h2 className="font-semibold">需求健康</h2>
+            <span className="status-chip">A/B/C {data.active_jobs} / {inFlow} / {offers}</span>
+          </div>
+          <div className="mini-grid">
+            <KpiMini label="活跃需求" value={data.active_jobs} hint="待处理与招聘中" />
+            <KpiMini label="邀聊需求" value={funnel.pending || 0} hint="超过目标后期" />
+            <KpiMini label="HR 无推荐" value={0} hint="接手 7 天未推荐" />
+            <KpiMini label="业务待反馈" value={funnel.business_review || 0} hint="卡在业务复核" />
+          </div>
+        </div>
+        <div className="design-card">
+          <div className="mb-4 flex items-center justify-between">
+            <h2 className="font-semibold">简历消化</h2>
+            <span className="status-chip">进流程 {data.total_candidates ? ((inFlow / data.total_candidates) * 100).toFixed(1) : "0.0"}%</span>
+          </div>
+          <div className="mini-grid">
+            <KpiMini label="入库简历" value={data.total_candidates} hint="当前周期" />
+            <KpiMini label="绑定岗位" value={inFlow} hint={`${Math.max(data.total_candidates - inFlow, 0)} 份暂未绑定`} />
+            <KpiMini label="已匹配" value={funnel.ai_screen || 0} hint="匹配率" />
+            <KpiMini label="已进流程" value={inFlow} hint={`${Math.max(data.total_candidates - inFlow, 0)} 份未进流程`} />
+            <KpiMini label="进流程率" value={`${data.total_candidates ? ((inFlow / data.total_candidates) * 100).toFixed(1) : "0.0"}%`} hint="入库到流程转化" />
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function KpiCard({ label, value, hint, tone }: { label: string; value: React.ReactNode; hint: string; tone: string }) {
+  return (
+    <AntCard className={`kpi-card tone-${tone}`} variant="outlined">
+      <AntStatistic title={label} value={String(value)} />
+      <p>{hint}</p>
+    </AntCard>
+  );
+}
+
+function KpiMini({ label, value, hint }: { label: string; value: React.ReactNode; hint: string }) {
+  return (
+    <AntCard className="kpi-mini" size="small" variant="outlined">
+      <AntStatistic title={label} value={String(value)} />
+      <p>{hint}</p>
+    </AntCard>
+  );
+}
+
+function AgentPage() {
+  type AgentTurn = { role: "user" | "assistant"; content: string; response?: AgentResponse };
+  const [message, setMessage] = useState("");
+  const [turns, setTurns] = useState<AgentTurn[]>([
+    {
+      role: "assistant",
+      content: "我可以像招聘 Agent 一样调用各模块工具：查人才库、分类统计、创建岗位、推荐候选人、查流程/面试/Offer/BOSS/BI。"
+    }
+  ]);
+  const [tools, setTools] = useState<{ name: string; description: string }[]>([]);
+  const [busy, setBusy] = useState(false);
+  const threadEndRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    api.agentTools().then((data) => setTools(data.items));
+  }, []);
+
+  useEffect(() => {
+    threadEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, [turns, busy]);
+
+  async function send(nextMessage = message) {
+    const content = nextMessage.trim();
+    if (!content || busy) return;
+    setBusy(true);
+    setTurns((current) => [...current, { role: "user", content }]);
+    setMessage("");
+    try {
+      const data = await api.chat(content);
+      setTurns((current) => [...current, { role: "assistant", content: data.answer, response: data }]);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const latest = [...turns].reverse().find((turn) => turn.response)?.response;
+  const quickQuestions = latest?.suggestions || ["现在人才库有多少人？软件开发和会计分别多少？", "创建岗位 数据分析师 城市上海 部门数据部 JD 要求 SQL、Python、报表分析，3 年以上经验", "推荐财务会计主管候选人", "现在面试和 Offer 状态怎么样？"];
+
+  return (
+    <section className="agent-chat-page">
+      <header className="agent-page-head">
+        <div>
+          <h1>Agent</h1>
+          <span>{busy ? "正在执行" : "就绪"} · 已连接 {tools.length || 12} 个工具</span>
+        </div>
+        <div className="agent-live-dot" />
+      </header>
+
+      <div className="agent-thread">
+        {turns.map((turn, index) => (
+          <div className={`agent-turn ${turn.role}`} key={`${turn.role}-${index}`}>
+            <div className="agent-turn-icon">
+              {turn.role === "assistant" ? <Bot size={16} /> : <Users size={16} />}
+            </div>
+            <div className="agent-message">
+              <p>{turn.content}</p>
+              {turn.role === "assistant" && turn.response && <AgentTrace response={turn.response} />}
+            </div>
+          </div>
+        ))}
+        {busy && (
+          <div className="agent-turn assistant">
+            <div className="agent-turn-icon"><Bot size={16} /></div>
+            <div className="agent-message agent-thinking">
+              <span />
+              <span />
+              <span />
+            </div>
+          </div>
+        )}
+        <div ref={threadEndRef} />
+      </div>
+
+      <div className="agent-quick-row">
+        {quickQuestions.slice(0, 4).map((question) => (
+          <button type="button" key={question} onClick={() => send(question)}>
+            {question}
+          </button>
+        ))}
+      </div>
+
+      <form
+        className="agent-composer"
+        onSubmit={(event) => {
+          event.preventDefault();
+          send();
+        }}
+      >
+        <textarea
+          value={message}
+          onChange={(event) => setMessage(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && !event.shiftKey) {
+              event.preventDefault();
+              send();
+            }
+          }}
+          placeholder="输入问题，Enter 发送 · Shift+Enter 换行"
+        />
+        <button type="submit" disabled={busy || !message.trim()} title="发送">
+          <SendHorizontal size={18} />
+        </button>
+      </form>
+      <p className="agent-footnote">AI 可自由对话；涉及写入、发送、删除等动作仍需要明确指令和人工确认。</p>
+    </section>
+  );
+}
+
+function AgentTrace({ response }: { response: AgentResponse }) {
+  if (!response.tool || response.tool === "chat") return null;
+  return (
+    <div className="agent-trace">
+      <Wrench size={14} />
+      <span>调用工具：{response.tool}</span>
+      <ChevronRight size={14} />
+    </div>
+  );
+}
+
+function AuditLogsPage() {
+  const [logs, setLogs] = useState<AuditLog[]>([]);
+  const [filter, setFilter] = useState("");
+
+  function load() {
+    api.auditLogs().then((data) => setLogs(data.items));
+  }
+
+  useEffect(load, []);
+
+  const visible = useMemo(() => {
+    const keyword = filter.trim().toLowerCase();
+    if (!keyword) return logs;
+    return logs.filter((item) =>
+      [item.user_name, item.action, item.target_type, item.target_name, JSON.stringify(item.details || {})]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase()
+        .includes(keyword)
+    );
+  }, [logs, filter]);
+
+  return (
+    <section className="space-y-4">
+      <div className="toolbar">
+        <div>
+          <h2 className="font-semibold">操作日志</h2>
+          <p className="text-xs text-steel">记录候选人、岗位、面试、Offer 和用户管理等关键动作。</p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <input className="input w-64" value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="搜索操作人、对象、动作" />
+          <button className="secondary-button" onClick={load}>
+            <RefreshCw size={17} />
+            刷新
+          </button>
+        </div>
+      </div>
+      <div className="grid gap-3">
+        {visible.map((item) => (
+          <div className="row-card" key={item.id}>
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <h3 className="font-semibold">{item.user_name}</h3>
+                <span className="badge">{auditActionLabel(item.action)}</span>
+                <span className="badge muted">{auditTargetLabel(item.target_type)}</span>
+              </div>
+              <p className="mt-1 text-sm text-steel">{item.target_name || `#${item.target_id || "-"}`} · {formatDateTime(item.created_at)}</p>
+              {Object.keys(item.details || {}).length > 0 && <p className="mt-2 text-xs text-steel">{JSON.stringify(item.details)}</p>}
+            </div>
+          </div>
+        ))}
+        {visible.length === 0 && <EmptyState icon={<Clock3 size={22} />} text="暂无操作日志" />}
+      </div>
+    </section>
+  );
+}
+
+function UsersPage({ currentUser }: { currentUser: User }) {
+  const [users, setUsers] = useState<User[]>([]);
+  const [message, setMessage] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [payload, setPayload] = useState({ username: "", name: "", role: "recruiter", password: "ChangeMe123" });
+
+  async function load() {
+    const data = await api.users();
+    setUsers(data.items);
+  }
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  async function create(event: React.FormEvent) {
+    event.preventDefault();
+    if (busy) return;
+    setBusy(true);
+    try {
+      const created = await api.createUser(payload);
+      setUsers([...users, created]);
+      setPayload({ username: "", name: "", role: "recruiter", password: "ChangeMe123" });
+      setMessage("用户已创建");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "用户创建失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function setActive(target: User, active: boolean) {
+    const updated = await api.updateUser(target.id, { active });
+    setUsers(users.map((item) => (item.id === updated.id ? updated : item)));
+  }
+
+  return (
+    <section className="grid gap-5 xl:grid-cols-[360px_1fr]">
+      <form onSubmit={create} className="rounded-lg border border-line bg-white p-4 shadow-panel">
+        <h2 className="font-semibold">创建账号</h2>
+        <label className="field-label mt-4">用户名</label>
+        <input className="input" value={payload.username} onChange={(event) => setPayload({ ...payload, username: event.target.value })} />
+        <label className="field-label mt-3">姓名</label>
+        <input className="input" value={payload.name} onChange={(event) => setPayload({ ...payload, name: event.target.value })} />
+        <label className="field-label mt-3">角色</label>
+        <select className="select w-full" value={payload.role} onChange={(event) => setPayload({ ...payload, role: event.target.value })}>
+          <option value="admin">admin</option>
+          <option value="manager">manager</option>
+          <option value="recruiter">recruiter</option>
+          <option value="interviewer">interviewer</option>
+        </select>
+        <label className="field-label mt-3">初始密码</label>
+        <input className="input" value={payload.password} onChange={(event) => setPayload({ ...payload, password: event.target.value })} />
+        <button className="primary-button mt-4 w-full" type="submit" disabled={busy}>
+          <Plus size={17} />
+          {busy ? "创建中" : "创建"}
+        </button>
+        {message && <p className="mt-3 text-sm text-mint">{message}</p>}
+      </form>
+
+      <div className="space-y-3">
+        {users.map((item) => (
+          <div className="row-card" key={item.id}>
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <h3 className="font-semibold">{item.name}</h3>
+                <span className="badge">{item.role}</span>
+                <span className={`badge ${item.active ? "" : "muted"}`}>{item.active ? "启用" : "禁用"}</span>
+              </div>
+              <p className="mt-1 text-sm text-steel">{item.username}</p>
+              <div className="mt-3 flex flex-wrap gap-1.5">
+                {(item.permissions || []).slice(0, 6).map((permission) => (
+                  <span className="chip" key={permission}>{permission}</span>
+                ))}
+              </div>
+            </div>
+            <button className="secondary-button" disabled={item.id === currentUser.id} onClick={() => setActive(item, !item.active)}>
+              {item.active ? "禁用" : "启用"}
+            </button>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function UploadResumeModal({ onClose, onUploaded }: { onClose: () => void; onUploaded: () => void }) {
+  const [files, setFiles] = useState<File[]>([]);
+  const [message, setMessage] = useState("");
+  const [busy, setBusy] = useState(false);
+  const supportedResumeFile = (file: File) => /\.(txt|md|docx|pdf|zip)$/i.test(file.name);
+
+  function addFiles(nextFiles: File[]) {
+    const accepted = nextFiles.filter(supportedResumeFile);
+    setFiles(accepted);
+    setMessage(accepted.length === nextFiles.length ? "" : "已自动忽略不支持的文件，仅支持 TXT / MD / DOCX / PDF / ZIP");
+  }
+
+  async function submit(event: React.FormEvent) {
+    event.preventDefault();
+    if (!files.length) return;
+    setBusy(true);
+    setMessage("");
+    try {
+      const data = await api.uploadResume(files);
+      const failed = data.failed_count ? `，失败 ${data.failed_count} 份` : "";
+      setMessage(`已解析 ${data.success_count} 份简历${failed}`);
+      onUploaded();
+      if (!data.failed_count) onClose();
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "上传失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-20 grid place-items-center bg-black/20 p-4" onClick={onClose}>
+      <form className="upload-panel" onSubmit={submit} onClick={(event) => event.stopPropagation()}>
+        <div className="upload-head">
+          <div>
+            <h2>简历上传</h2>
+            <p>上传后会保存到简历库，AI 自动解析并提取技能标签。</p>
+          </div>
+          <span className="badge muted">来源：upload</span>
+        </div>
+        <label
+          className="upload-drop"
+          onDragOver={(event) => event.preventDefault()}
+          onDrop={(event) => {
+            event.preventDefault();
+            addFiles(Array.from(event.dataTransfer.files || []));
+          }}
+        >
+          <FileText size={34} />
+          <strong>{files.length ? `已选择 ${files.length} 个文件` : "拖拽简历文件到此处，或点击选择"}</strong>
+          <span>支持 TXT / MD / DOCX / PDF / ZIP，可一次选择多个文件</span>
+          <input type="file" multiple accept=".txt,.md,.docx,.pdf,.zip" onChange={(event) => addFiles(Array.from(event.target.files || []))} />
+        </label>
+        {files.length > 0 && (
+          <div className="mt-3 flex max-h-28 flex-wrap gap-1.5 overflow-auto">
+            {files.map((file) => <span className="chip" key={`${file.name}-${file.size}`}>{file.name}</span>)}
+          </div>
+        )}
+        {message && <div className="mt-4 rounded-md bg-blue-50 px-3 py-2 text-sm text-blue-700">{message}</div>}
+        <div className="mt-5 flex justify-end gap-3">
+          <button className="secondary-button" type="button" onClick={onClose}>关闭</button>
+          <button className="primary-button" type="submit" disabled={!files.length || busy}>
+            <Upload size={17} />
+            {busy ? "解析中" : "上传并解析"}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function CandidateDetailPage({ candidate, onBack, onDeleted }: { candidate: Candidate; onBack: () => void; onDeleted: () => void }) {
+  const [detail, setDetail] = useState<Candidate>(candidate);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+  const [edit, setEdit] = useState(() => candidateEditFields(candidate));
+  const [tagText, setTagText] = useState(formatTagText(candidate.tags || []));
+  const [skillTags, setSkillTags] = useState<SkillTag[]>([]);
+  const [tagQuery, setTagQuery] = useState("");
+  const resume = detail.resume_json || {};
+  const experiences = resumeArray(resume, "experience");
+  const projects = resumeArray(resume, "projects");
+  const education = resumeArray(resume, "education");
+  const rawBlocks = cleanResumeBlocks(detail.raw_text || "");
+  const tagSuggestions = useMemo(() => {
+    const keyword = tagQuery.trim().toLowerCase();
+    const items = keyword
+      ? skillTags.filter((tag) => [tag.tag, tag.category, ...tag.aliases].join(" ").toLowerCase().includes(keyword))
+      : skillTags;
+    return items.slice(0, 18);
+  }, [skillTags, tagQuery]);
+
+  useEffect(() => {
+    api.getCandidate(candidate.id).then((data) => {
+      setDetail(data);
+      setEdit(candidateEditFields(data));
+      setTagText(formatTagText(data.tags));
+    });
+    api.tags().then((data) => setSkillTags(data.items));
+  }, [candidate.id]);
+
+  async function remove() {
+    if (!window.confirm("确认删除该候选人及其匹配、流程、BOSS 草稿等关联数据？")) return;
+    setBusy(true);
+    try {
+      await api.deleteCandidate(candidate.id);
+      onDeleted();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function retryParse() {
+    setBusy(true);
+    setMessage("正在重新解析简历...");
+    try {
+      const data = await api.retryParseResume(detail.id);
+      setDetail(data.candidate);
+      setEdit(candidateEditFields(data.candidate));
+      setTagText(formatTagText(data.candidate.tags));
+      setMessage(`重新解析完成，识别到 ${data.candidate.tags.length} 个技能标签`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "重新解析失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveBasicInfo(event: React.FormEvent) {
+    event.preventDefault();
+    setBusy(true);
+    try {
+      const data = await api.updateCandidate(detail.id, edit);
+      setDetail(data);
+      setEdit(candidateEditFields(data));
+      setMessage("基础信息已保存");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "保存失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveTags(event: React.FormEvent) {
+    event.preventDefault();
+    setBusy(true);
+    try {
+      const data = await api.updateCandidateTags(detail.id, parseTagText(tagText));
+      setDetail(data);
+      setTagText(formatTagText(data.tags));
+      setMessage(`技能标签已保存，共 ${data.tags.length} 个`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "标签保存失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function insertSkillTag(tag: SkillTag) {
+    setTagText(upsertTagText(tagText, tag.tag, 4));
+  }
+
+  return (
+    <section className="resume-page">
+      <div className="resume-hero">
+        <div className="resume-hero-top">
+          <button className="secondary-button" onClick={onBack}>
+            <ArrowLeft size={17} />
+            返回人才库
+          </button>
+          <button className="secondary-button" onClick={retryParse} disabled={busy}>
+            <RefreshCw size={17} />
+            {busy ? "解析中" : "重新解析"}
+          </button>
+          <button className="secondary-button" onClick={() => api.candidateResume(detail.id)}>
+            <Download size={17} />
+            导出简历
+          </button>
+          <button className="secondary-button text-red-700" onClick={remove} disabled={busy}>
+            <Trash2 size={17} />
+            删除候选人
+          </button>
+        </div>
+        <div className="resume-profile">
+          <div className="resume-avatar">
+            <UserRound size={30} />
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center gap-2">
+              <h2>{detail.name_masked}</h2>
+              <span className="badge">{detail.title}</span>
+              <span className="badge">简历评分 {resumeScore(detail.tags)}/100</span>
+              <span className="badge muted">{detail.experience_analysis.label}</span>
+            </div>
+            <p>{detail.city || "城市未识别"} · {detail.source} · 负责人 {detail.owner_name}</p>
+            <div className="resume-contact-row">
+              <span><Phone size={14} />{detail.phone_masked || "手机号未识别"}</span>
+              <span><Mail size={14} />{detail.email_masked || "邮箱未识别"}</span>
+              <span><UserRound size={14} />{detail.gender || "性别未识别"}</span>
+              <span><MapPin size={14} />{detail.city || "城市未识别"}</span>
+            </div>
+          </div>
+        </div>
+        {message && <div className="mt-4 rounded-md bg-blue-50 px-3 py-2 text-sm text-blue-700">{message}</div>}
+      </div>
+
+      <div className="resume-layout">
+        <main className="resume-main">
+          <div className="resume-card">
+            <ResumeSectionTitle icon={<FileText size={18} />} title="个人简介" />
+            <p className="resume-summary">{String(resume.summary || rawBlocks.slice(0, 3).join("\n") || "暂无摘要")}</p>
+          </div>
+
+          <div className="resume-card">
+            <ResumeSectionTitle icon={<GraduationCap size={18} />} title="教育经历" />
+            <ResumeTimeline items={education} empty="暂无结构化教育经历" />
+          </div>
+
+          <div className="resume-card">
+            <ResumeSectionTitle icon={<BriefcaseBusiness size={18} />} title="工作经历" />
+            <ResumeTimeline items={experiences} empty="暂无结构化工作经历" />
+          </div>
+
+          <div className="resume-card">
+            <ResumeSectionTitle icon={<Database size={18} />} title="项目经历" />
+            <ResumeTimeline items={projects} empty="暂无结构化项目经历" />
+          </div>
+        </main>
+
+        <aside className="resume-side">
+          <form className="resume-card" onSubmit={saveBasicInfo}>
+            <ResumeSectionTitle icon={<UserRound size={18} />} title="基础信息" />
+            <div className="mt-4 grid gap-3">
+              <input className="input" value={edit.name_masked} onChange={(event) => setEdit({ ...edit, name_masked: event.target.value })} placeholder="姓名" />
+              <input className="input" value={edit.title} onChange={(event) => setEdit({ ...edit, title: event.target.value })} placeholder="当前岗位/求职意向" />
+              <div className="grid grid-cols-2 gap-2">
+                <input className="input" value={edit.gender} onChange={(event) => setEdit({ ...edit, gender: event.target.value })} placeholder="性别" />
+                <input className="input" value={edit.city} onChange={(event) => setEdit({ ...edit, city: event.target.value })} placeholder="城市" />
+              </div>
+              <input className="input" value={edit.phone_masked} onChange={(event) => setEdit({ ...edit, phone_masked: event.target.value })} placeholder="手机号" />
+              <input className="input" value={edit.email_masked} onChange={(event) => setEdit({ ...edit, email_masked: event.target.value })} placeholder="邮箱" />
+              <textarea className="input min-h-24" value={edit.summary} onChange={(event) => setEdit({ ...edit, summary: event.target.value })} placeholder="个人简介" />
+              <button className="primary-button w-full" type="submit" disabled={busy}>
+                <Check size={17} />
+                保存基础信息
+              </button>
+              <div className="text-xs text-steel">来源：{detail.source}</div>
+            </div>
+          </form>
+
+          <div className="resume-card">
+            <ResumeSectionTitle icon={<Clock3 size={18} />} title="经验识别" />
+            <p className="resume-summary">{detail.experience_analysis.label} · {detail.experience_analysis.basis}</p>
+          </div>
+
+          <SkillRadar tags={detail.tags} />
+          <form className="resume-card" onSubmit={saveTags}>
+            <ResumeSectionTitle icon={<Database size={18} />} title="标签校正" />
+            <div className="relative mt-4">
+              <Search className="pointer-events-none absolute left-3 top-2.5 text-steel" size={15} />
+              <input className="input pl-9" value={tagQuery} onChange={(event) => setTagQuery(event.target.value)} placeholder="搜索标签库" />
+            </div>
+            <div className="mt-3 flex max-h-28 flex-wrap gap-1.5 overflow-auto">
+              {tagSuggestions.map((tag) => (
+                <button className="chip" type="button" key={tag.tag} onClick={() => insertSkillTag(tag)}>
+                  {tag.tag} · {tag.category}
+                </button>
+              ))}
+            </div>
+            <textarea className="input mt-4 min-h-40 font-mono text-xs" value={tagText} onChange={(event) => setTagText(event.target.value)} placeholder={"Java 5\nMySQL 4"} />
+            <button className="primary-button mt-3 w-full" type="submit" disabled={busy}>
+              <Check size={17} />
+              保存技能标签
+            </button>
+            <p className="mt-2 text-xs text-steel">每行一个标签和 1-5 分；标签必须存在于标签库。</p>
+          </form>
+          <SkillCategoryList tags={detail.tags} />
+        </aside>
+      </div>
+    </section>
+  );
+}
+
+function ResumeSectionTitle({ icon, title }: { icon: React.ReactNode; title: string }) {
+  return (
+    <div className="resume-section-title">
+      <span>{icon}</span>
+      <h3>{title}</h3>
+    </div>
+  );
+}
+
+function ResumeTimeline({ items, empty }: { items: Record<string, unknown>[]; empty: string }) {
+  if (!items.length) {
+    return <div className="resume-empty">{empty}</div>;
+  }
+  return (
+    <div className="resume-timeline">
+      {items.map((item, index) => (
+        <div className="resume-timeline-item" key={index}>
+          <div className="resume-timeline-dot" />
+          <div className="min-w-0">
+            <div className="resume-timeline-head">
+              <h4>{resumeItemTitle(item)}</h4>
+              <span>{resumeItemPeriod(item)}</span>
+            </div>
+            <p>{resumeItemDescription(item)}</p>
+            <div className="resume-kv-list">
+              {Object.entries(item)
+                .filter(([key, value]) => !["title", "company", "school", "name", "description", "period", "start", "end", "date", "time"].includes(key) && value)
+                .slice(0, 6)
+                .map(([key, value]) => (
+                  <span key={key}>{key}: {stringifyResumeValue(value)}</span>
+                ))}
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function SkillRadar({ tags }: { tags: Candidate["tags"] }) {
+  const data = radarData(tags);
+  const size = 320;
+  const center = size / 2;
+  const maxRadius = 112;
+  const levels = [0.25, 0.5, 0.75, 1];
+  const axes = data.map((item, index) => {
+    const angle = -Math.PI / 2 + (Math.PI * 2 * index) / data.length;
+    return { ...item, angle, x: center + Math.cos(angle) * maxRadius, y: center + Math.sin(angle) * maxRadius };
+  });
+  const polygon = axes.map((item) => {
+    const radius = maxRadius * (item.value / 5);
+    return `${center + Math.cos(item.angle) * radius},${center + Math.sin(item.angle) * radius}`;
+  }).join(" ");
+
+  return (
+    <div className="resume-card">
+      <ResumeSectionTitle icon={<Sparkles size={18} />} title="技能雷达" />
+      <svg className="mt-4 h-auto w-full" viewBox={`0 0 ${size} ${size}`} role="img" aria-label="技能标签雷达图">
+        {levels.map((level) => (
+          <polygon
+            key={level}
+            points={axes.map((item) => `${center + Math.cos(item.angle) * maxRadius * level},${center + Math.sin(item.angle) * maxRadius * level}`).join(" ")}
+            fill="none"
+            stroke="#D8DEE6"
+            strokeWidth="1"
+          />
+        ))}
+        {axes.map((item) => (
+          <line key={item.category} x1={center} y1={center} x2={item.x} y2={item.y} stroke="#D8DEE6" strokeWidth="1" />
+        ))}
+        <polygon points={polygon} fill="rgba(46,139,125,0.22)" stroke="#2E8B7D" strokeWidth="2" />
+        {axes.map((item) => {
+          const labelRadius = maxRadius + 26;
+          const x = center + Math.cos(item.angle) * labelRadius;
+          const y = center + Math.sin(item.angle) * labelRadius;
+          return (
+            <g key={item.category}>
+              <circle cx={center + Math.cos(item.angle) * maxRadius * (item.value / 5)} cy={center + Math.sin(item.angle) * maxRadius * (item.value / 5)} r="4" fill="#2E8B7D" />
+              <text x={x} y={y} textAnchor="middle" dominantBaseline="middle" className="fill-steel text-[10px] font-semibold">
+                {item.category}
+              </text>
+              <text x={x} y={y + 12} textAnchor="middle" dominantBaseline="middle" className="fill-ink text-[10px]">
+                {item.value.toFixed(1)}
+              </text>
+            </g>
+          );
+        })}
+      </svg>
+    </div>
+  );
+}
+
+function SkillCategoryList({ tags }: { tags: Candidate["tags"] }) {
+  const [expanded, setExpanded] = useState(false);
+  const sorted = [...tags].sort((a, b) => b.score - a.score || a.tag.localeCompare(b.tag));
+  const highScore = sorted.filter((tag) => tag.score >= 4);
+  const visible = expanded ? sorted : (highScore.length ? highScore.slice(0, 16) : sorted.slice(0, 8));
+  const hiddenCount = Math.max(sorted.length - visible.length, 0);
+  return (
+    <div className="resume-card">
+      <ResumeSectionTitle icon={<Database size={18} />} title="标签明细" />
+      <p className="mt-2 text-xs text-steel">数字为熟练度评分，范围 1-5；5/5 表示简历中有较强实践证据。</p>
+      <div className="mt-4 flex max-h-40 flex-wrap gap-2 overflow-auto pr-1">
+        {visible.map((tag) => (
+          <span className="skill-chip" title={tag.category} key={`${tag.category}-${tag.tag}`}>
+            <span>{tag.tag}</span>
+            <strong>{tag.score}/5</strong>
+          </span>
+        ))}
+      </div>
+      {hiddenCount > 0 && (
+        <button className="secondary-button mt-4 w-full" type="button" onClick={() => setExpanded(!expanded)}>
+          {expanded ? "收起低分标签" : `展开其余 ${hiddenCount} 个标签`}
+        </button>
+      )}
+    </div>
+  );
+}
+
+function radarData(tags: Candidate["tags"]) {
+  const grouped = tags.reduce<Record<string, { total: number; count: number }>>((acc, tag) => {
+    const current = acc[tag.category] || { total: 0, count: 0 };
+    acc[tag.category] = { total: current.total + tag.score, count: current.count + 1 };
+    return acc;
+  }, {});
+  const items = Object.entries(grouped)
+    .map(([category, item]) => ({ category, value: item.total / item.count }))
+    .sort((a, b) => b.value - a.value)
+    .slice(0, 6);
+  while (items.length < 3) {
+    items.push({ category: ["通用能力", "专业技能", "工具"][items.length], value: 0 });
+  }
+  return items;
+}
+
+function resumeScore(tags: Candidate["tags"]) {
+  if (!tags.length) return 0;
+  const top = [...tags].sort((a, b) => b.score - a.score).slice(0, 12);
+  return Math.round((top.reduce((sum, tag) => sum + tag.score, 0) / top.length) * 20);
+}
+
+function formatTagText(tags: Candidate["tags"]) {
+  return tags.map((tag) => `${tag.tag} ${tag.score}`).join("\n");
+}
+
+function candidateEditFields(candidate: Candidate) {
+  return {
+    name_masked: candidate.name_masked || "",
+    title: candidate.title || "",
+    city: candidate.city || "",
+    phone_masked: candidate.phone_masked || "",
+    email_masked: candidate.email_masked || "",
+    gender: candidate.gender || "",
+    summary: String(candidate.resume_json?.summary || "")
+  };
+}
+
+function parseTagText(text: string) {
+  return text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const match = line.match(/^(.+?)[\s,，:：]+([1-5])$/);
+      if (!match) throw new Error(`标签格式错误：${line}`);
+      return { tag: match[1].trim(), score: Number(match[2]) };
+    });
+}
+
+function upsertTagText(text: string, tag: string, score: number) {
+  const nextLine = `${tag} ${score}`;
+  const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const index = lines.findIndex((line) => line.replace(/[\s,，:：]+[1-5]$/, "") === tag);
+  if (index >= 0) {
+    lines[index] = nextLine;
+  } else {
+    lines.push(nextLine);
+  }
+  return lines.join("\n");
+}
+
+function resumeArray(resume: Record<string, unknown>, key: string) {
+  const value = resume[key];
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === "object" && !Array.isArray(item));
+}
+
+function cleanResumeBlocks(text: string) {
+  const seen = new Map<string, number>();
+  const lines = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => {
+      if (!line) return true;
+      const compact = line.replace(/\s/g, "");
+      if (/^[A-Za-z0-9+/=_-]{32,}$/.test(compact)) return false;
+      const count = seen.get(compact) || 0;
+      seen.set(compact, count + 1);
+      return count < 1;
+    });
+  const blocks: string[] = [];
+  let current: string[] = [];
+  for (const line of lines) {
+    if (!line) {
+      if (current.length) blocks.push(current.join("\n"));
+      current = [];
+    } else {
+      current.push(line);
+    }
+  }
+  if (current.length) blocks.push(current.join("\n"));
+  return blocks.length ? blocks : ["原文包含较多解析噪声，已隐藏。"];
+}
+
+function resumeItemTitle(item: Record<string, unknown>) {
+  return stringifyResumeValue(item.title || item.company || item.school || item.name || "未命名条目");
+}
+
+function resumeItemPeriod(item: Record<string, unknown>) {
+  return stringifyResumeValue(item.period || item.date || item.time || [item.start, item.end].filter(Boolean).join(" - "));
+}
+
+function resumeItemDescription(item: Record<string, unknown>) {
+  const value = item.description || item.summary || item.content || item.detail;
+  return stringifyResumeValue(value || "暂无描述");
+}
+
+function stringifyResumeValue(value: unknown): string {
+  if (value === null || value === undefined || value === "") return "";
+  if (Array.isArray(value)) return value.map(stringifyResumeValue).filter(Boolean).join("、");
+  if (typeof value === "object") {
+    return Object.entries(value as Record<string, unknown>)
+      .map(([key, item]) => `${key}: ${stringifyResumeValue(item)}`)
+      .join("；");
+  }
+  return String(value);
+}
+
+function InfoItem({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <div className="text-xs font-medium text-steel">{label}</div>
+      <div className="mt-1 break-all font-medium text-ink">{value}</div>
+    </div>
+  );
+}
+
+function formatDateTime(value?: string) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString("zh-CN", { hour12: false });
+}
+
+function defaultDateTimeLocal() {
+  const date = new Date();
+  date.setDate(date.getDate() + 1);
+  date.setHours(10, 0, 0, 0);
+  const offsetMs = date.getTimezoneOffset() * 60 * 1000;
+  return new Date(date.getTime() - offsetMs).toISOString().slice(0, 16);
+}
+
+function defaultDate() {
+  const date = new Date();
+  date.setDate(date.getDate() + 30);
+  const offsetMs = date.getTimezoneOffset() * 60 * 1000;
+  return new Date(date.getTime() - offsetMs).toISOString().slice(0, 10);
+}
+
+function formatSalary(offer: OfferRecord) {
+  if (offer.salary_min_k && offer.salary_max_k) {
+    return `${offer.salary_min_k}-${offer.salary_max_k}K · ${offer.salary_months} 薪`;
+  }
+  if (offer.salary_min_k || offer.salary_max_k) {
+    return `${offer.salary_min_k || offer.salary_max_k}K · ${offer.salary_months} 薪`;
+  }
+  return "薪资待定";
+}
+
+function parseInterviewDimensions(comment: string) {
+  const labels = new Set(["岗位匹配", "专业能力", "表达结构", "真实性", "风险控制"]);
+  return comment.split(/\r?\n/).flatMap((line) => {
+    const match = line.match(/^(.+?)：(\d+)\/100$/);
+    return match && labels.has(match[1]) ? [{ label: match[1], value: Number(match[2]) }] : [];
+  });
+}
+
+function MobileTabs({ view, setView, isAdmin }: { view: View; setView: (view: View) => void; isAdmin: boolean }) {
+  const tabs: [View, string][] = [["candidates", "人才"], ["jobs", "岗位"], ["pipeline", "流程"], ["interviews", "面试"], ["offers", "Offer"], ["boss", "BOSS"], ["bi", "BI"], ["agent", "AI"]];
+  if (isAdmin) {
+    tabs.push(["audit", "日志"]);
+    tabs.push(["users", "用户"]);
+  }
+  return (
+    <div className="mobile-module-select mb-4 lg:hidden">
+      <select className="select w-full" value={view} onChange={(event) => setView(event.target.value as View)}>
+        {tabs.map(([key, label]) => <option value={key} key={key}>{label}</option>)}
+      </select>
+    </div>
+  );
+}
+
+function TagList({ tags }: { tags: { tag: string; score: number; category: string }[] }) {
+  const visible = [...tags].sort((a, b) => b.score - a.score || a.tag.localeCompare(b.tag)).slice(0, 8);
+  return (
+    <div className="mt-3 flex flex-wrap gap-1.5">
+      {visible.map((tag) => <span className="chip" key={tag.tag}>{tag.tag} · {tag.score}/5</span>)}
+    </div>
+  );
+}
+
+function StatusLine({ label, value }: { label: string; value: string }) {
+  return <div className="flex justify-between border-b border-line py-2"><span className="text-steel">{label}</span><strong>{value}</strong></div>;
+}
+
+function EmptyState({ icon, text }: { icon: React.ReactNode; text: string }) {
+  return <AntEmpty className="empty-state" image={AntEmpty.PRESENTED_IMAGE_SIMPLE} description={<span>{icon} {text}</span>} />;
+}
+
+function titleFor(view: View) {
+  return {
+    candidates: "人才库",
+    jobs: "岗位匹配",
+    pipeline: "流程看板",
+    interviews: "面试管理",
+    offers: "Offer 管理",
+    boss: "BOSS 半自动闭环",
+    bi: "BI 看板",
+    agent: "AI 助手",
+    audit: "操作日志",
+    users: "用户管理"
+  }[view];
+}
+
+function auditActionLabel(action: string) {
+  return {
+    create: "创建",
+    update: "更新",
+    update_tags: "更新标签",
+    delete: "删除",
+    close: "关闭",
+    restore: "恢复",
+    cancel: "取消",
+    feedback: "提交反馈"
+  }[action] || action;
+}
+
+function auditTargetLabel(target: string) {
+  return {
+    user: "用户",
+    candidate: "候选人",
+    job: "岗位",
+    interview: "面试",
+    offer: "Offer"
+  }[target] || target;
+}
+
+export default App;

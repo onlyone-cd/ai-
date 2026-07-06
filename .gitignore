@@ -1,0 +1,23 @@
+.DS_Store
+Thumbs.db
+
+# Python
+__pycache__/
+*.pyc
+backend/.venv/
+backend/__pycache__/
+backend/app/__pycache__/
+backend/instance/
+backend/uploads/
+backend/*.log
+
+# Node
+frontend/node_modules/
+frontend/dist/
+
+# Environment
+.env
+backend/.env
+
+# Codex local state
+.codex/

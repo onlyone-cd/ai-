@@ -1,0 +1,23 @@
+{
+  "manifest_version": 3,
+  "name": "HireInsight BOSS 简历导入",
+  "version": "0.3.0",
+  "description": "从当前 BOSS 页面采集可见岗位和候选人文本，同步到 HireInsight。",
+  "permissions": ["activeTab", "cookies", "scripting", "storage"],
+  "host_permissions": [
+    "https://www.zhipin.com/*",
+    "https://*.zhipin.com/*",
+    "http://localhost:5001/*",
+    "http://127.0.0.1:5001/*",
+    "http://192.168.*.*:5001/*"
+  ],
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.zhipin.com/*", "https://*.zhipin.com/*"],
+      "js": ["content.js"]
+    }
+  ]
+}

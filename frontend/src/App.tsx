@@ -2590,12 +2590,21 @@ function OrganizationManagementPage() {
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [orgFormOpen, setOrgFormOpen] = useState(false);
+  const [orgFormMode, setOrgFormMode] = useState<"create" | "edit" | null>(null);
+  const [orgQuery, setOrgQuery] = useState("");
   const [unitForm, setUnitForm] = useState({ name: "", unit_type: "department", parent_id: 0, city: "", headcount_plan: "" });
   const [resumeFiles, setResumeFiles] = useState<File[]>([]);
   const flatUnits = useMemo(() => flattenOrganizationUnits(units), [units]);
   const selectedUnit = flatUnits.find((unit) => unit.id === selectedId);
   const selectedPath = useMemo(() => organizationPath(flatUnits, selectedId), [flatUnits, selectedId]);
   const childUnits = selectedUnit?.children || [];
+  const orgOptions = useMemo(() => {
+    const keyword = orgQuery.trim().toLowerCase();
+    if (!keyword) return flatUnits;
+    const matched = flatUnits.filter((unit) => `${unit.name} ${unit.city || ""} ${unit.unit_type || ""}`.toLowerCase().includes(keyword));
+    const current = flatUnits.find((unit) => unit.id === selectedId);
+    return current && !matched.some((unit) => unit.id === current.id) ? [current, ...matched] : matched;
+  }, [flatUnits, orgQuery, selectedId]);
 
   async function load(nextSelectedId = selectedId) {
     const tree = await api.organizationTree();
@@ -2625,6 +2634,7 @@ function OrganizationManagementPage() {
 
   async function selectUnit(id: number) {
     setOrgFormOpen(false);
+    setOrgFormMode(null);
     await load(id);
   }
 
@@ -2641,18 +2651,32 @@ function OrganizationManagementPage() {
         parent_id: unitForm.parent_id || undefined,
         headcount_plan: unitForm.headcount_plan ? Number(unitForm.headcount_plan) : undefined
       };
-      const unit = selectedId ? await api.updateOrganizationUnit(selectedId, payload) : await api.createOrganizationUnit(payload);
+      const unit = orgFormMode === "create" ? await api.createOrganizationUnit(payload) : await api.updateOrganizationUnit(selectedId, payload);
       setMessage(`${unit.name} 已保存`);
       await load(unit.id);
       setOrgFormOpen(false);
+      setOrgFormMode(null);
     } finally {
       setBusy(false);
     }
   }
 
   async function addChild() {
-    setSelectedId(0);
     setUnitForm({ name: "", unit_type: "department", parent_id: selectedId, city: selectedUnit?.city || "", headcount_plan: "" });
+    setOrgFormMode("create");
+    setOrgFormOpen(true);
+  }
+
+  function editCurrentUnit() {
+    if (!selectedUnit) return;
+    setUnitForm({
+      name: selectedUnit.name || "",
+      unit_type: selectedUnit.unit_type || "department",
+      parent_id: selectedUnit.parent_id || 0,
+      city: selectedUnit.city || "",
+      headcount_plan: selectedUnit.headcount_plan ? String(selectedUnit.headcount_plan) : ""
+    });
+    setOrgFormMode("edit");
     setOrgFormOpen(true);
   }
 
@@ -2706,8 +2730,9 @@ function OrganizationManagementPage() {
             <h2 className="font-semibold">组织架构</h2>
             <p className="mt-1 text-xs text-steel">用下拉框定位部门，页面空间主要留给组织维护和员工列表。</p>
             <label className="field-label mt-4">当前组织</label>
+            <input className="input mb-3" value={orgQuery} onChange={(event) => setOrgQuery(event.target.value)} placeholder="搜索组织名称" />
             <select className="select w-full" value={selectedId} onChange={(event) => selectUnit(Number(event.target.value))}>
-              {flatUnits.map((unit) => (
+              {orgOptions.map((unit) => (
                 <option key={unit.id} value={unit.id}>{"　".repeat(unit.depth)}{unit.name}（{unit.employee_count || 0} 人）</option>
               ))}
             </select>
@@ -2779,7 +2804,7 @@ function OrganizationManagementPage() {
             </button>
             {selectedUnit && (
               <>
-                <button className="secondary-button" onClick={() => setOrgFormOpen(true)}>
+                <button className="secondary-button" onClick={editCurrentUnit}>
                   <Check size={17} />
                   编辑组织
                 </button>
@@ -2822,6 +2847,9 @@ function OrganizationManagementPage() {
               <button className="primary-button mt-4 w-full" disabled={busy}>
                 <Check size={17} />
                 保存组织
+              </button>
+              <button className="secondary-button mt-2 w-full" type="button" onClick={() => { setOrgFormOpen(false); setOrgFormMode(null); }}>
+                取消
               </button>
             </form>
             )}

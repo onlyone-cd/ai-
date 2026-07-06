@@ -30,6 +30,7 @@
 - 后端权限边界：人才库详情/简历下载限制为 admin/manager/recruiter，批量 CSV 导出限制为 admin/manager，避免只靠前端隐藏按钮。
 - 后端模块权限：BOSS、AI Agent、BI、Offer、流程总览接口限制为 admin/manager/recruiter，interviewer 不能绕过前端访问业务总览数据。
 - 数据库性能：新增常用查询索引和 Alembic 迁移 `0002_add_query_indexes`，覆盖候选人、标签、岗位、匹配、流程、面试、Offer、BOSS 和审计日志。
+- 数据量保护：核心列表接口统一支持 `limit`/`offset` 分页，并返回 `total`、`has_more`，避免生产环境一次性加载全量数据。
 
 ### 接口变更记录
 
@@ -40,15 +41,15 @@
 - `GET /api/auth/permissions`：获取当前角色权限。
 - `GET /healthz`：生产健康检查，校验服务和数据库连接状态。
 - `GET /api/system/llm/status`：查看 LLM 是否启用、可用、模型、超时和重试配置，不返回密钥。
-- `GET /api/users`：用户列表。
+- `GET /api/users`：用户列表，支持 `limit`/`offset` 分页。
 - `GET /api/users/interviewers`：面试官列表。
 - `POST /api/users`：创建用户。
 - `PATCH /api/users/<id>`：更新用户角色、状态或密码。
-- `GET /api/audit/logs`：审计日志列表。
+- `GET /api/audit/logs`：审计日志列表，支持 `limit`/`offset` 分页。
 
 #### 人才库和简历
 
-- `GET /api/candidates`：候选人列表，支持经验档位过滤。
+- `GET /api/candidates`：候选人列表，支持经验档位过滤和 `limit`/`offset` 分页。
 - `GET /api/candidates/<id>`：候选人详情。
 - `GET /api/candidates/<id>/resume.txt`：导出候选人简历文本。
 - `PATCH /api/candidates/<id>`：更新候选人基础信息。
@@ -60,7 +61,7 @@
 
 #### 岗位和匹配
 
-- `GET /api/jobs`：岗位列表。
+- `GET /api/jobs`：岗位列表，支持 `limit`/`offset` 分页。
 - `GET /api/jobs/<id>`：岗位详情。
 - `POST /api/jobs`：创建岗位。
 - `POST /api/jobs/ai-generate`：AI 生成 JD 和技能权重。
@@ -82,7 +83,7 @@
 
 #### 面试
 
-- `GET /api/interview/assignments`：面试安排列表。
+- `GET /api/interview/assignments`：面试安排列表，支持 `limit`/`offset` 分页。
 - `GET /api/interview/assignments/<id>`：面试安排详情。
 - `POST /api/interview/assignments`：创建面试安排。
 - `PATCH /api/interview/assignments/<id>`：更新面试安排。
@@ -92,14 +93,14 @@
 - `POST /api/interview/assignments/<id>/room-link`：生成候选人面试间链接。
 - `GET /api/interview/assignments/<id>/report.txt`：导出面试报告。
 - `POST /api/interview/feedback`：提交面试反馈。
-- `GET /api/interview/feedback`：查询面试反馈。
+- `GET /api/interview/feedback`：查询面试反馈，支持 `limit`/`offset` 分页。
 - `GET /api/public/interview-room/<token>`：候选人面试间详情。
 - `POST /api/public/interview-room/<token>/turn`：AI 面试官追问/解释题目。
 - `POST /api/public/interview-room/<token>/complete`：完成面试并同步结果。
 
 #### Offer
 
-- `GET /api/offers`：Offer 列表。
+- `GET /api/offers`：Offer 列表，支持 `limit`/`offset` 分页。
 - `GET /api/offers/<id>`：Offer 详情。
 - `GET /api/offers/<id>/letter.txt`：导出 Offer 确认函。
 - `POST /api/offers`：创建 Offer。
@@ -122,14 +123,14 @@
 - `GET /api/boss/extension.zip`：下载 Chrome 扩展。
 - `POST /api/boss/login/browser-cookie`：绑定当前浏览器登录态指纹。
 - `POST /api/boss/accounts/<id>/verify`：校验 BOSS 登录态。
-- `GET /api/boss/candidates/inbox`：BOSS 已同步候选人收件箱。
+- `GET /api/boss/candidates/inbox`：BOSS 已同步候选人收件箱，支持 `limit`/`offset` 分页。
 - `POST /api/boss/candidates/batch-import`：批量导入 BOSS 候选人。
 - `POST /api/boss/candidates/ai-screen`：将 BOSS 候选人写入 AI 初筛流程。
 - `POST /api/boss/screen-resume/import`：导入当前 BOSS 简历页。
-- `GET /api/boss/jobs`：BOSS 同步岗位列表。
+- `GET /api/boss/jobs`：BOSS 同步岗位列表，支持 `limit`/`offset` 分页。
 - `POST /api/boss/jobs/batch-import`：批量同步 BOSS 岗位。
 - `GET /api/boss/jobs/<id>/recommendations`：按 BOSS 岗位推荐 BOSS 候选人。
-- `POST /api/boss/messages/draft`、`GET/PATCH/DELETE /api/boss/messages/drafts...`：历史话术接口，当前前端已不再使用。
+- `POST /api/boss/messages/draft`、`GET/PATCH/DELETE /api/boss/messages/drafts...`：历史话术接口，列表支持 `limit`/`offset` 分页，当前前端已不再使用。
 
 #### AI Agent
 
@@ -139,7 +140,6 @@
 ### 已知剩余事项
 
 - BOSS 同步仍基于浏览器插件采集当前账号可见页面，不是 BOSS 官方开放平台 API。
-- 数据库迁移体系尚未接入，当前仍依赖 `db.create_all()` 和轻量 SQLite schema patch。
 - BOSS 历史话术后端接口仍保留用于兼容旧数据，前端已不再展示。
 - 面试间还缺正式上线级录音留存、转写失败重试、设备检测和异常恢复。
 - 前端缺少 Playwright/E2E 自动化测试。

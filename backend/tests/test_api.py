@@ -194,6 +194,39 @@ def test_audit_logs_record_sensitive_actions(client, admin_headers):
     assert AuditLog.query.count() >= 2
 
 
+def test_list_endpoints_return_pagination_meta(client, admin_headers):
+    client.patch("/api/candidates/1", headers=admin_headers, json={"name_masked": "分页审计候选人"})
+
+    candidates = client.get("/api/candidates?limit=2&offset=1", headers=admin_headers)
+    assert candidates.status_code == 200
+    candidate_data = candidates.get_json()["data"]
+    assert len(candidate_data["items"]) == 2
+    assert candidate_data["total"] >= 4
+    assert candidate_data["limit"] == 2
+    assert candidate_data["offset"] == 1
+    assert candidate_data["has_more"] is True
+
+    jobs = client.get("/api/jobs?limit=1", headers=admin_headers)
+    assert jobs.status_code == 200
+    job_data = jobs.get_json()["data"]
+    assert len(job_data["items"]) == 1
+    assert job_data["total"] >= 3
+    assert job_data["limit"] == 1
+    assert job_data["offset"] == 0
+
+    users = client.get("/api/users?limit=1", headers=admin_headers)
+    assert users.status_code == 200
+    user_data = users.get_json()["data"]
+    assert len(user_data["items"]) == 1
+    assert user_data["total"] >= 3
+
+    audits = client.get("/api/audit/logs?limit=1", headers=admin_headers)
+    assert audits.status_code == 200
+    audit_data = audits.get_json()["data"]
+    assert len(audit_data["items"]) == 1
+    assert audit_data["total"] >= 1
+
+
 def test_candidate_resume_export(client, admin_headers):
     response = client.get("/api/candidates/1/resume.txt", headers=admin_headers)
 

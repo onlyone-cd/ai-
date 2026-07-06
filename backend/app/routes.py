@@ -68,12 +68,40 @@ def system_llm_status(user):
     return ok(llm_status())
 
 
+def pagination_params(default_limit=50, max_limit=200):
+    limit = request.args.get("limit", default_limit, type=int)
+    offset = request.args.get("offset", 0, type=int)
+    if limit is None or limit <= 0:
+        limit = default_limit
+    if offset is None or offset < 0:
+        offset = 0
+    limit = min(limit, max_limit)
+    return limit, offset
+
+
+def pagination_meta(total, limit, offset):
+    return {"total": total, "limit": limit, "offset": offset, "has_more": offset + limit < total}
+
+
+def paginate_query(query, default_limit=50, max_limit=200):
+    limit, offset = pagination_params(default_limit, max_limit)
+    total = query.count()
+    items = query.limit(limit).offset(offset).all()
+    return items, pagination_meta(total, limit, offset)
+
+
+def paginate_items(items, default_limit=50, max_limit=200):
+    limit, offset = pagination_params(default_limit, max_limit)
+    total = len(items)
+    return items[offset : offset + limit], pagination_meta(total, limit, offset)
+
+
 @api.get("/users")
 @login_required
 @roles_required("admin")
 def list_users(user):
-    users = User.query.order_by(User.id.asc()).all()
-    return ok({"items": [with_permissions(item) for item in users]})
+    users, meta = paginate_query(User.query.order_by(User.id.asc()))
+    return ok({"items": [with_permissions(item) for item in users], **meta})
 
 
 @api.get("/users/interviewers")
@@ -91,7 +119,8 @@ def list_audit_logs(user):
     target_type = request.args.get("target_type")
     if target_type:
         query = query.filter_by(target_type=target_type)
-    return ok({"items": [item.to_dict() for item in query.limit(100).all()]})
+    logs, meta = paginate_query(query, default_limit=100, max_limit=500)
+    return ok({"items": [item.to_dict() for item in logs], **meta})
 
 
 @api.post("/users")
@@ -157,14 +186,21 @@ def update_user(user, user_id):
 def list_candidates(user):
     query = Candidate.query.order_by(Candidate.created_at.desc())
     experience_level = request.args.get("experience_level")
-    candidates = [candidate for candidate in query.all()]
     if experience_level and experience_level != "all":
-        candidates = [candidate for candidate in candidates if candidate.resume_json.get("experience_analysis", {}).get("level") == experience_level]
+        filtered = [
+            candidate
+            for candidate in query.all()
+            if candidate.resume_json.get("experience_analysis", {}).get("level") == experience_level
+        ]
+        candidates, meta = paginate_items(filtered)
+    else:
+        candidates, meta = paginate_query(query)
     return ok(
         {
             "items": [candidate.to_dict() for candidate in candidates],
             "experience_stats": experience_stats(candidates),
             "visible_scope": user.role,
+            **meta,
         }
     )
 
@@ -354,11 +390,11 @@ def retry_parse_resume(user, candidate_id):
 @api.get("/jobs")
 @login_required
 def list_jobs(user):
-    jobs = Job.query.order_by(Job.created_at.desc()).all()
+    jobs, meta = paginate_query(Job.query.order_by(Job.created_at.desc()))
     for job in jobs:
         job.jd_structured = ensure_jd_structured(job)
     db.session.commit()
-    return ok({"items": [job.to_dict() for job in jobs]})
+    return ok({"items": [job.to_dict() for job in jobs], **meta})
 
 
 @api.get("/jobs/<int:job_id>")
@@ -618,7 +654,8 @@ def list_interview_assignments(user):
         query = query.filter_by(candidate_id=candidate_id)
     if user.role == "interviewer":
         query = query.filter_by(interviewer_id=user.id)
-    return ok({"items": [item.to_dict() for item in query.all()]})
+    assignments, meta = paginate_query(query)
+    return ok({"items": [item.to_dict() for item in assignments], **meta})
 
 
 @api.get("/interview/assignments/<int:assignment_id>")
@@ -867,7 +904,8 @@ def list_interview_feedback(user):
     query = InterviewFeedback.query.order_by(InterviewFeedback.created_at.desc())
     if assignment_id:
         query = query.filter_by(assignment_id=assignment_id)
-    return ok({"items": [item.to_dict() for item in query.all()]})
+    feedback, meta = paginate_query(query)
+    return ok({"items": [item.to_dict() for item in feedback], **meta})
 
 
 @api.get("/interview/assignments/<int:assignment_id>/report.txt")
@@ -905,7 +943,8 @@ def list_offers(user):
         query = query.filter_by(job_id=job_id)
     if candidate_id:
         query = query.filter_by(candidate_id=candidate_id)
-    return ok({"items": [item.to_dict() for item in query.all()], "statuses": sorted(OFFER_STATUSES)})
+    offers, meta = paginate_query(query)
+    return ok({"items": [item.to_dict() for item in offers], "statuses": sorted(OFFER_STATUSES), **meta})
 
 
 @api.get("/offers/<int:offer_id>")
@@ -1269,16 +1308,19 @@ def verify_boss_account(user, account_id):
 @login_required
 @roles_required("admin", "manager", "recruiter")
 def boss_inbox(user):
-    candidates = valid_boss_candidates(limit=100)[:50]
-    return ok({"items": [boss_inbox_item(candidate) for candidate in candidates]})
+    limit, offset = pagination_params()
+    candidates = valid_boss_candidates(limit=max(1000, offset + limit))
+    total = len(candidates)
+    page = candidates[offset : offset + limit]
+    return ok({"items": [boss_inbox_item(candidate) for candidate in page], **pagination_meta(total, limit, offset)})
 
 
 @api.get("/boss/jobs")
 @login_required
 @roles_required("admin", "manager", "recruiter")
 def boss_jobs(user):
-    jobs = Job.query.filter(Job.job_code.like("BOSS-%")).order_by(Job.created_at.desc()).all()
-    return ok({"items": [job.to_dict() for job in jobs]})
+    jobs, meta = paginate_query(Job.query.filter(Job.job_code.like("BOSS-%")).order_by(Job.created_at.desc()))
+    return ok({"items": [job.to_dict() for job in jobs], **meta})
 
 
 @api.post("/boss/jobs/batch-import")
@@ -1445,8 +1487,8 @@ def boss_message_draft(user):
 @api.get("/boss/messages/drafts")
 @login_required
 def list_boss_drafts(user):
-    drafts = BossDraft.query.order_by(BossDraft.created_at.desc()).all()
-    return ok({"items": [draft.to_dict() for draft in drafts]})
+    drafts, meta = paginate_query(BossDraft.query.order_by(BossDraft.created_at.desc()))
+    return ok({"items": [draft.to_dict() for draft in drafts], **meta})
 
 
 @api.patch("/boss/messages/drafts/<int:draft_id>")

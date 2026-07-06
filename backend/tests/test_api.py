@@ -1,7 +1,10 @@
 from io import BytesIO
 import zipfile
 
-from app import db
+import pytest
+
+from app import create_app, db
+from app.config import Config
 from app.models import AuditLog, BossDraft, Candidate, CandidateTag, InterviewAssignment, InterviewFeedback, Job, Match, OfferRecord, PipelineStage
 
 
@@ -19,6 +22,29 @@ def test_auth_is_required_for_business_api(client):
 
     assert response.status_code == 401
     assert response.get_json()["code"] == "UNAUTHORIZED"
+    assert response.headers["X-Request-ID"]
+
+
+def test_healthz_reports_database_and_security_headers(client):
+    response = client.get("/healthz", headers={"X-Request-ID": "test-request-id"})
+
+    assert response.status_code == 200
+    assert response.get_json()["status"] == "ok"
+    assert response.headers["X-Request-ID"] == "test-request-id"
+    assert response.headers["X-Content-Type-Options"] == "nosniff"
+
+
+def test_production_config_rejects_demo_secret_and_sqlite():
+    class UnsafeProductionConfig(Config):
+        TESTING = False
+        ENVIRONMENT = "production"
+        JWT_SECRET = "demo-secret"
+        CORS_ORIGINS = ["*"]
+        SQLALCHEMY_DATABASE_URI = "sqlite:///:memory:"
+        SEED_DEMO_DATA = True
+
+    with pytest.raises(RuntimeError, match="生产配置不安全"):
+        create_app(UnsafeProductionConfig)
 
 
 def test_admin_can_manage_users(client, admin_headers, recruiter_headers):
@@ -894,6 +920,44 @@ def test_resume_upload_accepts_multiple_files_and_zip(client, admin_headers):
     assert data["success_count"] == 2
     assert data["failed_count"] == 0
     assert {item["name_masked"] for item in data["candidates"]} >= {"王开发", "赵会计"}
+
+
+def test_resume_upload_rejects_too_many_files(app, client, admin_headers):
+    app.config["MAX_UPLOAD_FILES"] = 1
+
+    response = client.post(
+        "/api/resume/upload",
+        headers=admin_headers,
+        data={
+            "files": [
+                (BytesIO("姓名：一号\n手机：13800000001\n3 年 Java 开发经验。".encode("utf-8")), "one.txt"),
+                (BytesIO("姓名：二号\n手机：13800000002\n3 年 Python 开发经验。".encode("utf-8")), "two.txt"),
+            ]
+        },
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 413
+    assert response.get_json()["code"] == "TOO_MANY_FILES"
+
+
+def test_resume_upload_rejects_unsafe_zip_path(client, admin_headers):
+    zip_buffer = BytesIO()
+    with zipfile.ZipFile(zip_buffer, "w") as archive:
+        archive.writestr("../evil.txt", "姓名：路径风险\n手机：13800000003\n3 年 Java 开发经验。")
+    zip_buffer.seek(0)
+
+    response = client.post(
+        "/api/resume/upload",
+        headers=admin_headers,
+        data={"file": (zip_buffer, "unsafe.zip")},
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 400
+    data = response.get_json()
+    assert data["code"] == "PARSE_FAILED"
+    assert data["details"]["errors"][0]["error"] == "压缩包路径不安全，已跳过"
 
 
 def test_resume_upload_updates_duplicate_by_phone(client, admin_headers):

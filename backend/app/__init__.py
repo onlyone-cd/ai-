@@ -1,12 +1,15 @@
 from pathlib import Path
 from time import time
 from collections import defaultdict, deque
+import logging
+import uuid
 
 from dotenv import load_dotenv
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, g, jsonify, request, send_from_directory
 from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
 from sqlalchemy import text
+from werkzeug.exceptions import HTTPException, RequestEntityTooLarge
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 db = SQLAlchemy()
@@ -19,6 +22,8 @@ def create_app(config_object=None):
 
     app = Flask(__name__, static_folder=None)
     app.config.from_object(config_object or Config)
+    configure_logging(app)
+    validate_production_config(app)
     proxy_count = int(app.config.get("TRUST_PROXY_COUNT", 1))
     if proxy_count:
         app.wsgi_app = ProxyFix(app.wsgi_app, x_for=proxy_count, x_proto=proxy_count, x_host=proxy_count)
@@ -29,6 +34,11 @@ def create_app(config_object=None):
     from .routes import api
 
     app.register_blueprint(api, url_prefix="/api")
+
+    @app.before_request
+    def attach_request_id():
+        request_id = request.headers.get("X-Request-ID") or uuid.uuid4().hex
+        g.request_id = request_id[:64]
 
     @app.before_request
     def apply_rate_limit():
@@ -43,7 +53,7 @@ def create_app(config_object=None):
         while bucket and now - bucket[0] > 60:
             bucket.popleft()
         if len(bucket) >= limit:
-            return jsonify({"error": "请求过于频繁，请稍后再试", "code": "RATE_LIMITED", "details": {}}), 429
+            return jsonify({"error": "请求过于频繁，请稍后再试", "code": "RATE_LIMITED", "details": {}, "request_id": g.request_id}), 429
         bucket.append(now)
         return None
 
@@ -56,7 +66,21 @@ def create_app(config_object=None):
             response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(self), geolocation=()")
             if request.is_secure:
                 response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+        response.headers.setdefault("X-Request-ID", getattr(g, "request_id", ""))
         return response
+
+    @app.errorhandler(RequestEntityTooLarge)
+    def handle_payload_too_large(exc):
+        return jsonify({"error": "上传内容超过大小限制", "code": "PAYLOAD_TOO_LARGE", "details": {}, "request_id": getattr(g, "request_id", "")}), 413
+
+    @app.errorhandler(HTTPException)
+    def handle_http_exception(exc):
+        return jsonify({"error": exc.description or "请求失败", "code": exc.name.upper().replace(" ", "_"), "details": {}, "request_id": getattr(g, "request_id", "")}), exc.code
+
+    @app.errorhandler(Exception)
+    def handle_unexpected_error(exc):
+        app.logger.exception("Unhandled request error", extra={"request_id": getattr(g, "request_id", "")})
+        return jsonify({"error": "服务器内部错误", "code": "INTERNAL_SERVER_ERROR", "details": {}, "request_id": getattr(g, "request_id", "")}), 500
 
     @app.get("/health")
     @app.get("/healthz")
@@ -98,3 +122,25 @@ def ensure_sqlite_schema():
     if "ai_plan" not in columns:
         db.session.execute(text("ALTER TABLE interview_assignment ADD COLUMN ai_plan JSON NOT NULL DEFAULT '{}'"))
         db.session.commit()
+
+
+def configure_logging(app):
+    logging.basicConfig(level=getattr(logging, str(app.config.get("LOG_LEVEL", "INFO")).upper(), logging.INFO))
+
+
+def validate_production_config(app):
+    if app.config.get("TESTING"):
+        return
+    if app.config["ENVIRONMENT"].lower() != "production":
+        return
+    problems = []
+    if app.config["JWT_SECRET"] in {"demo-secret", "test-secret"} or len(app.config["JWT_SECRET"]) < 32:
+        problems.append("JWT_SECRET 必须替换为至少 32 位随机字符串")
+    if app.config["CORS_ORIGINS"] == ["*"]:
+        problems.append("生产环境 CORS_ORIGINS 不能使用 *")
+    if app.config["SQLALCHEMY_DATABASE_URI"].startswith("sqlite"):
+        problems.append("生产环境必须使用 PostgreSQL/MySQL，不能使用 SQLite")
+    if app.config["SEED_DEMO_DATA"]:
+        problems.append("生产环境必须设置 SEED_DEMO_DATA=false")
+    if problems:
+        raise RuntimeError("生产配置不安全：" + "；".join(problems))

@@ -1,4 +1,4 @@
-from flask import jsonify
+from flask import g, jsonify, has_request_context
 
 
 def ok(data=None, message=""):
@@ -6,4 +6,5 @@ def ok(data=None, message=""):
 
 
 def error(message, code="VALIDATION_ERROR", status=400, details=None):
-    return jsonify({"error": message, "code": code, "details": details or {}}), status
+    request_id = getattr(g, "request_id", "") if has_request_context() else ""
+    return jsonify({"error": message, "code": code, "details": details or {}, "request_id": request_id}), status

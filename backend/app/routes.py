@@ -28,6 +28,7 @@ api = Blueprint("api", __name__)
 STAGES = ["pending", "ai_screen", "business_review", "interview_first", "interview_second", "offer", "onboarded", "rejected"]
 OFFER_STATUSES = {"draft", "sent", "accepted", "declined", "cancelled"}
 LOGIN_FAILURES = {}
+PUBLIC_INTERVIEW_REQUESTS = {}
 
 
 @api.post("/auth/login")
@@ -655,6 +656,9 @@ def interview_room_link(user, assignment_id):
 
 @api.get("/public/interview-room/<token>")
 def public_interview_room(token):
+    limited = public_interview_rate_limit(token)
+    if limited:
+        return limited
     assignment = assignment_from_room_token(token, allow_completed=True)
     if not assignment:
         return error("面试间链接无效或已过期", "INVALID_INTERVIEW_ROOM", 404)
@@ -663,19 +667,31 @@ def public_interview_room(token):
 
 @api.post("/public/interview-room/<token>/turn")
 def public_interview_turn(token):
+    limited = public_interview_rate_limit(token)
+    if limited:
+        return limited
     assignment = assignment_from_room_token(token)
     if not assignment:
         return error("面试间链接无效或已过期", "INVALID_INTERVIEW_ROOM", 404)
     payload = request.get_json(force=True)
+    payload_error = validate_public_interview_payload(payload, complete=False)
+    if payload_error:
+        return payload_error
     return ok(build_interview_turn_reply(assignment, payload))
 
 
 @api.post("/public/interview-room/<token>/complete")
 def public_interview_complete(token):
+    limited = public_interview_rate_limit(token)
+    if limited:
+        return limited
     assignment = assignment_from_room_token(token)
     if not assignment:
         return error("面试间链接无效或已过期", "INVALID_INTERVIEW_ROOM", 404)
     payload = request.get_json(force=True)
+    payload_error = validate_public_interview_payload(payload, complete=True)
+    if payload_error:
+        return payload_error
     feedback = save_public_interview_feedback(assignment, payload)
     closing = "本次 AI 面试已结束，感谢你的参与。面试结果已同步给招聘团队，请等待后续通知。"
     return ok({"assignment": assignment.to_dict(), "feedback": feedback.to_dict(), "closing": closing}, "AI 面试已同步到面试管理")
@@ -2128,11 +2144,12 @@ def latest_pipeline_item(job_id, candidate_id):
 
 def issue_interview_room_token(assignment_id):
     now = datetime.now(timezone.utc)
+    expires_at = now + timedelta(hours=int(current_app.config.get("INTERVIEW_ROOM_TOKEN_HOURS", 72)))
     payload = {
         "scope": "interview_room",
         "assignment_id": assignment_id,
         "iat": int(now.timestamp()),
-        "exp": int((now + timedelta(days=7)).timestamp()),
+        "exp": int(expires_at.timestamp()),
     }
     return jwt.encode(payload, current_app.config["JWT_SECRET"], algorithm="HS256")
 
@@ -2507,6 +2524,44 @@ def record_login_failure(key):
         entry["locked_until"] = time() + lock_seconds
         return lock_seconds
     return 0
+
+
+def public_interview_rate_limit(token):
+    limit = max(1, int(current_app.config.get("PUBLIC_INTERVIEW_MAX_REQUESTS_PER_MINUTE", 60)))
+    now = time()
+    token_fingerprint = hashlib.sha256(str(token or "").encode("utf-8")).hexdigest()[:16]
+    key = f"{token_fingerprint}|{request.remote_addr or 'unknown'}"
+    bucket = PUBLIC_INTERVIEW_REQUESTS.setdefault(key, [])
+    PUBLIC_INTERVIEW_REQUESTS[key] = [item for item in bucket if now - item < 60]
+    bucket = PUBLIC_INTERVIEW_REQUESTS[key]
+    if len(bucket) >= limit:
+        return error("面试间请求过于频繁，请稍后再试", "PUBLIC_INTERVIEW_RATE_LIMITED", 429)
+    bucket.append(now)
+    return None
+
+
+def validate_public_interview_payload(payload, complete=False):
+    payload = payload or {}
+    max_answer_chars = max(200, int(current_app.config.get("PUBLIC_INTERVIEW_MAX_ANSWER_CHARS", 4000)))
+    max_messages = max(1, int(current_app.config.get("PUBLIC_INTERVIEW_MAX_MESSAGES", 80)))
+    max_cheat_events = max(0, int(current_app.config.get("PUBLIC_INTERVIEW_MAX_CHEAT_EVENTS", 100)))
+    text_values = [
+        str(payload.get("question") or ""),
+        str(payload.get("answer") or ""),
+        str(payload.get("candidate_question") or ""),
+    ]
+    if any(len(value) > max_answer_chars for value in text_values):
+        return error("面试回答内容过长，请精简后重试", "PUBLIC_INTERVIEW_PAYLOAD_TOO_LARGE", 413)
+    if complete:
+        answers = payload.get("answers") or []
+        messages = payload.get("messages") or []
+        cheat_events = payload.get("cheat_events") or []
+        if len(answers) > max_messages or len(messages) > max_messages or len(cheat_events) > max_cheat_events:
+            return error("面试提交内容超过限制", "PUBLIC_INTERVIEW_PAYLOAD_TOO_LARGE", 413)
+        combined = " ".join(str(item) for item in answers[-max_messages:]) + " ".join(str(item) for item in messages[-max_messages:]) + " ".join(str(item) for item in cheat_events[-max_cheat_events:])
+        if len(combined) > max_answer_chars * max(1, max_messages // 2):
+            return error("面试提交内容超过限制", "PUBLIC_INTERVIEW_PAYLOAD_TOO_LARGE", 413)
+    return None
 
 
 def summarize_text(text, limit=120):

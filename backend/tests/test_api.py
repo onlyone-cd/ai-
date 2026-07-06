@@ -1,8 +1,10 @@
 from io import BytesIO
 import json
 import urllib.error
+from datetime import datetime, timezone
 import zipfile
 
+import jwt
 import pytest
 
 from app import create_app, db
@@ -442,6 +444,47 @@ def test_public_interview_room_and_turn_work_without_login(client, admin_headers
     assert reopened.get_json()["data"]["assignment"]["status"] == "completed"
     assert blocked_turn.status_code == 404
     assert InterviewFeedback.query.filter_by(assignment_id=assignment["id"]).count() == 1
+
+
+def test_public_interview_room_token_uses_configured_expiry(client, admin_headers, app):
+    app.config["INTERVIEW_ROOM_TOKEN_HOURS"] = 2
+    assignment = client.post(
+        "/api/interview/assignments",
+        headers=admin_headers,
+        json={"candidate_id": 1, "job_id": 1, "interviewer_id": 2, "round": "interview_first", "scheduled_at": "2026-07-03T10:00:00"},
+    ).get_json()["data"]
+
+    link = client.post(f"/api/interview/assignments/{assignment['id']}/room-link", headers=admin_headers).get_json()["data"]
+    payload = jwt.decode(link["token"], app.config["JWT_SECRET"], algorithms=["HS256"])
+    expires_at = datetime.fromtimestamp(payload["exp"], tz=timezone.utc)
+    issued_at = datetime.fromtimestamp(payload["iat"], tz=timezone.utc)
+
+    assert 7100 <= (expires_at - issued_at).total_seconds() <= 7300
+
+
+def test_public_interview_room_rate_limit_and_payload_limit(client, admin_headers, app):
+    app.config["PUBLIC_INTERVIEW_MAX_REQUESTS_PER_MINUTE"] = 2
+    app.config["PUBLIC_INTERVIEW_MAX_ANSWER_CHARS"] = 200
+    assignment = client.post(
+        "/api/interview/assignments",
+        headers=admin_headers,
+        json={"candidate_id": 1, "job_id": 1, "interviewer_id": 2, "round": "interview_first", "scheduled_at": "2026-07-03T10:00:00"},
+    ).get_json()["data"]
+    link = client.post(f"/api/interview/assignments/{assignment['id']}/room-link", headers=admin_headers).get_json()["data"]
+
+    assert client.get(f"/api/public/interview-room/{link['token']}").status_code == 200
+    assert client.get(f"/api/public/interview-room/{link['token']}").status_code == 200
+    limited = client.get(f"/api/public/interview-room/{link['token']}")
+    assert limited.status_code == 429
+    assert limited.get_json()["code"] == "PUBLIC_INTERVIEW_RATE_LIMITED"
+
+    app.config["PUBLIC_INTERVIEW_MAX_REQUESTS_PER_MINUTE"] = 100
+    too_large = client.post(
+        f"/api/public/interview-room/{link['token']}/turn",
+        json={"question": "请介绍项目", "answer": "x" * 1000},
+    )
+    assert too_large.status_code == 413
+    assert too_large.get_json()["code"] == "PUBLIC_INTERVIEW_PAYLOAD_TOO_LARGE"
 
 
 def test_interview_report_export(client, admin_headers):

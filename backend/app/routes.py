@@ -1,4 +1,4 @@
-from collections import Counter
+from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta, timezone
 import csv
 import hashlib
@@ -939,6 +939,50 @@ def delete_job_relations(job_id):
         InterviewAssignment.query.filter(InterviewAssignment.id.in_(assignment_ids)).delete(synchronize_session=False)
 
 
+def normalize_job_title(title):
+    text = re.sub(r"\s+", "", str(title or "").lower())
+    text = re.sub(r"[（(].*?[）)]", "", text)
+    return text.strip()
+
+
+def job_relation_counts(job):
+    latest_items = latest_pipeline_items(job.id)
+    recruiting_count = sum(1 for item in latest_items if item.stage not in {"onboarded", "rejected"})
+    onboarded_pipeline_count = sum(1 for item in latest_items if item.stage == "onboarded")
+    employee_count = EmployeeProfile.query.filter_by(current_job_id=job.id).count()
+    active_employee_count = EmployeeProfile.query.filter_by(current_job_id=job.id, employment_status="active").count()
+    return {
+        "match_count": Match.query.filter_by(job_id=job.id).count(),
+        "pipeline_count": len(latest_items),
+        "recruiting_count": recruiting_count,
+        "onboarded_pipeline_count": onboarded_pipeline_count,
+        "employee_count": employee_count,
+        "active_employee_count": active_employee_count,
+        "interview_count": InterviewAssignment.query.filter_by(job_id=job.id).count(),
+        "offer_count": OfferRecord.query.filter_by(job_id=job.id).count(),
+        "boss_draft_count": BossDraft.query.filter_by(job_id=job.id).count(),
+    }
+
+
+def job_with_relation_counts(job):
+    data = job.to_dict()
+    data.update(job_relation_counts(job))
+    return data
+
+
+def dedupe_target_matches(job_id):
+    matches = Match.query.filter_by(job_id=job_id).order_by(Match.candidate_id.asc(), Match.score.desc(), Match.id.asc()).all()
+    seen = set()
+    removed = 0
+    for item in matches:
+        if item.candidate_id in seen:
+            db.session.delete(item)
+            removed += 1
+        else:
+            seen.add(item.candidate_id)
+    return removed
+
+
 @api.post("/resume/upload")
 @login_required
 @roles_required("admin", "manager", "recruiter")
@@ -1021,6 +1065,90 @@ def list_jobs(user):
         job.jd_structured = ensure_jd_structured(job)
     db.session.commit()
     return ok({"items": [job.to_dict() for job in jobs], **meta})
+
+
+@api.get("/jobs/duplicates")
+@login_required
+@roles_required("admin", "manager", "recruiter")
+def job_duplicates(user):
+    groups = defaultdict(list)
+    for job in Job.query.order_by(Job.title.asc(), Job.created_at.asc()).all():
+        key = normalize_job_title(job.title)
+        if key:
+            job.jd_structured = ensure_jd_structured(job)
+            groups[key].append(job)
+    db.session.commit()
+    items = []
+    for key, jobs in groups.items():
+        if len(jobs) < 2:
+            continue
+        items.append(
+            {
+                "key": key,
+                "title": jobs[0].title,
+                "count": len(jobs),
+                "jobs": [job_with_relation_counts(job) for job in sorted(jobs, key=lambda item: (item.status != "active", item.created_at or datetime.min, item.id))],
+            }
+        )
+    items.sort(key=lambda item: item["count"], reverse=True)
+    return ok({"items": items, "total_groups": len(items), "duplicate_job_count": sum(item["count"] - 1 for item in items)})
+
+
+@api.post("/jobs/merge")
+@login_required
+@roles_required("admin", "manager")
+def merge_jobs(user):
+    payload = request.get_json(force=True)
+    target_id = int(payload.get("target_job_id") or 0)
+    duplicate_ids = [int(item) for item in payload.get("duplicate_job_ids") or [] if int(item) != target_id]
+    if not target_id or not duplicate_ids:
+        return error("请选择保留岗位和需要合并的重复岗位")
+    target = db.session.get(Job, target_id)
+    duplicates = Job.query.filter(Job.id.in_(duplicate_ids)).all()
+    if not target or len(duplicates) != len(set(duplicate_ids)):
+        return error("岗位不存在", "NOT_FOUND", 404)
+
+    before_counts = {job.id: job_relation_counts(job) for job in [target, *duplicates]}
+    if not target.city:
+        target.city = next((job.city for job in duplicates if job.city), target.city)
+    if not target.department:
+        target.department = next((job.department for job in duplicates if job.department), target.department)
+    if not target.job_code:
+        target.job_code = next((job.job_code for job in duplicates if job.job_code), target.job_code)
+    if not target.jd_text:
+        target.jd_text = next((job.jd_text for job in duplicates if job.jd_text), target.jd_text)
+
+    for duplicate_id in duplicate_ids:
+        Match.query.filter_by(job_id=duplicate_id).update({"job_id": target_id}, synchronize_session=False)
+        PipelineStage.query.filter_by(job_id=duplicate_id).update({"job_id": target_id}, synchronize_session=False)
+        InterviewAssignment.query.filter_by(job_id=duplicate_id).update({"job_id": target_id}, synchronize_session=False)
+        OfferRecord.query.filter_by(job_id=duplicate_id).update({"job_id": target_id}, synchronize_session=False)
+        BossDraft.query.filter_by(job_id=duplicate_id).update({"job_id": target_id}, synchronize_session=False)
+        EmployeeProfile.query.filter_by(current_job_id=duplicate_id).update({"current_job_id": target_id}, synchronize_session=False)
+        EmployeeAnalysis.query.filter_by(job_id=duplicate_id).update({"job_id": target_id}, synchronize_session=False)
+        EmployeeRecommendation.query.filter_by(target_job_id=duplicate_id).update({"target_job_id": target_id}, synchronize_session=False)
+
+    removed_matches = dedupe_target_matches(target_id)
+    deleted_titles = [job.title for job in duplicates]
+    for job in duplicates:
+        db.session.delete(job)
+    audit_log(
+        user,
+        "merge",
+        "job",
+        target.id,
+        target.title,
+        {"merged_job_ids": duplicate_ids, "merged_titles": deleted_titles, "before_counts": before_counts, "removed_duplicate_matches": removed_matches},
+    )
+    db.session.commit()
+    return ok(
+        {
+            "target": job_with_relation_counts(target),
+            "merged_job_ids": duplicate_ids,
+            "removed_duplicate_matches": removed_matches,
+        },
+        f"已合并 {len(duplicate_ids)} 个重复岗位，关联数据已迁移到「{target.title}」",
+    )
 
 
 @api.get("/jobs/<int:job_id>")

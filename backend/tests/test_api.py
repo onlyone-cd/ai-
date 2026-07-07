@@ -1413,6 +1413,43 @@ def test_delete_job_cascades_related_records(client, admin_headers, app):
         assert BossDraft.query.filter_by(job_id=job["id"]).count() == 0
 
 
+def test_merge_duplicate_jobs_reassigns_related_records(client, admin_headers, app):
+    target = client.post(
+        "/api/jobs",
+        headers=admin_headers,
+        json={"title": "测试工程师", "city": "长沙", "department": "质量部", "jd_text": "需要测试。", "skill_tags_raw": "测试 4"},
+    ).get_json()["data"]
+    duplicate = client.post(
+        "/api/jobs",
+        headers=admin_headers,
+        json={"title": "测试工程师", "city": "长沙", "department": "质量部", "jd_text": "需要测试。", "skill_tags_raw": "测试 4"},
+    ).get_json()["data"]
+    client.post(f"/api/jobs/{duplicate['id']}/batch-pipeline", headers=admin_headers, json={"candidate_id": 1})
+    client.post("/api/interview/assignments", headers=admin_headers, json={"candidate_id": 1, "job_id": duplicate["id"], "interviewer_id": 2, "round": "interview_first", "scheduled_at": "2026-07-03T10:00:00"})
+    client.post("/api/offers", headers=admin_headers, json={"candidate_id": 1, "job_id": duplicate["id"]})
+    client.post("/api/boss/messages/draft", headers=admin_headers, json={"candidate_id": 1, "job_id": duplicate["id"]})
+    with app.app_context():
+        employee = EmployeeProfile(owner_hr_id=1, current_job_id=duplicate["id"], name="内部员工", current_title="测试工程师")
+        db.session.add(employee)
+        db.session.commit()
+
+    duplicates_response = client.get("/api/jobs/duplicates", headers=admin_headers)
+    assert duplicates_response.status_code == 200
+    assert any(item["title"] == "测试工程师" for item in duplicates_response.get_json()["data"]["items"])
+
+    response = client.post("/api/jobs/merge", headers=admin_headers, json={"target_job_id": target["id"], "duplicate_job_ids": [duplicate["id"]]})
+
+    assert response.status_code == 200
+    with app.app_context():
+        assert db.session.get(Job, duplicate["id"]) is None
+        assert PipelineStage.query.filter_by(job_id=target["id"], candidate_id=1).count() >= 1
+        assert PipelineStage.query.filter_by(job_id=duplicate["id"]).count() == 0
+        assert InterviewAssignment.query.filter_by(job_id=target["id"]).count() == 1
+        assert OfferRecord.query.filter_by(job_id=target["id"]).count() == 1
+        assert BossDraft.query.filter_by(job_id=target["id"]).count() == 1
+        assert EmployeeProfile.query.filter_by(current_job_id=target["id"]).count() >= 1
+
+
 def test_agent_uses_readonly_offer_and_match_tools(client, admin_headers):
     client.post("/api/offers", headers=admin_headers, json={"candidate_id": 1, "job_id": 1, "status": "sent"})
 

@@ -2595,19 +2595,23 @@ function OrganizationManagementPage() {
   const [orgFormMode, setOrgFormMode] = useState<"create" | "edit" | null>(null);
   const [orgResumeOpen, setOrgResumeOpen] = useState(false);
   const [orgQuery, setOrgQuery] = useState("");
+  const [orgTreeExpanded, setOrgTreeExpanded] = useState<Set<number>>(() => new Set());
   const [unitForm, setUnitForm] = useState({ name: "", unit_type: "department", parent_id: 0, city: "", headcount_plan: "" });
   const [resumeFiles, setResumeFiles] = useState<File[]>([]);
   const flatUnits = useMemo(() => flattenOrganizationUnits(units), [units]);
   const selectedUnit = flatUnits.find((unit) => unit.id === selectedId);
   const selectedPath = useMemo(() => organizationPath(flatUnits, selectedId), [flatUnits, selectedId]);
   const childUnits = selectedUnit?.children || [];
-  const orgOptions = useMemo(() => {
+  const orgTreeExpandedIds = useMemo(() => {
+    const next = new Set(orgTreeExpanded);
+    selectedPath.forEach((unit) => next.add(unit.id));
+    return next;
+  }, [orgTreeExpanded, selectedPath]);
+  const orgSearchResults = useMemo(() => {
     const keyword = orgQuery.trim().toLowerCase();
-    if (!keyword) return flatUnits;
-    const matched = flatUnits.filter((unit) => `${unit.name} ${unit.city || ""} ${unit.unit_type || ""}`.toLowerCase().includes(keyword));
-    const current = flatUnits.find((unit) => unit.id === selectedId);
-    return current && !matched.some((unit) => unit.id === current.id) ? [current, ...matched] : matched;
-  }, [flatUnits, orgQuery, selectedId]);
+    if (!keyword) return [];
+    return flatUnits.filter((unit) => `${unit.name} ${unit.city || ""} ${unit.unit_type || ""}`.toLowerCase().includes(keyword)).slice(0, 20);
+  }, [flatUnits, orgQuery]);
 
   async function load(nextSelectedId = selectedId) {
     const tree = await api.organizationTree();
@@ -2639,6 +2643,15 @@ function OrganizationManagementPage() {
     setOrgFormOpen(false);
     setOrgFormMode(null);
     await load(id);
+  }
+
+  function toggleOrgTreeUnit(unitId: number) {
+    setOrgTreeExpanded((current) => {
+      const next = new Set(current);
+      if (next.has(unitId)) next.delete(unitId);
+      else next.add(unitId);
+      return next;
+    });
   }
 
   async function saveUnit(event: React.FormEvent) {
@@ -2751,14 +2764,31 @@ function OrganizationManagementPage() {
         <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
           <div className="min-w-0 flex-1">
             <h2 className="font-semibold">组织架构</h2>
-            <p className="mt-1 text-xs text-steel">用下拉框定位部门，页面空间主要留给组织维护和员工列表。</p>
-            <label className="field-label mt-4">当前组织</label>
-            <input className="input mb-3" value={orgQuery} onChange={(event) => setOrgQuery(event.target.value)} placeholder="搜索组织名称" />
-            <select className="select w-full" value={selectedId} onChange={(event) => selectUnit(Number(event.target.value))}>
-              {orgOptions.map((unit) => (
-                <option key={unit.id} value={unit.id}>{"　".repeat(unit.depth)}{unit.name}（{unit.employee_count || 0} 人）</option>
-              ))}
-            </select>
+            <p className="mt-1 text-xs text-steel">按上级组织折叠展开定位部门，页面空间主要留给组织维护和员工列表。</p>
+            <label className="field-label mt-4">搜索组织</label>
+            <input className="input" value={orgQuery} onChange={(event) => setOrgQuery(event.target.value)} placeholder="搜索组织名称" />
+            <div className="org-tree mt-3">
+              {orgQuery.trim() ? (
+                orgSearchResults.length ? (
+                  orgSearchResults.map((unit) => (
+                    <button className={`org-search-row ${selectedId === unit.id ? "active" : ""}`} key={unit.id} type="button" onClick={() => selectUnit(unit.id)}>
+                      <span>{"　".repeat(unit.depth)}{unit.name}</span>
+                      <span>{unit.employee_count || 0} 人</span>
+                    </button>
+                  ))
+                ) : (
+                  <div className="rounded-md border border-dashed border-line p-3 text-xs text-steel">未找到匹配组织</div>
+                )
+              ) : (
+                <CompactOrganizationTree
+                  units={units}
+                  selectedId={selectedId}
+                  expandedIds={orgTreeExpandedIds}
+                  onToggle={toggleOrgTreeUnit}
+                  onSelect={selectUnit}
+                />
+              )}
+            </div>
           </div>
           <div className="flex flex-wrap gap-2">
             <button className="secondary-button" onClick={() => load()}>
@@ -2778,10 +2808,10 @@ function OrganizationManagementPage() {
             {selectedPath.map((unit) => <span className="chip" key={unit.id}>{unit.name}</span>)}
           </div>
         )}
-        {childUnits.length > 0 && (
+        {childUnits.length > 0 && orgQuery.trim() && (
           <div className="mt-3 flex flex-wrap gap-2">
             {childUnits.map((unit) => (
-              <button className="secondary-button" key={unit.id} onClick={() => selectUnit(unit.id)}>
+              <button className="secondary-button" key={unit.id} type="button" onClick={() => selectUnit(unit.id)}>
                 {unit.name}
                 <span className="badge muted">{unit.employee_count || 0}</span>
               </button>

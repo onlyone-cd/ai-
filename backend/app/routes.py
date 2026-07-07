@@ -496,6 +496,62 @@ def list_employees(user):
     return ok({"items": [employee.to_dict() for employee in employees], "overview": employee_group_overview(employees), **meta})
 
 
+@api.post("/employees/import-excel")
+@login_required
+@roles_required("admin", "manager")
+def import_employees_excel(user):
+    file = request.files.get("file")
+    if not file:
+        return error("请上传员工基础信息表")
+    suffix = Path(file.filename or "").suffix.lower()
+    try:
+        if suffix == ".csv":
+            rows = parse_csv_table(file.stream)
+        elif suffix == ".xlsx":
+            rows = parse_xlsx_table(file.stream)
+        else:
+            return error("仅支持 .csv 或 .xlsx 员工基础信息表")
+    except ValueError as exc:
+        return error(str(exc))
+
+    created = []
+    updated = []
+    skipped = []
+    errors = []
+    for index, row in enumerate(rows, start=2):
+        try:
+            employee, was_created = upsert_employee_from_import_row(row, user)
+            if not employee:
+                skipped.append({"row": index, "reason": "缺少姓名/岗位等必要字段", "data": row})
+                continue
+            compensation = build_employee_compensation(employee.id, compensation_payload_from_row(row))
+            if compensation:
+                db.session.add(compensation)
+            employee.updated_at = datetime.now(timezone.utc)
+            item = employee.to_dict(detail=True)
+            if was_created:
+                created.append({"row": index, "employee": item})
+            else:
+                updated.append({"row": index, "employee": item})
+        except ValueError as exc:
+            errors.append({"row": index, "error": str(exc), "data": row})
+    audit_log(user, "import", "employee", None, file.filename, {"created": len(created), "updated": len(updated), "skipped": len(skipped), "errors": len(errors)})
+    db.session.commit()
+    return ok(
+        {
+            "created_count": len(created),
+            "updated_count": len(updated),
+            "skipped_count": len(skipped),
+            "failed_count": len(errors),
+            "created": created,
+            "updated": updated,
+            "skipped": skipped,
+            "errors": errors,
+        },
+        "员工基础信息已导入",
+    )
+
+
 @api.get("/employees/<int:employee_id>")
 @login_required
 @roles_required("admin", "manager", "recruiter")
@@ -3349,6 +3405,139 @@ def row_value(row, aliases):
         if value not in (None, ""):
             return str(value).strip()
     return ""
+
+
+def upsert_employee_from_import_row(row, user):
+    employee_no = row_value(row, ["员工编号", "工号", "employee_no", "employee no", "emp_no"])
+    phone = only_digits(row_value(row, ["手机号", "手机", "电话", "phone", "mobile"]))
+    email_value = row_value(row, ["邮箱", "email", "mail"]).lower()
+    name = row_value(row, ["姓名", "员工姓名", "name"])
+    current_title = row_value(row, ["当前岗位", "岗位", "职位", "current_title", "title", "job_title"])
+    job = resolve_job_from_import_row(row)
+    unit = resolve_organization_unit_from_import_row(row, user)
+    employee = find_employee_for_import_row(employee_no, phone, email_value)
+    was_created = False
+    if not employee:
+        if not name:
+            return None, False
+        employee = EmployeeProfile(
+            owner_hr_id=user.id,
+            employee_no=employee_no or None,
+            name=name,
+            phone=phone or "",
+            email=email_value or "",
+            organization_unit_id=unit.id if unit else None,
+            department=unit.name if unit else row_value(row, ["部门", "组织", "organization", "department"]),
+            current_job_id=job.id if job else None,
+            current_title=current_title or (job.title if job else "未设置岗位"),
+            raw_text=employee_raw_text_from_row(row),
+            resume_json={"summary": row_value(row, ["个人简介", "简介", "summary", "profile"])},
+            parse_status="ok",
+        )
+        db.session.add(employee)
+        db.session.flush()
+        was_created = True
+    if employee_no:
+        employee.employee_no = employee_no
+    if name:
+        employee.name = name
+    if phone:
+        employee.phone = phone
+    if email_value:
+        employee.email = email_value
+    if unit:
+        employee.organization_unit_id = unit.id
+        employee.department = unit.name
+    if job:
+        employee.current_job_id = job.id
+        employee.current_title = job.title
+    elif current_title:
+        employee.current_title = current_title
+    for field, aliases in {
+        "level": ["职级", "级别", "level"],
+        "city": ["城市", "city"],
+        "employment_status": ["在职状态", "状态", "status", "employment_status"],
+        "manager_name": ["直属上级", "上级", "manager", "manager_name"],
+    }.items():
+        value = row_value(row, aliases)
+        if value:
+            setattr(employee, field, normalize_employee_status(value) if field == "employment_status" else value)
+    hire_date = row_value(row, ["入职日期", "入职时间", "hire_date", "hire date"])
+    if hire_date:
+        employee.hire_date = parse_date(hire_date)
+    summary = row_value(row, ["个人简介", "简介", "summary", "profile"])
+    if summary:
+        resume_json = dict(employee.resume_json or {})
+        resume_json["summary"] = summary
+        employee.resume_json = resume_json
+    return employee, was_created
+
+
+def find_employee_for_import_row(employee_no, phone, email_value):
+    if employee_no:
+        employee = EmployeeProfile.query.filter_by(employee_no=employee_no).first()
+        if employee:
+            return employee
+    if phone:
+        employee = EmployeeProfile.query.filter_by(phone=phone).first()
+        if employee:
+            return employee
+    if email_value:
+        employee = EmployeeProfile.query.filter(func.lower(EmployeeProfile.email) == email_value).first()
+        if employee:
+            return employee
+    return None
+
+
+def resolve_organization_unit_from_import_row(row, user):
+    unit_id = parse_optional_int(row_value(row, ["organization_unit_id", "组织ID", "部门ID"]), None)
+    if unit_id:
+        unit = db.session.get(OrganizationUnit, unit_id)
+        if unit:
+            return unit
+    unit_name = row_value(row, ["组织", "组织名称", "部门", "部门名称", "organization", "department"])
+    if unit_name:
+        exact = OrganizationUnit.query.filter_by(name=unit_name).order_by(OrganizationUnit.id.asc()).first()
+        if exact:
+            return exact
+        root = ensure_default_organization(user)
+        return get_or_create_org_unit(unit_name, root.id, "department")["unit"]
+    return ensure_default_organization(user)
+
+
+def resolve_job_from_import_row(row):
+    job_id = parse_optional_int(row_value(row, ["current_job_id", "job_id", "岗位ID"]), None)
+    if job_id:
+        job = db.session.get(Job, job_id)
+        if job:
+            return job
+    title = row_value(row, ["岗位", "职位", "当前岗位", "job_title", "title", "current_title"])
+    if not title:
+        return None
+    return Job.query.filter(func.lower(Job.title) == title.lower()).order_by(Job.id.asc()).first()
+
+
+def normalize_employee_status(value):
+    text = str(value or "").strip().lower()
+    mapping = {
+        "在职": "active",
+        "active": "active",
+        "离职": "departed",
+        "departed": "departed",
+        "待离职": "leaving",
+        "leaving": "leaving",
+        "调岗中": "transfer",
+        "transfer": "transfer",
+    }
+    return mapping.get(text, text or "active")
+
+
+def employee_raw_text_from_row(row):
+    parts = []
+    for key, value in row.items():
+        if value not in (None, ""):
+            parts.append(f"{key}: {value}")
+    return "\n".join(parts)
 
 
 def find_employee_for_compensation_row(row):

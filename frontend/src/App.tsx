@@ -3011,6 +3011,8 @@ function InternalTalentPage() {
   const [salaryImport, setSalaryImport] = useState<{ updated_count: number; skipped_count: number; failed_count: number } | null>(null);
   const [transferOpen, setTransferOpen] = useState(false);
   const [salaryImportOpen, setSalaryImportOpen] = useState(false);
+  const [employeeImportOpen, setEmployeeImportOpen] = useState(false);
+  const [employeeImport, setEmployeeImport] = useState<{ created_count: number; updated_count: number; skipped_count: number; failed_count: number } | null>(null);
   const [orgTreeQuery, setOrgTreeQuery] = useState("");
   const [orgTreeExpanded, setOrgTreeExpanded] = useState<Set<number>>(() => new Set());
   const [batchResult, setBatchResult] = useState<{ analyzed_count: number; skipped_count: number } | null>(null);
@@ -3113,6 +3115,29 @@ function InternalTalentPage() {
       await load(selectedUnitId);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "薪资导入失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function importEmployeeFile(files: FileList | null) {
+    const file = files?.[0];
+    if (!file) return;
+    setBusy(true);
+    setMessage("");
+    try {
+      const result = await api.importEmployees(file);
+      setEmployeeImport({
+        created_count: result.created_count,
+        updated_count: result.updated_count,
+        skipped_count: result.skipped_count,
+        failed_count: result.failed_count
+      });
+      setMessage(`员工台账已导入：新增 ${result.created_count} 人，更新 ${result.updated_count} 人，跳过 ${result.skipped_count} 行，失败 ${result.failed_count} 行`);
+      setEmployeeImportOpen(false);
+      await load(selectedUnitId);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "员工台账导入失败");
     } finally {
       setBusy(false);
     }
@@ -3281,6 +3306,55 @@ function InternalTalentPage() {
         </form>
         </div>
         )}
+
+        {employeeImportOpen && (
+        <div className="modal-backdrop" onClick={() => setEmployeeImportOpen(false)}>
+        <div className="modal-panel" onClick={(event) => event.stopPropagation()}>
+          <div className="modal-head">
+            <div>
+              <h2 className="font-semibold">员工台账批量导入</h2>
+              <p>支持 CSV/XLSX，可按员工编号、手机号或邮箱更新已有员工。</p>
+            </div>
+            <button className="icon-button" type="button" onClick={() => setEmployeeImportOpen(false)}>
+              <X size={16} />
+            </button>
+          </div>
+          <label className="secondary-button mt-4 w-full cursor-pointer">
+            <Upload size={16} />
+            选择员工台账
+            <input className="hidden" type="file" accept=".csv,.xlsx" onChange={(event) => importEmployeeFile(event.target.files)} />
+          </label>
+          <div className="mt-3 rounded-md bg-slate-50 p-3 text-xs text-steel">
+            表头示例：employee_no、name、phone、email、department、current_title、level、salary_monthly_k、salary_months
+          </div>
+          {employeeImport && (
+            <div className="mt-3 grid grid-cols-4 gap-2 text-center text-xs">
+              <div className="rounded-md bg-green-50 p-2 text-green-700">新增 {employeeImport.created_count}</div>
+              <div className="rounded-md bg-blue-50 p-2 text-blue-700">更新 {employeeImport.updated_count}</div>
+              <div className="rounded-md bg-orange-50 p-2 text-orange-700">跳过 {employeeImport.skipped_count}</div>
+              <div className="rounded-md bg-red-50 p-2 text-red-700">失败 {employeeImport.failed_count}</div>
+            </div>
+          )}
+        </div>
+        </div>
+        )}
+
+        <div className="design-card">
+          <h2 className="font-semibold">员工台账</h2>
+          <p className="mt-1 text-xs text-steel">批量创建或更新内部员工基础档案，可同时带入岗位、组织和薪资字段。</p>
+          <button className="secondary-button mt-4 w-full" type="button" onClick={() => setEmployeeImportOpen(true)}>
+            <Upload size={16} />
+            导入员工台账
+          </button>
+          {employeeImport && (
+            <div className="mt-3 grid grid-cols-4 gap-2 text-center text-xs">
+              <div className="rounded-md bg-green-50 p-2 text-green-700">新增 {employeeImport.created_count}</div>
+              <div className="rounded-md bg-blue-50 p-2 text-blue-700">更新 {employeeImport.updated_count}</div>
+              <div className="rounded-md bg-orange-50 p-2 text-orange-700">跳过 {employeeImport.skipped_count}</div>
+              <div className="rounded-md bg-red-50 p-2 text-red-700">失败 {employeeImport.failed_count}</div>
+            </div>
+          )}
+        </div>
 
         {salaryImportOpen && (
         <div className="modal-backdrop" onClick={() => setSalaryImportOpen(false)}>

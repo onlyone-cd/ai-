@@ -348,6 +348,40 @@ def test_internal_talent_organization_employee_analysis_and_recommendations(clie
             "skill_tags_raw": "Java 5\nSpring Boot 5\nMySQL 4\nRedis 4",
         },
     ).get_json()["data"]
+    employee_csv = BytesIO(
+        f"employee_no,name,phone,email,organization_unit_id,current_job_id,level,city,status,hire_date,salary_monthly_k,salary_months,summary\n"
+        f"EMP-CSV-001,Imported Employee,13800001111,imported@example.com,{unit['id']},{job['id']},P5,Shanghai,active,2026-07-01,22,13,Imported internal profile\n".encode()
+    )
+    employee_import = client.post(
+        "/api/employees/import-excel",
+        headers=admin_headers,
+        data={"file": (employee_csv, "employees.csv")},
+        content_type="multipart/form-data",
+    )
+    assert employee_import.status_code == 200
+    employee_import_data = employee_import.get_json()["data"]
+    assert employee_import_data["created_count"] == 1
+    imported_employee = employee_import_data["created"][0]["employee"]
+    assert imported_employee["employee_no"] == "EMP-CSV-001"
+    assert imported_employee["organization_unit"]["id"] == unit["id"]
+    assert imported_employee["current_job"]["id"] == job["id"]
+    assert imported_employee["compensation"]["salary_annual_k"] == 286
+
+    employee_update_csv = BytesIO(
+        f"employee_no,name,organization_unit_id,current_job_id,level,salary_monthly_k,salary_months\n"
+        f"EMP-CSV-001,Imported Employee Updated,{unit['id']},{job['id']},P6,24,14\n".encode()
+    )
+    employee_update = client.post(
+        "/api/employees/import-excel",
+        headers=admin_headers,
+        data={"file": (employee_update_csv, "employees-update.csv")},
+        content_type="multipart/form-data",
+    )
+    assert employee_update.status_code == 200
+    employee_update_data = employee_update.get_json()["data"]
+    assert employee_update_data["updated_count"] == 1
+    assert EmployeeProfile.query.filter_by(employee_no="EMP-CSV-001").count() == 1
+
     candidate = client.post(
         "/api/boss/candidates/batch-import",
         headers=admin_headers,

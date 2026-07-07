@@ -84,6 +84,7 @@ cd ..\backend
 
 - [DEPLOYMENT.md](DEPLOYMENT.md)
 - [docs/production-preflight.md](docs/production-preflight.md)
+- [docs/full-data-migration.md](docs/full-data-migration.md)
 
 基础步骤：
 
@@ -139,6 +140,12 @@ python scripts\check_secrets.py
 
 ```powershell
 .\backend\.venv\Scripts\python.exe scripts\preflight_production.py
+```
+
+测试环境全量迁移到生产 PostgreSQL：
+
+```powershell
+.\backend\.venv\Scripts\python.exe scripts\full_data_migration.py migrate --target-compose-file docker-compose.production.yml --target-env-file .env --apply --confirm-overwrite MIGRATE_ALL_DATA
 ```
 
 接口冒烟测试：

@@ -531,6 +531,7 @@ function CandidatesPage() {
         return scoreB - scoreA;
       });
   }, [candidates, query, matchResults.length, scoreByCandidate]);
+  const pagedCandidates = useClientPagination(visibleCandidates, 20);
 
   async function runTalentMatch() {
     if (!selectedJobId) {
@@ -674,48 +675,51 @@ function CandidatesPage() {
           <KpiMini label="在招岗位" value={activeJobCount} hint="可用于岗位匹配" />
         </div>
 
-        <div className="talent-list-card">
+        <div className="talent-list-card data-panel">
           <div className="talent-list-head">
             <span>候选人</span>
             <span>画像与标签</span>
             <span>归档与申请</span>
             <span>操作</span>
           </div>
-          {visibleCandidates.map((candidate) => (
-            <div className="talent-row" key={candidate.id}>
-              <div className="talent-person">
+          <div className="data-list talent-data-list">
+            {pagedCandidates.items.map((candidate) => (
+              <div className="talent-row" key={candidate.id}>
+                <div className="talent-person">
+                  <div>
+                    <h3>{candidate.name_masked}</h3>
+                    <p>{candidate.title} · {candidate.city || "城市未识别"}</p>
+                    <p>{candidate.email_masked || "-"} · {candidate.phone_masked || "-"}</p>
+                  </div>
+                </div>
                 <div>
-                  <h3>{candidate.name_masked}</h3>
-                  <p>{candidate.title} · {candidate.city || "城市未识别"}</p>
-                  <p>{candidate.email_masked || "-"} · {candidate.phone_masked || "-"}</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    <span className="badge muted">简历评分 {resumeScore(candidate.tags)}/100</span>
+                    <span className="badge">{candidate.experience_analysis.label}</span>
+                    {scoreByCandidate.has(candidate.id) && <span className="badge">匹配 {scoreByCandidate.get(candidate.id)?.score}/100</span>}
+                  </div>
+                  <TagList tags={candidate.tags} />
+                  {scoreByCandidate.has(candidate.id) && (
+                    <p className="mt-2 text-xs text-steel">
+                      命中：{scoreByCandidate.get(candidate.id)?.reason.hits.slice(0, 4).map((hit) => hit.candidate_tag).join("、") || "无"}；
+                      缺失：{scoreByCandidate.get(candidate.id)?.reason.missing_tags.slice(0, 3).join("、") || "无"}
+                    </p>
+                  )}
+                </div>
+                <div className="talent-archive">
+                  <p>来源渠道：{candidate.source}</p>
+                  <p>目标职位：待分配职位</p>
+                  <p>归档人：{candidate.owner_name}</p>
+                </div>
+                <div className="talent-actions">
+                  <button className="secondary-button" onClick={() => setSelected(candidate)}>查看详情</button>
+                  <button className="primary-button" onClick={() => addCandidateToPipeline(candidate)}>加入流程</button>
                 </div>
               </div>
-              <div>
-                <div className="flex flex-wrap gap-1.5">
-                  <span className="badge muted">简历评分 {resumeScore(candidate.tags)}/100</span>
-                  <span className="badge">{candidate.experience_analysis.label}</span>
-                  {scoreByCandidate.has(candidate.id) && <span className="badge">匹配 {scoreByCandidate.get(candidate.id)?.score}/100</span>}
-                </div>
-                <TagList tags={candidate.tags} />
-                {scoreByCandidate.has(candidate.id) && (
-                  <p className="mt-2 text-xs text-steel">
-                    命中：{scoreByCandidate.get(candidate.id)?.reason.hits.slice(0, 4).map((hit) => hit.candidate_tag).join("、") || "无"}；
-                    缺失：{scoreByCandidate.get(candidate.id)?.reason.missing_tags.slice(0, 3).join("、") || "无"}
-                  </p>
-                )}
-              </div>
-              <div className="talent-archive">
-                <p>来源渠道：{candidate.source}</p>
-                <p>目标职位：待分配职位</p>
-                <p>归档人：{candidate.owner_name}</p>
-              </div>
-              <div className="talent-actions">
-                <button className="secondary-button" onClick={() => setSelected(candidate)}>查看详情</button>
-                <button className="primary-button" onClick={() => addCandidateToPipeline(candidate)}>加入流程</button>
-              </div>
-            </div>
-          ))}
-          {visibleCandidates.length === 0 && <EmptyState icon={<Search size={22} />} text="没有匹配的候选人" />}
+            ))}
+            {visibleCandidates.length === 0 && <EmptyState icon={<Search size={22} />} text="没有匹配的候选人" />}
+          </div>
+          <PaginationControls total={visibleCandidates.length} limit={pagedCandidates.limit} offset={pagedCandidates.offset} onChange={pagedCandidates.onChange} />
         </div>
       </main>
 
@@ -818,6 +822,8 @@ function JobsPage() {
     );
   }, [jobs, query]);
   const visibleMatches = useMemo(() => (matches.length ? matches : preview).filter((item) => item.score >= 50), [matches, preview]);
+  const pagedJobs = useClientPagination(visibleJobs, 20);
+  const pagedMatches = useClientPagination(visibleMatches, 20);
 
   if (selectedCandidate) {
     return (
@@ -836,8 +842,14 @@ function JobsPage() {
   }
 
   return (
-    <section className="grid gap-5 xl:grid-cols-[360px_1fr]">
-      <div className="space-y-3">
+    <section className="grid gap-5 xl:grid-cols-[380px_1fr]">
+      <div className="data-panel xl:sticky xl:top-4 xl:self-start">
+        <div className="data-panel-head">
+          <div>
+            <h2>岗位列表</h2>
+            <p>共 {visibleJobs.length} 个岗位，列表内滚动查看。</p>
+          </div>
+        </div>
         <div className="relative">
           <Search className="pointer-events-none absolute left-3 top-2.5 text-steel" size={17} />
           <input className="input pl-9" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索岗位、技能、城市" />
@@ -847,19 +859,25 @@ function JobsPage() {
           新建岗位
         </button>
         {formOpen && <JobForm onCreated={(job) => { setJobs([job, ...jobs]); setJobId(job.id); setFormOpen(false); }} />}
-        {visibleJobs.map((job) => (
-          <button key={job.id} onClick={() => { setJobId(job.id); notify("success", `已选择岗位：${job.title}`); }} className={`row-card w-full text-left ${jobId === job.id ? "ring-2 ring-mint" : ""}`}>
-            <div>
-              <div className="flex flex-wrap items-center gap-2">
-                <h3 className="font-semibold">{job.title}</h3>
-                <span className={`badge ${job.status === "active" ? "" : "muted"}`}>{job.status === "active" ? "开放" : "关闭"}</span>
+        <div className="data-list">
+          {pagedJobs.items.map((job) => (
+            <button key={job.id} onClick={() => { setJobId(job.id); notify("success", `已选择岗位：${job.title}`); }} className={`data-row w-full text-left ${jobId === job.id ? "active" : ""}`}>
+              <div className="min-w-0">
+                <div className="data-row-title">
+                  <h3>{job.title}</h3>
+                  <span className={`badge ${job.status === "active" ? "" : "muted"}`}>{job.status === "active" ? "开放" : "关闭"}</span>
+                </div>
+                <p className="data-row-meta">{job.department || "未分部门"} · {job.city || "未填城市"} · {job.job_code || "无编号"}</p>
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {(job.jd_structured.skills || []).slice(0, 3).map((skill) => <span className="chip" key={skill.tag}>{skill.tag} {skill.weight}</span>)}
+                  {(job.jd_structured.skills || []).length > 3 && <span className="chip muted">+{(job.jd_structured.skills || []).length - 3}</span>}
+                </div>
               </div>
-              <p className="text-sm text-steel">{job.department} · {job.city} · {job.job_code}</p>
-              <p className="mt-2 text-xs text-steel">{job.jd_structured.skill_tags_raw}</p>
-            </div>
-          </button>
-        ))}
-        {visibleJobs.length === 0 && <EmptyState icon={<Search size={22} />} text="没有匹配的岗位" />}
+            </button>
+          ))}
+          {visibleJobs.length === 0 && <EmptyState icon={<Search size={22} />} text="没有匹配的岗位" />}
+        </div>
+        <PaginationControls total={visibleJobs.length} limit={pagedJobs.limit} offset={pagedJobs.offset} onChange={pagedJobs.onChange} />
       </div>
       <div className="space-y-4">
         {selectedJob && (
@@ -924,9 +942,10 @@ function JobsPage() {
         {visibleMatches.length === 0 ? (
           <EmptyState icon={<Database size={22} />} text="暂无 50 分以上候选人" />
         ) : (
-          <div className="grid gap-3">
-            {visibleMatches.map((match) => (
-              <div className="row-card" key={match.id ?? `${match.candidate_id}-${match.score}`}>
+          <div className="data-panel">
+            <div className="data-list">
+            {pagedMatches.items.map((match) => (
+              <div className="data-row" key={match.id ?? `${match.candidate_id}-${match.score}`}>
                 <div className="score-ring">{match.score}</div>
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
@@ -966,6 +985,8 @@ function JobsPage() {
                 </div>
               </div>
             ))}
+            </div>
+            <PaginationControls total={visibleMatches.length} limit={pagedMatches.limit} offset={pagedMatches.offset} onChange={pagedMatches.onChange} />
           </div>
         )}
       </div>
@@ -1313,6 +1334,7 @@ function InterviewsPage() {
         .includes(keyword);
     });
   }, [assignments, query, status]);
+  const pagedAssignments = useClientPagination(visibleAssignments, 20);
 
   return (
     <section className="grid gap-5 xl:grid-cols-[380px_1fr]">
@@ -1382,9 +1404,16 @@ function InterviewsPage() {
             </button>
           </div>
         </div>
-        <div className="grid gap-3">
-          {visibleAssignments.map((assignment) => (
-            <div className="row-card flex-col items-stretch sm:flex-row sm:items-center" key={assignment.id}>
+        <div className="data-panel">
+          <div className="data-panel-head">
+            <div>
+              <h2>面试列表</h2>
+              <p>当前筛选 {visibleAssignments.length} 条，默认分页显示。</p>
+            </div>
+          </div>
+          <div className="data-list">
+          {pagedAssignments.items.map((assignment) => (
+            <div className="data-row flex-col items-stretch sm:flex-row sm:items-center" key={assignment.id}>
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
                   <h3 className="font-semibold">{assignment.candidate.name_masked}</h3>
@@ -1422,6 +1451,8 @@ function InterviewsPage() {
             </div>
           ))}
           {visibleAssignments.length === 0 && <EmptyState icon={<Search size={22} />} text="没有匹配的面试安排" />}
+          </div>
+          <PaginationControls total={visibleAssignments.length} limit={pagedAssignments.limit} offset={pagedAssignments.offset} onChange={pagedAssignments.onChange} />
         </div>
       </div>
       {selected && <FeedbackModal assignment={selected} onClose={() => setSelected(null)} onSubmitted={() => { setSelected(null); load(); }} />}
@@ -1730,6 +1761,7 @@ function OffersPage() {
     setOffers(offers.filter((item) => item.id !== offer.id));
     setMessage("Offer 已删除");
   }
+  const pagedOffers = useClientPagination(offers, 20);
 
   return (
     <section className="grid gap-5 xl:grid-cols-[380px_1fr]">
@@ -1807,9 +1839,16 @@ function OffersPage() {
         {offers.length === 0 ? (
           <EmptyState icon={<HandCoins size={22} />} text="暂无 Offer 记录" />
         ) : (
-          <div className="grid gap-3">
-            {offers.map((offer) => (
-              <div className="row-card" key={offer.id}>
+          <div className="data-panel">
+            <div className="data-panel-head">
+              <div>
+                <h2>Offer 列表</h2>
+                <p>共 {offers.length} 条记录。</p>
+              </div>
+            </div>
+            <div className="data-list">
+            {pagedOffers.items.map((offer) => (
+              <div className="data-row" key={offer.id}>
                 <div className="min-w-0">
                   <div className="flex flex-wrap items-center gap-2">
                     <h3 className="font-semibold">{offer.candidate.name_masked}</h3>
@@ -1846,6 +1885,8 @@ function OffersPage() {
                 </div>
               </div>
             ))}
+            </div>
+            <PaginationControls total={offers.length} limit={pagedOffers.limit} offset={pagedOffers.offset} onChange={pagedOffers.onChange} />
           </div>
         )}
       </div>
@@ -1909,6 +1950,9 @@ function BossPage() {
   }, [jobId]);
 
   const visibleInbox = inbox.filter((item) => [item.name, item.title, item.summary].join(" ").toLowerCase().includes(inboxQuery.trim().toLowerCase()));
+  const pagedInbox = useClientPagination(visibleInbox, 20);
+  const pagedRecommendations = useClientPagination(recommendations, 20);
+  const pagedBossJobs = useClientPagination(jobs, 20);
   const selectedJob = jobs.find((job) => job.id === jobId);
   const syncTimes = [status?.last_candidate_at, status?.last_job_at].filter((value): value is string => Boolean(value)).sort();
   const lastSyncAt = syncTimes[syncTimes.length - 1];
@@ -2039,8 +2083,8 @@ function BossPage() {
               <input className="input pl-9" value={inboxQuery} onChange={(event) => setInboxQuery(event.target.value)} placeholder="搜索 BOSS 候选人、岗位、简历摘要" />
             </div>
             {message && <div className="mb-3 rounded-md bg-blue-50 px-3 py-2 text-sm text-blue-700">{message}</div>}
-            <div className="grid gap-3">
-              {visibleInbox.length === 0 ? <EmptyState icon={<Users size={22} />} text="暂无匹配的 BOSS 候选人" /> : visibleInbox.map((item) => (
+            <div className="data-list">
+              {visibleInbox.length === 0 ? <EmptyState icon={<Users size={22} />} text="暂无匹配的 BOSS 候选人" /> : pagedInbox.items.map((item) => (
                 <div className="boss-inbox-row" key={item.external_id}>
                   <div>
                     <h3>{item.name}</h3>
@@ -2054,14 +2098,15 @@ function BossPage() {
                 </div>
               ))}
             </div>
+            <PaginationControls total={visibleInbox.length} limit={pagedInbox.limit} offset={pagedInbox.offset} onChange={pagedInbox.onChange} />
           </div>}
 
           {tab === "recommend" && <div className="design-card">
             <h2 className="font-semibold">推荐候选人</h2>
             <p className="mt-1 text-sm text-steel">只从 BOSS 已导入的沟通过候选人里匹配当前 BOSS 岗位{selectedJob ? `：${selectedJob.title}` : ""}。</p>
-            <div className="mt-4 grid gap-3">
-              {recommendations.length === 0 ? <EmptyState icon={<Users size={22} />} text="当前岗位暂无 50 分以上推荐候选人" /> : recommendations.map((item) => (
-                <div className={`row-card text-left ${candidateId === item.candidate_id ? "ring-2 ring-mint" : ""}`} key={item.candidate_id}>
+            <div className="data-list mt-4">
+              {recommendations.length === 0 ? <EmptyState icon={<Users size={22} />} text="当前岗位暂无 50 分以上推荐候选人" /> : pagedRecommendations.items.map((item) => (
+                <div className={`data-row text-left ${candidateId === item.candidate_id ? "active" : ""}`} key={item.candidate_id}>
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
                       <h3 className="font-semibold">{item.candidate.name_masked}</h3>
@@ -2085,6 +2130,7 @@ function BossPage() {
                 </div>
               ))}
             </div>
+            <PaginationControls total={recommendations.length} limit={pagedRecommendations.limit} offset={pagedRecommendations.offset} onChange={pagedRecommendations.onChange} />
           </div>}
 
           {tab === "jobs" && <div className="design-card">
@@ -2095,9 +2141,9 @@ function BossPage() {
                 刷新
               </button>
             </div>
-            <div className="mt-4 grid gap-3">
-              {jobs.length === 0 ? <EmptyState icon={<BriefcaseBusiness size={22} />} text="暂无同步的 BOSS 岗位，请先用浏览器插件同步岗位列表" /> : jobs.map((job) => (
-                <div className={`row-card text-left ${jobId === job.id ? "ring-2 ring-mint" : ""}`} key={job.id}>
+            <div className="data-list mt-4">
+              {jobs.length === 0 ? <EmptyState icon={<BriefcaseBusiness size={22} />} text="暂无同步的 BOSS 岗位，请先用浏览器插件同步岗位列表" /> : pagedBossJobs.items.map((job) => (
+                <div className={`data-row text-left ${jobId === job.id ? "active" : ""}`} key={job.id}>
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
                       <h3 className="font-semibold">{job.title}</h3>
@@ -2118,6 +2164,7 @@ function BossPage() {
                 </div>
               ))}
             </div>
+            <PaginationControls total={jobs.length} limit={pagedBossJobs.limit} offset={pagedBossJobs.offset} onChange={pagedBossJobs.onChange} />
           </div>}
         </div>
       </div>
@@ -2276,6 +2323,27 @@ function PaginationControls({
   );
 }
 
+function useClientPagination<T>(items: T[], defaultLimit = 20) {
+  const [limit, setLimit] = useState(defaultLimit);
+  const [offset, setOffset] = useState(0);
+
+  useEffect(() => {
+    setOffset(0);
+  }, [items.length, limit]);
+
+  const pagedItems = useMemo(() => items.slice(offset, offset + limit), [items, offset, limit]);
+
+  return {
+    items: pagedItems,
+    limit,
+    offset,
+    onChange: (nextOffset: number, nextLimit: number) => {
+      setLimit(nextLimit);
+      setOffset(Math.max(0, nextOffset));
+    }
+  };
+}
+
 function AgentPage() {
   type AgentTurn = { role: "user" | "assistant"; content: string; response?: AgentResponse };
   const [message, setMessage] = useState("");
@@ -2424,6 +2492,7 @@ function TasksPage() {
   }
 
   const statuses = ["all", "queued", "running", "succeeded", "failed"];
+  const pagedTasks = useClientPagination(tasks, 20);
 
   return (
     <section className="space-y-4">
@@ -2443,9 +2512,10 @@ function TasksPage() {
         </div>
       </div>
 
-      <div className="grid gap-3">
-        {tasks.map((task) => (
-          <div className="row-card flex-col items-start" key={task.id}>
+      <div className="data-panel">
+        <div className="data-list">
+        {pagedTasks.items.map((task) => (
+          <div className="data-row flex-col items-start" key={task.id}>
             <div className="flex w-full flex-wrap items-start justify-between gap-3">
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
@@ -2470,6 +2540,8 @@ function TasksPage() {
           </div>
         ))}
         {tasks.length === 0 && <EmptyState icon={<Database size={22} />} text="暂无后台任务" />}
+        </div>
+        <PaginationControls total={tasks.length} limit={pagedTasks.limit} offset={pagedTasks.offset} onChange={pagedTasks.onChange} />
       </div>
     </section>
   );
@@ -2496,6 +2568,7 @@ function AuditLogsPage() {
         .includes(keyword)
     );
   }, [logs, filter]);
+  const pagedLogs = useClientPagination(visible, 20);
 
   return (
     <section className="space-y-4">
@@ -2512,9 +2585,10 @@ function AuditLogsPage() {
           </button>
         </div>
       </div>
-      <div className="grid gap-3">
-        {visible.map((item) => (
-          <div className="row-card" key={item.id}>
+      <div className="data-panel">
+        <div className="data-list">
+        {pagedLogs.items.map((item) => (
+          <div className="data-row" key={item.id}>
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-2">
                 <h3 className="font-semibold">{item.user_name}</h3>
@@ -2527,6 +2601,8 @@ function AuditLogsPage() {
           </div>
         ))}
         {visible.length === 0 && <EmptyState icon={<Clock3 size={22} />} text="暂无操作日志" />}
+        </div>
+        <PaginationControls total={visible.length} limit={pagedLogs.limit} offset={pagedLogs.offset} onChange={pagedLogs.onChange} />
       </div>
     </section>
   );
@@ -2567,6 +2643,7 @@ function UsersPage({ currentUser }: { currentUser: User }) {
     const updated = await api.updateUser(target.id, { active });
     setUsers(users.map((item) => (item.id === updated.id ? updated : item)));
   }
+  const pagedUsers = useClientPagination(users, 20);
 
   return (
     <section className="grid gap-5 xl:grid-cols-[360px_1fr]">
@@ -2592,9 +2669,16 @@ function UsersPage({ currentUser }: { currentUser: User }) {
         {message && <p className="mt-3 text-sm text-mint">{message}</p>}
       </form>
 
-      <div className="space-y-3">
-        {users.map((item) => (
-          <div className="row-card" key={item.id}>
+      <div className="data-panel">
+        <div className="data-panel-head">
+          <div>
+            <h2>账号列表</h2>
+            <p>共 {users.length} 个系统账号。</p>
+          </div>
+        </div>
+        <div className="data-list">
+        {pagedUsers.items.map((item) => (
+          <div className="data-row" key={item.id}>
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2">
                 <h3 className="font-semibold">{item.name}</h3>
@@ -2613,6 +2697,8 @@ function UsersPage({ currentUser }: { currentUser: User }) {
             </button>
           </div>
         ))}
+        </div>
+        <PaginationControls total={users.length} limit={pagedUsers.limit} offset={pagedUsers.offset} onChange={pagedUsers.onChange} />
       </div>
     </section>
   );
@@ -3740,42 +3826,50 @@ function InternalTalentPage() {
           </div>
         )}
 
-        {employees.length === 0 ? (
-          <EmptyState icon={<Building2 size={22} />} text="暂无内部员工，请先从候选人转入或导入员工档案" />
-        ) : (
-          <div className="grid gap-3">
-            {employees.map((employee) => (
-              <div className="row-card" key={employee.id}>
-                <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <h3 className="font-semibold">{employee.name}</h3>
-                    <span className="badge">{employee.current_title}</span>
-                    <span className="badge muted">{employmentStatusLabel(employee.employment_status)}</span>
-                    {employee.analyses?.[0] && <span className="badge">匹配 {employee.analyses[0].match_score}/100</span>}
-                  </div>
-                  <p className="mt-1 text-sm text-steel">{employee.organization_unit?.name || employee.department || "未分配部门"} · {employee.level || employee.education || "职级未维护"} · 司龄 {employee.seniority_years ?? "-"} 年 · {employeeSalary(employee)}</p>
-                  <TagList tags={employee.tags} />
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <button className="secondary-button" onClick={() => api.getEmployee(employee.id).then(setSelectedEmployee)}>
-                    <FileText size={16} />
-                    详细简历
-                  </button>
-                  <button className="primary-button" onClick={() => api.analyzeEmployeeCurrentJob(employee.id).then(() => load(selectedUnitId))}>
-                    <Sparkles size={16} />
-                    分析
-                  </button>
-                </div>
-              </div>
-            ))}
+        <div className="data-panel">
+          <div className="data-panel-head">
+            <div>
+              <h2>员工列表</h2>
+              <p>默认 20 条分页，列表区独立滚动，避免页面被大批量数据撑长。</p>
+            </div>
           </div>
-        )}
-        <PaginationControls
-          total={employeeTotal}
-          limit={employeeLimit}
-          offset={employeeOffset}
-          onChange={changeInternalEmployeePage}
-        />
+          {employees.length === 0 ? (
+            <EmptyState icon={<Building2 size={22} />} text="暂无内部员工，请先从候选人转入或导入员工档案" />
+          ) : (
+            <div className="data-list">
+              {employees.map((employee) => (
+                <div className="data-row" key={employee.id}>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h3 className="font-semibold">{employee.name}</h3>
+                      <span className="badge">{employee.current_title}</span>
+                      <span className="badge muted">{employmentStatusLabel(employee.employment_status)}</span>
+                      {employee.analyses?.[0] && <span className="badge">匹配 {employee.analyses[0].match_score}/100</span>}
+                    </div>
+                    <p className="mt-1 text-sm text-steel">{employee.organization_unit?.name || employee.department || "未分配部门"} · {employee.level || employee.education || "职级未维护"} · 司龄 {employee.seniority_years ?? "-"} 年 · {employeeSalary(employee)}</p>
+                    <TagList tags={employee.tags} />
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <button className="secondary-button" onClick={() => api.getEmployee(employee.id).then(setSelectedEmployee)}>
+                      <FileText size={16} />
+                      详细简历
+                    </button>
+                    <button className="primary-button" onClick={() => api.analyzeEmployeeCurrentJob(employee.id).then(() => load(selectedUnitId))}>
+                      <Sparkles size={16} />
+                      分析
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          <PaginationControls
+            total={employeeTotal}
+            limit={employeeLimit}
+            offset={employeeOffset}
+            onChange={changeInternalEmployeePage}
+          />
+        </div>
       </main>
     </section>
   );

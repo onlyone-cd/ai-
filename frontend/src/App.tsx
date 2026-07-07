@@ -3161,6 +3161,7 @@ function InternalTalentPage() {
   const [orgTreeExpanded, setOrgTreeExpanded] = useState<Set<number>>(() => new Set());
   const [batchResult, setBatchResult] = useState<{ analyzed_count: number; skipped_count: number } | null>(null);
   const [employeeTotal, setEmployeeTotal] = useState(0);
+  const [employeeOverview, setEmployeeOverview] = useState({ total: 0, active: 0, inactive: 0, with_compensation: 0, analyzed: 0, high_fit: 0, salary_risk: 0, avg_match_score: 0, avg_seniority_years: 0 });
   const [employeeLimit, setEmployeeLimit] = useState(20);
   const [employeeOffset, setEmployeeOffset] = useState(0);
   const [employeeQuery, setEmployeeQuery] = useState("");
@@ -3200,6 +3201,7 @@ function InternalTalentPage() {
     setUnits(tree.items);
     setEmployees(employeeData.items);
     setEmployeeTotal(employeeData.total);
+    setEmployeeOverview(employeeData.overview);
     setEmployeeLimit(employeeData.limit);
     setEmployeeOffset(employeeData.offset);
     setCandidates(candidateData.items);
@@ -3815,10 +3817,10 @@ function InternalTalentPage() {
 
         <div className="grid gap-3 md:grid-cols-4">
           <KpiMini label="员工总数" value={employeeTotal} hint="当前组织范围" />
-          <KpiMini label="有薪资数据" value={employees.filter((item) => item.compensation).length} hint="可做薪资分析" />
-          <KpiMini label="已分析" value={employees.filter((item) => item.analyses?.length).length} hint="岗位/薪资分析" />
-          <KpiMini label="平均司龄" value={`${Math.round((employees.reduce((sum, item) => sum + (item.seniority_years || 0), 0) / Math.max(employees.filter((item) => item.seniority_years != null).length, 1)) * 10) / 10} 年`} hint="按入职时间统计" />
-          <KpiMini label="高匹配人才" value={employees.filter((item) => (item.analyses?.[0]?.match_score || 0) >= 80).length} hint="匹配分 >= 80" />
+          <KpiMini label="有薪资数据" value={employeeOverview.with_compensation} hint={employees.some((item) => item.salary_hidden) ? "薪资已脱敏，仅管理员/经理可见" : "可做薪资分析"} />
+          <KpiMini label="已分析" value={employeeOverview.analyzed} hint="岗位/薪资分析" />
+          <KpiMini label="平均司龄" value={`${employeeOverview.avg_seniority_years} 年`} hint="按入职时间统计" />
+          <KpiMini label="高匹配人才" value={employeeOverview.high_fit} hint="匹配分 >= 80" />
         </div>
         {batchResult && (
           <div className="rounded-md bg-blue-50 px-3 py-2 text-sm text-blue-700">
@@ -4135,6 +4137,7 @@ function organizationPath(units: (OrganizationUnit & { depth: number })[], selec
 
 function employeeSalary(employee: EmployeeProfile) {
   const compensation = employee.compensation;
+  if (employee.salary_hidden) return "薪资已维护（无权限查看）";
   if (!compensation) return "薪资未维护";
   if (compensation.salary_monthly_k) return `${Number(compensation.salary_monthly_k).toFixed(1)}K · ${compensation.salary_months}薪`;
   if (compensation.salary_annual_k) return `年包 ${Number(compensation.salary_annual_k).toFixed(1)}K`;

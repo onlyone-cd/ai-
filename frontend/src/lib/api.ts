@@ -95,6 +95,7 @@ export type EmployeeProfile = {
   graduation_date?: string | null;
   manager_name?: string;
   compensation?: EmployeeCompensation | null;
+  salary_hidden?: boolean;
   tags: CandidateTag[];
   experience_analysis: { level: string; label: string; years: number; basis: string };
   resume_json?: Record<string, unknown>;

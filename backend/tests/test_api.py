@@ -813,6 +813,25 @@ def test_sensitive_candidate_and_export_permissions(client, admin_headers, recru
     assert admin_export.status_code == 200
 
 
+def test_employee_salary_is_masked_for_recruiter(client, admin_headers, recruiter_headers):
+    created = client.post(
+        "/api/employees/from-candidate",
+        headers=admin_headers,
+        json={"candidate_id": 1, "current_job_id": 1, "salary_monthly_k": 18, "salary_months": 13},
+    )
+    assert created.status_code == 200
+
+    admin_list = client.get("/api/employees", headers=admin_headers).get_json()["data"]
+    recruiter_list = client.get("/api/employees", headers=recruiter_headers).get_json()["data"]
+
+    assert admin_list["overview"]["with_compensation"] == 1
+    assert admin_list["items"][0]["compensation"]["salary_monthly_k"] == 18
+    assert recruiter_list["overview"]["with_compensation"] == 1
+    assert recruiter_list["items"][0]["compensation"] is None
+    assert recruiter_list["items"][0]["salary_hidden"] is True
+    assert client.get("/api/exports/employees.csv", headers=recruiter_headers).status_code == 403
+
+
 def test_sensitive_module_permissions_for_interviewer(client, admin_headers, recruiter_headers):
     created = client.post(
         "/api/users",

@@ -177,6 +177,44 @@ def test_system_data_integrity_reports_counts_and_checks(client, admin_headers):
     assert "DEEPSEEK_API_KEY" not in json.dumps(data)
 
 
+def test_notification_center_channel_event_and_logs(client, admin_headers):
+    created = client.post(
+        "/api/notifications/channels",
+        headers=admin_headers,
+        json={
+            "name": "企业微信测试",
+            "channel_type": "wecom",
+            "config": {"webhook_url": "https://example.com/hook", "default_recipient": "hr@example.com"},
+        },
+    )
+    assert created.status_code == 200
+    channel = created.get_json()["data"]
+    assert channel["config"]["webhook_url"] == "***"
+
+    events = client.get("/api/notifications/events", headers=admin_headers)
+    assert events.status_code == 200
+    event_items = events.get_json()["data"]["items"]
+    assert any(item["event_type"] == "interview_scheduled" for item in event_items)
+
+    test_send = client.post(
+        "/api/notifications/send-test",
+        headers=admin_headers,
+        json={"channel_id": channel["id"], "subject": "上线测试", "content": "通知中心测试"},
+    )
+    assert test_send.status_code == 200
+    log = test_send.get_json()["data"]["log"]
+    assert log["status"] == "sent"
+    assert log["channel"]["config"]["webhook_url"] == "***"
+
+    logs = client.get("/api/notifications/logs?event_type=manual_test", headers=admin_headers)
+    assert logs.status_code == 200
+    assert logs.get_json()["data"]["items"][0]["subject"] == "上线测试"
+
+    updated = client.patch(f"/api/notifications/channels/{channel['id']}", headers=admin_headers, json={"enabled": False})
+    assert updated.status_code == 200
+    assert updated.get_json()["data"]["enabled"] is False
+
+
 def test_llm_chat_json_retries_transient_failure(app, monkeypatch):
     calls = {"count": 0}
 

@@ -88,6 +88,7 @@ def main():
     run_step(results, "system.readiness", lambda: "ready" if "checks" in client.request("GET", "/api/system/readiness") else "missing checks")
     run_step(results, "system.data_integrity", lambda: client.request("GET", "/api/system/data-integrity")["summary"]["total"])
     run_step(results, "system.llm_usage", lambda: client.request("GET", "/api/system/llm/usage?days=7")["summary"]["total_calls"])
+    run_step(results, "notifications.channels", lambda: assert_items(client.request("GET", "/api/notifications/channels")))
     run_step(results, "candidates.list", lambda: assert_items(client.request("GET", "/api/candidates?limit=5")))
     run_step(results, "jobs.list", lambda: assert_items(client.request("GET", "/api/jobs?limit=5")))
     run_step(results, "organization.tree", lambda: assert_items(client.request("GET", "/api/organization/tree")))
@@ -128,8 +129,27 @@ def main():
             temp["job_id"] = data["id"]
             return data["id"]
 
+        def create_notification_channel():
+            data = client.request(
+                "POST",
+                "/api/notifications/channels",
+                {"name": "Smoke Notification Channel", "channel_type": "console", "config": {"default_recipient": "smoke@example.com"}},
+            )
+            temp["notification_channel_id"] = data["id"]
+            return data["id"]
+
         run_step(results, "mutating.candidate_create", create_candidate)
         run_step(results, "mutating.job_create", create_job)
+        run_step(results, "mutating.notification_channel_create", create_notification_channel)
+        run_step(
+            results,
+            "mutating.notification_send_test",
+            lambda: client.request(
+                "POST",
+                "/api/notifications/send-test",
+                {"channel_id": temp["notification_channel_id"], "subject": "Smoke", "content": "Smoke notification"},
+            )["log"]["status"],
+        )
         run_step(results, "mutating.match_preview", lambda: assert_items(client.request("GET", f"/api/jobs/{temp['job_id']}/match-preview?limit=5")))
         run_step(
             results,
@@ -140,6 +160,7 @@ def main():
     cleanup_errors: list[str] = []
     if args.mutating:
         for key, path in [
+            ("notification_channel_id", "/api/notifications/channels/{id}"),
             ("job_id", "/api/jobs/{id}"),
             ("candidate_id", "/api/candidates/{id}"),
         ]:

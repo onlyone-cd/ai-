@@ -266,6 +266,43 @@ export type DataIntegrity = {
   };
 };
 
+export type NotificationChannel = {
+  id: number;
+  name: string;
+  channel_type: "email" | "webhook" | "wecom" | "sms" | "console";
+  enabled: boolean;
+  config: Record<string, unknown>;
+  creator_name?: string;
+  created_at?: string | null;
+  updated_at?: string | null;
+};
+
+export type NotificationEvent = {
+  id: number;
+  event_type: string;
+  name: string;
+  enabled: boolean;
+  channel_id?: number | null;
+  channel?: NotificationChannel | null;
+  template_subject?: string | null;
+  template_body: string;
+};
+
+export type NotificationLog = {
+  id: number;
+  channel_id?: number | null;
+  channel?: NotificationChannel | null;
+  event_type: string;
+  recipient?: string;
+  subject?: string;
+  content: string;
+  status: string;
+  provider_response: Record<string, unknown>;
+  error?: string | null;
+  creator_name?: string;
+  created_at?: string | null;
+};
+
 export type OfferRecord = {
   id: number;
   candidate_id: number;
@@ -415,6 +452,20 @@ export const api = {
   readiness: () => request<SystemReadiness>("/system/readiness"),
   dataIntegrity: () => request<DataIntegrity>("/system/data-integrity"),
   llmUsage: (days = 30) => request<LLMUsageSummary>(`/system/llm/usage?days=${days}`),
+  notificationChannels: () => request<{ items: NotificationChannel[]; channel_types: string[] }>("/notifications/channels"),
+  createNotificationChannel: (payload: { name: string; channel_type: string; enabled?: boolean; config?: Record<string, unknown> }) =>
+    request<NotificationChannel>("/notifications/channels", { method: "POST", body: JSON.stringify(payload) }),
+  updateNotificationChannel: (id: number, payload: Partial<NotificationChannel> & { config?: Record<string, unknown> }) =>
+    request<NotificationChannel>(`/notifications/channels/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
+  deleteNotificationChannel: (id: number) => request<{ deleted: number }>(`/notifications/channels/${id}`, { method: "DELETE" }),
+  notificationEvents: () => request<{ items: NotificationEvent[] }>("/notifications/events"),
+  saveNotificationEvent: (payload: Partial<NotificationEvent> & { event_type: string; name: string }) =>
+    request<NotificationEvent>("/notifications/events", { method: "POST", body: JSON.stringify(payload) }),
+  updateNotificationEvent: (id: number, payload: Partial<NotificationEvent>) =>
+    request<NotificationEvent>(`/notifications/events/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
+  notificationLogs: (params?: { status?: string; event_type?: string; channel_id?: number }) => request<{ items: NotificationLog[] }>(`/notifications/logs${queryString(params)}`),
+  sendTestNotification: (payload: { channel_id?: number; recipient?: string; subject?: string; content?: string }) =>
+    request<{ log: NotificationLog }>("/notifications/send-test", { method: "POST", body: JSON.stringify(payload) }),
   tasks: (status = "all") => request<{ items: BackgroundTask[]; status_counts: Record<string, number> }>(`/tasks?status=${status}`),
   retryTask: (id: number) => request<BackgroundTask>(`/tasks/${id}/retry`, { method: "POST" }),
   interviewers: () => request<{ items: User[] }>("/users/interviewers"),

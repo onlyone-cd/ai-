@@ -200,6 +200,9 @@ deploy/                     Nginx 示例配置
 - `GET /api/system/data-integrity`
 - `GET /api/system/llm/status`
 - `GET /api/system/llm/usage`：AI 调用、成本、失败率与阈值告警
+- `GET /api/notifications/channels`
+- `POST /api/notifications/send-test`
+- `GET /api/notifications/logs`
 - `GET /api/candidates`
 - `POST /api/resume/upload`
 - `POST /api/resume/<id>/retry-parse`

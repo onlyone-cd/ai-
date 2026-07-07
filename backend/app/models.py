@@ -744,6 +744,114 @@ class LLMUsage(db.Model):
         }
 
 
+class NotificationChannel(db.Model):
+    __table_args__ = (
+        db.Index("ix_notification_channel_type_enabled", "channel_type", "enabled"),
+        db.Index("ix_notification_channel_created", "created_at"),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(128), nullable=False)
+    channel_type = db.Column(db.String(32), nullable=False, default="webhook")
+    enabled = db.Column(db.Boolean, nullable=False, default=True)
+    config_json = db.Column(db.JSON, nullable=False, default=dict)
+    created_by = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
+    created_at = db.Column(db.DateTime(timezone=True), default=utcnow)
+    updated_at = db.Column(db.DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+    creator = db.relationship("User")
+
+    def to_dict(self, include_secret=False):
+        config = dict(self.config_json or {})
+        if not include_secret:
+            for key in list(config):
+                if any(word in key.lower() for word in ["secret", "token", "key", "password", "webhook_url"]):
+                    config[key] = "***" if config[key] else ""
+        return {
+            "id": self.id,
+            "name": self.name,
+            "channel_type": self.channel_type,
+            "enabled": self.enabled,
+            "config": config,
+            "created_by": self.created_by,
+            "creator_name": self.creator.name if self.creator else "",
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+class NotificationEvent(db.Model):
+    __table_args__ = (
+        db.Index("ix_notification_event_type_enabled", "event_type", "enabled"),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    event_type = db.Column(db.String(80), nullable=False, unique=True)
+    name = db.Column(db.String(128), nullable=False)
+    enabled = db.Column(db.Boolean, nullable=False, default=True)
+    channel_id = db.Column(db.Integer, db.ForeignKey("notification_channel.id"), nullable=True)
+    template_subject = db.Column(db.String(255), nullable=True)
+    template_body = db.Column(db.Text, nullable=False, default="")
+    created_at = db.Column(db.DateTime(timezone=True), default=utcnow)
+    updated_at = db.Column(db.DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+    channel = db.relationship("NotificationChannel")
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "event_type": self.event_type,
+            "name": self.name,
+            "enabled": self.enabled,
+            "channel_id": self.channel_id,
+            "channel": self.channel.to_dict() if self.channel else None,
+            "template_subject": self.template_subject,
+            "template_body": self.template_body,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+class NotificationLog(db.Model):
+    __table_args__ = (
+        db.Index("ix_notification_log_status_created", "status", "created_at"),
+        db.Index("ix_notification_log_event_created", "event_type", "created_at"),
+        db.Index("ix_notification_log_channel_created", "channel_id", "created_at"),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    channel_id = db.Column(db.Integer, db.ForeignKey("notification_channel.id"), nullable=True)
+    event_type = db.Column(db.String(80), nullable=False, default="manual_test")
+    recipient = db.Column(db.String(255), nullable=True)
+    subject = db.Column(db.String(255), nullable=True)
+    content = db.Column(db.Text, nullable=False, default="")
+    status = db.Column(db.String(24), nullable=False, default="queued")
+    provider_response = db.Column(db.JSON, nullable=False, default=dict)
+    error = db.Column(db.Text, nullable=True)
+    created_by = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
+    created_at = db.Column(db.DateTime(timezone=True), default=utcnow)
+
+    channel = db.relationship("NotificationChannel")
+    creator = db.relationship("User")
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "channel_id": self.channel_id,
+            "channel": self.channel.to_dict() if self.channel else None,
+            "event_type": self.event_type,
+            "recipient": self.recipient,
+            "subject": self.subject,
+            "content": self.content,
+            "status": self.status,
+            "provider_response": self.provider_response or {},
+            "error": self.error,
+            "created_by": self.created_by,
+            "creator_name": self.creator.name if self.creator else "",
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
 class AuditLog(db.Model):
     __table_args__ = (
         db.Index("ix_audit_log_created_at", "created_at"),

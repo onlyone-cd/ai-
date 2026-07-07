@@ -19,7 +19,7 @@ from .auth import hash_password, issue_token, login_required, roles_required, va
 from .job_service import build_jd_structured, ensure_jd_structured, persist_matches, preview_matches
 from .llm_client import LLMError, chat_json, llm_available, llm_status
 from .matching import match_candidate
-from .models import AuditLog, BackgroundTask, BossAccount, BossDraft, Candidate, CandidateTag, EmployeeAnalysis, EmployeeCompensation, EmployeeProfile, EmployeeRecommendation, InterviewAssignment, InterviewFeedback, Job, LLMUsage, Match, OfferRecord, OrganizationUnit, PipelineStage, UploadBatch, User, years_between
+from .models import AuditLog, BackgroundTask, BossAccount, BossDraft, Candidate, CandidateTag, EmployeeAnalysis, EmployeeCompensation, EmployeeProfile, EmployeeRecommendation, InterviewAssignment, InterviewFeedback, Job, LLMUsage, Match, NotificationChannel, NotificationEvent, NotificationLog, OfferRecord, OrganizationUnit, PipelineStage, UploadBatch, User, years_between
 from .rbac import ROLES, role_permissions
 from .resume_service import ARCHIVE_EXTENSIONS, parse_and_save_archive, parse_and_save_resume, parse_and_save_text, reparse_candidate, resume_upload_dir
 from .responses import error, ok
@@ -147,6 +147,10 @@ def system_data_integrity(user):
         "boss_draft_job": missing_fk_count(BossDraft, BossDraft.job_id, Job),
         "audit_user": missing_fk_count(AuditLog, AuditLog.user_id, User),
         "task_creator": missing_fk_count(BackgroundTask, BackgroundTask.created_by, User, nullable=True),
+        "notification_channel_creator": missing_fk_count(NotificationChannel, NotificationChannel.created_by, User, nullable=True),
+        "notification_event_channel": missing_fk_count(NotificationEvent, NotificationEvent.channel_id, NotificationChannel, nullable=True),
+        "notification_log_channel": missing_fk_count(NotificationLog, NotificationLog.channel_id, NotificationChannel, nullable=True),
+        "notification_log_creator": missing_fk_count(NotificationLog, NotificationLog.created_by, User, nullable=True),
     }
     orphan_total = sum(orphan_checks.values())
     add_check("orphan_relations", "error", orphan_total, f"发现 {orphan_total} 条引用异常数据，需要修复后再上线")
@@ -200,6 +204,9 @@ def system_data_integrity(user):
         "employees": EmployeeProfile.query.count(),
         "compensations": EmployeeCompensation.query.count(),
         "audit_logs": AuditLog.query.count(),
+        "notification_channels": NotificationChannel.query.count(),
+        "notification_events": NotificationEvent.query.count(),
+        "notification_logs": NotificationLog.query.count(),
     }
     error_count = sum(1 for item in checks if not item["ok"] and item["severity"] == "error")
     warning_count = sum(1 for item in checks if not item["ok"] and item["severity"] == "warning")
@@ -337,6 +344,212 @@ def retry_background_task(user, task_id):
     audit_log(user, "retry", "background_task", task.id, task.task_type)
     db.session.commit()
     return ok(task.to_dict(), "后台任务已重新排队")
+
+
+NOTIFICATION_CHANNEL_TYPES = {"email", "webhook", "wecom", "sms", "console"}
+DEFAULT_NOTIFICATION_EVENTS = [
+    {
+        "event_type": "interview_scheduled",
+        "name": "面试安排通知",
+        "template_subject": "面试安排：{candidate_name} - {job_title}",
+        "template_body": "候选人 {candidate_name} 的 {job_title} 面试已安排在 {scheduled_at}。",
+    },
+    {
+        "event_type": "offer_status_changed",
+        "name": "Offer 状态通知",
+        "template_subject": "Offer 状态更新：{candidate_name}",
+        "template_body": "{candidate_name} 的 Offer 状态已更新为 {status}。",
+    },
+    {
+        "event_type": "task_failed",
+        "name": "后台任务失败告警",
+        "template_subject": "后台任务失败：{task_type}",
+        "template_body": "任务 #{task_id}（{task_type}）执行失败：{error}",
+    },
+    {
+        "event_type": "llm_usage_alert",
+        "name": "AI 用量告警",
+        "template_subject": "AI 用量告警：{alert_level}",
+        "template_body": "{message}",
+    },
+]
+
+
+@api.get("/notifications/channels")
+@login_required
+@roles_required("admin", "manager")
+def list_notification_channels(user):
+    query = NotificationChannel.query.order_by(NotificationChannel.created_at.desc())
+    channel_type = request.args.get("channel_type")
+    if channel_type:
+        query = query.filter_by(channel_type=channel_type)
+    channels, meta = paginate_query(query)
+    return ok({"items": [channel.to_dict() for channel in channels], "channel_types": sorted(NOTIFICATION_CHANNEL_TYPES), **meta})
+
+
+@api.post("/notifications/channels")
+@login_required
+@roles_required("admin")
+def create_notification_channel(user):
+    payload = request.get_json(force=True)
+    name = str(payload.get("name") or "").strip()
+    channel_type = str(payload.get("channel_type") or "webhook").strip()
+    if not name:
+        return error("通知渠道名称必填")
+    if channel_type not in NOTIFICATION_CHANNEL_TYPES:
+        return error("通知渠道类型不支持")
+    channel = NotificationChannel(
+        name=name,
+        channel_type=channel_type,
+        enabled=bool(payload.get("enabled", True)),
+        config_json=payload.get("config") or {},
+        created_by=user.id,
+    )
+    db.session.add(channel)
+    db.session.flush()
+    audit_log(user, "create", "notification_channel", channel.id, channel.name)
+    db.session.commit()
+    return ok(channel.to_dict(), "通知渠道已创建")
+
+
+@api.patch("/notifications/channels/<int:channel_id>")
+@login_required
+@roles_required("admin")
+def update_notification_channel(user, channel_id):
+    channel = db.session.get(NotificationChannel, channel_id)
+    if not channel:
+        return error("通知渠道不存在", "NOT_FOUND", 404)
+    payload = request.get_json(force=True)
+    if "name" in payload:
+        name = str(payload.get("name") or "").strip()
+        if not name:
+            return error("通知渠道名称不能为空")
+        channel.name = name
+    if "channel_type" in payload:
+        channel_type = str(payload.get("channel_type") or "").strip()
+        if channel_type not in NOTIFICATION_CHANNEL_TYPES:
+            return error("通知渠道类型不支持")
+        channel.channel_type = channel_type
+    if "enabled" in payload:
+        channel.enabled = bool(payload.get("enabled"))
+    if "config" in payload:
+        channel.config_json = payload.get("config") or {}
+    audit_log(user, "update", "notification_channel", channel.id, channel.name)
+    db.session.commit()
+    return ok(channel.to_dict(), "通知渠道已更新")
+
+
+@api.delete("/notifications/channels/<int:channel_id>")
+@login_required
+@roles_required("admin")
+def delete_notification_channel(user, channel_id):
+    channel = db.session.get(NotificationChannel, channel_id)
+    if not channel:
+        return error("通知渠道不存在", "NOT_FOUND", 404)
+    NotificationEvent.query.filter_by(channel_id=channel.id).update({"channel_id": None})
+    NotificationLog.query.filter_by(channel_id=channel.id).update({"channel_id": None})
+    audit_log(user, "delete", "notification_channel", channel.id, channel.name)
+    db.session.delete(channel)
+    db.session.commit()
+    return ok({"deleted": channel_id}, "通知渠道已删除")
+
+
+@api.get("/notifications/events")
+@login_required
+@roles_required("admin", "manager")
+def list_notification_events(user):
+    ensure_default_notification_events()
+    query = NotificationEvent.query.order_by(NotificationEvent.event_type.asc())
+    events, meta = paginate_query(query, default_limit=100, max_limit=200)
+    return ok({"items": [event.to_dict() for event in events], **meta})
+
+
+@api.post("/notifications/events")
+@login_required
+@roles_required("admin")
+def upsert_notification_event(user):
+    payload = request.get_json(force=True)
+    event_type = str(payload.get("event_type") or "").strip()
+    name = str(payload.get("name") or "").strip()
+    if not event_type or not name:
+        return error("事件类型和名称必填")
+    event = NotificationEvent.query.filter_by(event_type=event_type).first()
+    created = False
+    if not event:
+        event = NotificationEvent(event_type=event_type, name=name)
+        db.session.add(event)
+        created = True
+    try:
+        apply_notification_event_payload(event, payload)
+    except ValueError as exc:
+        db.session.rollback()
+        return error(str(exc), "BAD_REQUEST", 400)
+    audit_log(user, "create" if created else "update", "notification_event", event.id, event.event_type)
+    db.session.commit()
+    return ok(event.to_dict(), "通知事件已保存")
+
+
+@api.patch("/notifications/events/<int:event_id>")
+@login_required
+@roles_required("admin")
+def update_notification_event(user, event_id):
+    event = db.session.get(NotificationEvent, event_id)
+    if not event:
+        return error("通知事件不存在", "NOT_FOUND", 404)
+    payload = request.get_json(force=True)
+    try:
+        apply_notification_event_payload(event, payload)
+    except ValueError as exc:
+        db.session.rollback()
+        return error(str(exc), "BAD_REQUEST", 400)
+    audit_log(user, "update", "notification_event", event.id, event.event_type)
+    db.session.commit()
+    return ok(event.to_dict(), "通知事件已更新")
+
+
+@api.get("/notifications/logs")
+@login_required
+@roles_required("admin", "manager")
+def list_notification_logs(user):
+    query = NotificationLog.query.order_by(NotificationLog.created_at.desc())
+    status = request.args.get("status")
+    event_type = request.args.get("event_type")
+    channel_id = request.args.get("channel_id", type=int)
+    if status and status != "all":
+        query = query.filter_by(status=status)
+    if event_type:
+        query = query.filter_by(event_type=event_type)
+    if channel_id:
+        query = query.filter_by(channel_id=channel_id)
+    logs, meta = paginate_query(query, default_limit=50, max_limit=200)
+    return ok({"items": [log.to_dict() for log in logs], **meta})
+
+
+@api.post("/notifications/send-test")
+@login_required
+@roles_required("admin", "manager")
+def send_test_notification(user):
+    payload = request.get_json(force=True)
+    channel = resolve_notification_channel(payload.get("channel_id"))
+    if not channel:
+        return error("请先创建并启用通知渠道", "NO_NOTIFICATION_CHANNEL", 400)
+    recipient = str(payload.get("recipient") or (channel.config_json or {}).get("default_recipient") or "").strip()
+    subject = str(payload.get("subject") or "HireInsight 通知测试").strip()
+    content = str(payload.get("content") or "这是一条通知中心测试消息。").strip()
+    log = create_notification_log(
+        user=user,
+        channel=channel,
+        event_type="manual_test",
+        recipient=recipient,
+        subject=subject,
+        content=content,
+        status="sent" if channel.enabled else "skipped",
+        response={"mode": "dry_run", "channel_type": channel.channel_type, "note": "第三方通道将在业务全面对接阶段启用"},
+        error=None if channel.enabled else "通知渠道已禁用",
+    )
+    audit_log(user, "send_test", "notification", log.id, channel.name)
+    db.session.commit()
+    return ok({"log": log.to_dict()}, "测试通知已记录")
 
 
 def pagination_params(default_limit=50, max_limit=200):
@@ -4332,6 +4545,74 @@ def offer_status_label(status):
         "declined": "已拒绝",
         "cancelled": "已取消",
     }.get(status, status)
+
+
+def ensure_default_notification_events():
+    changed = False
+    for payload in DEFAULT_NOTIFICATION_EVENTS:
+        event = NotificationEvent.query.filter_by(event_type=payload["event_type"]).first()
+        if event:
+            continue
+        db.session.add(
+            NotificationEvent(
+                event_type=payload["event_type"],
+                name=payload["name"],
+                enabled=True,
+                template_subject=payload["template_subject"],
+                template_body=payload["template_body"],
+            )
+        )
+        changed = True
+    if changed:
+        db.session.commit()
+
+
+def apply_notification_event_payload(event, payload):
+    if "name" in payload:
+        name = str(payload.get("name") or "").strip()
+        if name:
+            event.name = name
+    if "enabled" in payload:
+        event.enabled = bool(payload.get("enabled"))
+    if "channel_id" in payload:
+        channel_id = payload.get("channel_id")
+        if channel_id:
+            channel = db.session.get(NotificationChannel, int(channel_id))
+            if not channel:
+                raise ValueError("通知渠道不存在")
+            event.channel_id = channel.id
+        else:
+            event.channel_id = None
+    if "template_subject" in payload:
+        event.template_subject = str(payload.get("template_subject") or "").strip()
+    if "template_body" in payload:
+        body = str(payload.get("template_body") or "").strip()
+        if body:
+            event.template_body = body
+
+
+def resolve_notification_channel(channel_id=None):
+    if channel_id:
+        channel = db.session.get(NotificationChannel, int(channel_id))
+        return channel if channel and channel.enabled else None
+    return NotificationChannel.query.filter_by(enabled=True).order_by(NotificationChannel.created_at.desc()).first()
+
+
+def create_notification_log(user, channel, event_type, recipient, subject, content, status="sent", response=None, error=None):
+    log = NotificationLog(
+        channel_id=channel.id if channel else None,
+        event_type=event_type,
+        recipient=recipient,
+        subject=subject,
+        content=content,
+        status=status,
+        provider_response=response or {},
+        error=error,
+        created_by=user.id if user else None,
+    )
+    db.session.add(log)
+    db.session.flush()
+    return log
 
 
 def audit_log(user, action, target_type, target_id=None, target_name="", details=None):

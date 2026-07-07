@@ -44,7 +44,9 @@ services:
     volumes:
       - uploads:/data/uploads
     command: >
-      sh -c "flask --app run db upgrade &&
+      sh -c "python /app/scripts/preflight_production.py &&
+      flask --app run db upgrade &&
+      python /app/scripts/preflight_production.py --require-migration-head &&
       flask --app run run-tasks --watch --limit ${TASK_WORKER_LIMIT:-5} --sleep-seconds ${TASK_WORKER_SLEEP_SECONDS:-5}"
 
 volumes:

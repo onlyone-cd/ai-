@@ -35,6 +35,8 @@ jobs:
           cache-dependency-path: backend/requirements.txt
       - name: Install dependencies
         run: python -m pip install --upgrade pip && pip install -r requirements.txt
+      - name: Check production preflight script
+        run: python -m py_compile ../scripts/preflight_production.py
       - name: Run tests
         env:
           LLM_ENABLED: "false"

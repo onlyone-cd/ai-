@@ -34,7 +34,7 @@ import {
   Users,
   X
 } from "lucide-react";
-import { api, AgentResponse, AiInterviewPlan, AuditLog, BackgroundTask, BiOverview, BossInboxItem, Candidate, clearToken, EmployeeAnalysis, EmployeeProfile, EmployeeRecommendation, InterviewAssignment, InterviewFeedback, InterviewMessage, Job, JobDuplicateGroup, LLMUsageSummary, MatchResult, notify, OfferRecord, OrganizationUnit, PipelineItem, PublicInterviewRoom, setToken, SkillTag, SystemReadiness, User } from "./lib/api";
+import { api, AgentResponse, AiInterviewPlan, AuditLog, BackgroundTask, BiOverview, BossInboxItem, Candidate, clearToken, EmployeeAnalysis, EmployeeProfile, EmployeeRecommendation, InterviewAssignment, InterviewFeedback, InterviewMessage, Job, LLMUsageSummary, MatchResult, notify, OfferRecord, OrganizationUnit, PipelineItem, PublicInterviewRoom, setToken, SkillTag, SystemReadiness, User } from "./lib/api";
 
 const stageLabels: Record<string, string> = {
   pending: "待处理",
@@ -736,9 +736,6 @@ function JobsPage() {
   const [matches, setMatches] = useState<MatchResult[]>([]);
   const [preview, setPreview] = useState<MatchResult[]>([]);
   const [formOpen, setFormOpen] = useState(false);
-  const [cleanupOpen, setCleanupOpen] = useState(false);
-  const [duplicateGroups, setDuplicateGroups] = useState<JobDuplicateGroup[]>([]);
-  const [cleanupBusy, setCleanupBusy] = useState(false);
   const [error, setError] = useState("");
   const [pipelineMessage, setPipelineMessage] = useState("");
   const [query, setQuery] = useState("");
@@ -804,37 +801,6 @@ function JobsPage() {
     setJobId(nextJobs[0]?.id ?? null);
   }
 
-  async function loadDuplicateJobs() {
-    setCleanupBusy(true);
-    try {
-      const data = await api.jobDuplicates();
-      setDuplicateGroups(data.items);
-      setCleanupOpen(true);
-      if (!data.items.length) notify("success", "当前没有检测到重复岗位");
-    } finally {
-      setCleanupBusy(false);
-    }
-  }
-
-  async function mergeDuplicateGroup(group: JobDuplicateGroup, targetId: number) {
-    const duplicateIds = group.jobs.map((job) => job.id).filter((id) => id !== targetId);
-    const target = group.jobs.find((job) => job.id === targetId);
-    if (!target || !duplicateIds.length) return;
-    if (!window.confirm(`确认保留「${target.title}」，并把另外 ${duplicateIds.length} 个重复岗位的在招、面试、Offer、BOSS 和已入职员工全部迁移过来？`)) return;
-    setCleanupBusy(true);
-    try {
-      await api.mergeJobs({ target_job_id: targetId, duplicate_job_ids: duplicateIds });
-      const data = await api.jobDuplicates();
-      setDuplicateGroups(data.items);
-      notify("success", "重复岗位已合并，关联人员已迁移");
-      setMatches([]);
-      setPreview([]);
-      load();
-    } finally {
-      setCleanupBusy(false);
-    }
-  }
-
   const visibleJobs = useMemo(() => {
     const keyword = query.trim().toLowerCase();
     if (!keyword) return jobs;
@@ -892,10 +858,6 @@ function JobsPage() {
           <Plus size={17} />
           新建岗位
         </button>
-        <button className="secondary-button w-full" onClick={loadDuplicateJobs} disabled={cleanupBusy}>
-          <Wrench size={17} />
-          清理重复岗位
-        </button>
         {formOpen && <JobForm onCreated={(job) => { setJobs([job, ...jobs]); setJobId(job.id); setFormOpen(false); }} />}
         <div className="data-list">
           {pagedJobs.items.map((job) => (
@@ -916,15 +878,6 @@ function JobsPage() {
           {visibleJobs.length === 0 && <EmptyState icon={<Search size={22} />} text="没有匹配的岗位" />}
         </div>
         <PaginationControls total={visibleJobs.length} limit={pagedJobs.limit} offset={pagedJobs.offset} onChange={pagedJobs.onChange} />
-        {cleanupOpen && (
-          <JobCleanupModal
-            groups={duplicateGroups}
-            busy={cleanupBusy}
-            onClose={() => setCleanupOpen(false)}
-            onRefresh={loadDuplicateJobs}
-            onMerge={mergeDuplicateGroup}
-          />
-        )}
       </div>
       <div className="space-y-4">
         {selectedJob && (
@@ -1107,83 +1060,6 @@ function RequirementList({ title, items }: { title: string; items: string[] }) {
       ) : (
         <p className="mt-2 text-sm text-steel">未识别</p>
       )}
-    </div>
-  );
-}
-
-function JobCleanupModal({
-  groups,
-  busy,
-  onClose,
-  onRefresh,
-  onMerge
-}: {
-  groups: JobDuplicateGroup[];
-  busy: boolean;
-  onClose: () => void;
-  onRefresh: () => void;
-  onMerge: (group: JobDuplicateGroup, targetId: number) => void;
-}) {
-  return (
-    <div className="modal-backdrop" onClick={onClose}>
-      <div className="modal-panel max-w-5xl" onClick={(event) => event.stopPropagation()}>
-        <div className="modal-head">
-          <div>
-            <h2 className="font-semibold">重复岗位清理</h2>
-            <p>按岗位名称识别重复项。选择一个保留岗位后，系统会把在招流程、面试、Offer、BOSS 记录和内部员工当前岗位统一迁移到保留岗位。</p>
-          </div>
-          <div className="flex gap-2">
-            <button className="secondary-button" type="button" onClick={onRefresh} disabled={busy}>
-              <RefreshCw size={16} />
-              刷新
-            </button>
-            <button className="icon-button" type="button" onClick={onClose}>
-              <X size={16} />
-            </button>
-          </div>
-        </div>
-        {groups.length === 0 ? (
-          <EmptyState icon={<BriefcaseBusiness size={22} />} text="当前没有检测到重复岗位" />
-        ) : (
-          <div className="mt-4 grid gap-3">
-            {groups.map((group) => (
-              <div className="rounded-lg border border-line bg-slate-50 p-3" key={group.key}>
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div>
-                    <h3 className="font-semibold">{group.title}</h3>
-                    <p className="text-xs text-steel">检测到 {group.count} 个同名岗位，请选择一个作为保留岗位。</p>
-                  </div>
-                  <span className="badge muted">可合并 {group.count - 1} 个</span>
-                </div>
-                <div className="mt-3 grid gap-2">
-                  {group.jobs.map((job) => (
-                    <div className="data-row" key={job.id}>
-                      <div className="min-w-0 flex-1">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <h4 className="font-semibold">{job.title}</h4>
-                          <span className={`badge ${job.status === "active" ? "" : "muted"}`}>{job.status === "active" ? "开放" : "关闭"}</span>
-                          <span className="badge muted">{job.department || "未分部门"}</span>
-                          <span className="badge muted">{job.job_code || "无编号"}</span>
-                        </div>
-                        <div className="mt-2 flex flex-wrap gap-1.5">
-                          <span className="chip">在招 {job.recruiting_count}</span>
-                          <span className="chip">已入职 {job.active_employee_count}</span>
-                          <span className="chip muted">面试 {job.interview_count}</span>
-                          <span className="chip muted">Offer {job.offer_count}</span>
-                          <span className="chip muted">BOSS {job.boss_draft_count}</span>
-                        </div>
-                      </div>
-                      <button className="primary-button" type="button" onClick={() => onMerge(group, job.id)} disabled={busy || group.jobs.length < 2}>
-                        保留并合并到此岗位
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
     </div>
   );
 }

@@ -41,23 +41,6 @@ export type Job = {
   pipeline_count?: number;
 };
 
-export type JobDuplicateGroup = {
-  key: string;
-  title: string;
-  count: number;
-  jobs: (Job & {
-    match_count: number;
-    pipeline_count: number;
-    recruiting_count: number;
-    onboarded_pipeline_count: number;
-    employee_count: number;
-    active_employee_count: number;
-    interview_count: number;
-    offer_count: number;
-    boss_draft_count: number;
-  })[];
-};
-
 export type OrganizationUnit = {
   id: number;
   parent_id?: number | null;
@@ -497,9 +480,6 @@ export const api = {
   closeJob: (id: number) => request<Job>(`/jobs/${id}/close`, { method: "POST" }),
   restoreJob: (id: number) => request<Job>(`/jobs/${id}/restore`, { method: "POST" }),
   deleteJob: (id: number) => request<{ deleted: number }>(`/jobs/${id}`, { method: "DELETE" }),
-  jobDuplicates: () => request<{ items: JobDuplicateGroup[]; total_groups: number; duplicate_job_count: number }>("/jobs/duplicates"),
-  mergeJobs: (payload: { target_job_id: number; duplicate_job_ids: number[] }) =>
-    request<{ target: Job; merged_job_ids: number[]; removed_duplicate_matches: number }>("/jobs/merge", { method: "POST", body: JSON.stringify(payload) }),
   matchPreview: (jobId: number, limit = 5) => request<{ job: Job; items: MatchResult[] }>(`/jobs/${jobId}/match-preview?limit=${limit}`),
   matchJob: (jobId: number) => request<{ job: Job; items: MatchResult[] }>(`/jobs/${jobId}/match`, { method: "POST" }),
   batchPipeline: (jobId: number, payload: { candidate_ids?: number[]; candidate_id?: number; stage?: string; note?: string }) =>

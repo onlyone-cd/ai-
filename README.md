@@ -141,6 +141,18 @@ python scripts\check_secrets.py
 .\backend\.venv\Scripts\python.exe scripts\preflight_production.py
 ```
 
+接口冒烟测试：
+
+```powershell
+python scripts\smoke_api.py --base-url http://localhost:5001
+```
+
+上线前完整冒烟测试会创建临时候选人、临时岗位并自动清理：
+
+```powershell
+python scripts\smoke_api.py --base-url http://localhost:5001 --mutating
+```
+
 创建生产管理员：
 
 ```bash

@@ -461,10 +461,11 @@ def organization_unit_employees(user, unit_id):
     if not unit:
         return error("组织节点不存在", "NOT_FOUND", 404)
     unit_ids = organization_descendant_ids(unit_id)
-    employees = EmployeeProfile.query.filter(EmployeeProfile.organization_unit_id.in_(unit_ids)).order_by(EmployeeProfile.updated_at.desc()).all()
+    query = EmployeeProfile.query.filter(EmployeeProfile.organization_unit_id.in_(unit_ids)).order_by(EmployeeProfile.updated_at.desc())
+    employees, meta = paginate_query(query, default_limit=100, max_limit=200)
     audit_log(user, "view", "organization_unit", unit.id, unit.name, {"scope": "employees"})
     db.session.commit()
-    return ok({"unit": unit.to_dict(include_counts=True), "items": [employee_payload(employee, user) for employee in employees]})
+    return ok({"unit": unit.to_dict(include_counts=True), "items": [employee_payload(employee, user) for employee in employees], **meta})
 
 
 @api.get("/organization/units/<int:unit_id>/overview")
@@ -493,7 +494,7 @@ def list_employees(user):
     if status and status != "all":
         query = query.filter_by(employment_status=status)
     overview = employee_group_overview(query.all())
-    employees, meta = paginate_query(query)
+    employees, meta = paginate_query(query, default_limit=100, max_limit=200)
     return ok({"items": [employee_payload(employee, user) for employee in employees], "overview": overview, **meta})
 
 
@@ -3307,7 +3308,19 @@ def build_organization_tree(units):
             nodes[unit.parent_id]["children"].append(node)
         else:
             roots.append(node)
+    apply_organization_aggregate_counts(roots)
     return roots
+
+
+def apply_organization_aggregate_counts(nodes):
+    for node in nodes:
+        direct_count = int(node.get("employee_count") or 0)
+        node["direct_employee_count"] = direct_count
+        child_count = apply_organization_aggregate_counts(node.get("children") or [])
+        node["employee_count"] = direct_count + child_count
+        if node.get("headcount_plan"):
+            node["vacancy_count"] = max(int(node.get("headcount_plan") or 0) - node["employee_count"], 0)
+    return sum(int(node.get("employee_count") or 0) for node in nodes)
 
 
 def organization_descendant_ids(unit_id):
@@ -3354,6 +3367,7 @@ def reset_internal_talent_data():
     EmployeeCompensation.query.delete()
     EmployeeProfile.query.delete()
     OrganizationUnit.query.delete()
+    Job.query.filter(Job.job_code.like("INTERNAL-%")).delete(synchronize_session=False)
     db.session.flush()
 
 
@@ -3507,9 +3521,9 @@ def upsert_employee_from_import_row(row, user):
     phone = only_digits(row_value(row, ["手机号", "手机", "电话", "phone", "mobile"]))
     email_value = row_value(row, ["邮箱", "email", "mail"]).lower()
     name = row_value(row, ["姓名", "员工姓名", "name"])
-    current_title = row_value(row, ["当前岗位", "岗位", "职位", "current_title", "title", "job_title"])
-    job = resolve_job_from_import_row(row)
     unit = resolve_organization_unit_from_import_row(row, user)
+    current_title = row_value(row, ["当前岗位", "岗位", "职位", "current_title", "title", "job_title"])
+    job = resolve_job_from_import_row(row, user, unit)
     if not employee_no and name:
         employee_no = stable_employee_no(row, name, unit, current_title)
     employee = find_employee_for_import_row(employee_no, phone, email_value)
@@ -3668,7 +3682,7 @@ def resolve_organization_unit_from_import_row(row, user):
     return ensure_default_organization(user)
 
 
-def resolve_job_from_import_row(row):
+def resolve_job_from_import_row(row, user=None, unit=None):
     job_id = parse_optional_int(row_value(row, ["current_job_id", "job_id", "岗位ID"]), None)
     if job_id:
         job = db.session.get(Job, job_id)
@@ -3677,7 +3691,47 @@ def resolve_job_from_import_row(row):
     title = row_value(row, ["岗位", "职位", "当前岗位", "job_title", "title", "current_title"])
     if not title:
         return None
-    return Job.query.filter(func.lower(Job.title) == title.lower()).order_by(Job.id.asc()).first()
+    department = unit.name if unit else row_value(row, ["部门", "组织", "department", "organization"])
+    query = Job.query.filter(func.lower(Job.title) == title.lower())
+    if department:
+        scoped = query.filter(func.lower(Job.department) == department.lower()).order_by(Job.id.asc()).first()
+        if scoped:
+            return scoped
+    existing = query.order_by(Job.id.asc()).first()
+    if existing and not department:
+        return existing
+    if not user:
+        return existing
+    return create_internal_job_from_employee_row(title, department, user)
+
+
+def create_internal_job_from_employee_row(title, department, user):
+    code_seed = f"{title}|{department or ''}"
+    job_code = f"INTERNAL-{hashlib.sha1(code_seed.encode('utf-8', errors='ignore')).hexdigest()[:12].upper()}"
+    existing = Job.query.filter_by(job_code=job_code).first()
+    if existing:
+        return existing
+    jd_text = f"内部在职岗位：{title}。所属组织：{department or '未维护'}。岗位职责与技能要求待通过 JD 校准补充。"
+    job = Job(
+        owner_hr_id=user.id,
+        title=title,
+        department=department or "",
+        city="",
+        job_code=job_code,
+        jd_text=jd_text,
+        jd_structured={
+            "title": title,
+            "department": department or "",
+            "source": "internal_employee_import",
+            "skill_tags_raw": "",
+            "responsibilities": [f"承担{title}相关工作"],
+            "requirements": ["待补充岗位 JD 和技能要求"],
+        },
+        status="active",
+    )
+    db.session.add(job)
+    db.session.flush()
+    return job
 
 
 def normalize_employee_status(value):

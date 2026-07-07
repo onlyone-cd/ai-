@@ -2,6 +2,7 @@ const API_BASE = "/api";
 
 export type User = { id: number; username: string; name: string; role: string; active: boolean; permissions?: string[] };
 export type CandidateTag = { tag: string; score: number; category: string };
+export type PaginationMeta = { total: number; limit: number; offset: number; has_more: boolean };
 export type Candidate = {
   id: number;
   name_masked: string;
@@ -301,6 +302,15 @@ function shouldNotify(init: RequestInit) {
   return (init.method || "GET").toUpperCase() !== "GET";
 }
 
+function queryString(params?: Record<string, string | number | boolean | undefined | null>) {
+  const query = new URLSearchParams();
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== "") query.set(key, String(value));
+  });
+  const text = query.toString();
+  return text ? `?${text}` : "";
+}
+
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   try {
     const response = await fetch(`${API_BASE}${path}`, {
@@ -433,9 +443,9 @@ export const api = {
     }
     return upload<{ unit: OrganizationUnit; employees: EmployeeProfile[]; candidates: Candidate[]; errors: { filename: string; error: string }[]; success_count: number; failed_count: number }>(`/organization/units/${unitId}/employee-resumes`, formData);
   },
-  organizationEmployees: (unitId: number) => request<{ unit: OrganizationUnit; items: EmployeeProfile[] }>(`/organization/units/${unitId}/employees`),
+  organizationEmployees: (unitId: number, params?: { limit?: number; offset?: number }) => request<{ unit: OrganizationUnit; items: EmployeeProfile[] } & PaginationMeta>(`/organization/units/${unitId}/employees${queryString(params)}`),
   organizationOverview: (unitId: number) => request<{ total: number; active: number; inactive: number; with_compensation: number; analyzed: number; high_fit: number; salary_risk: number; avg_match_score: number; unit: OrganizationUnit }>(`/organization/units/${unitId}/overview`),
-  employees: (organizationUnitId?: number) => request<{ items: EmployeeProfile[]; overview: { total: number; active: number; inactive: number; with_compensation: number; analyzed: number; high_fit: number; salary_risk: number; avg_match_score: number; avg_seniority_years: number } }>(`/employees${organizationUnitId ? `?organization_unit_id=${organizationUnitId}` : ""}`),
+  employees: (organizationUnitId?: number, params?: { limit?: number; offset?: number }) => request<{ items: EmployeeProfile[]; overview: { total: number; active: number; inactive: number; with_compensation: number; analyzed: number; high_fit: number; salary_risk: number; avg_match_score: number; avg_seniority_years: number } } & PaginationMeta>(`/employees${queryString({ organization_unit_id: organizationUnitId || undefined, ...params })}`),
   getEmployee: (id: number) => request<EmployeeProfile>(`/employees/${id}`),
   createEmployeeFromCandidate: (payload: { candidate_id: number; organization_unit_id?: number; current_job_id?: number; employee_no?: string; level?: string; salary_monthly_k?: string | number; salary_annual_k?: string | number; salary_months?: string | number; hire_date?: string; birth_date?: string; education?: string; graduation_school?: string; graduation_date?: string; manager_name?: string }) =>
     request<EmployeeProfile>("/employees/from-candidate", { method: "POST", body: JSON.stringify(payload) }),

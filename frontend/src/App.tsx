@@ -2242,6 +2242,41 @@ function KpiMini({ label, value, hint }: { label: string; value: React.ReactNode
   );
 }
 
+function PaginationControls({
+  total,
+  limit,
+  offset,
+  onChange
+}: {
+  total: number;
+  limit: number;
+  offset: number;
+  onChange: (offset: number, limit: number) => void;
+}) {
+  if (total <= 0) return null;
+  const page = Math.floor(offset / limit) + 1;
+  const pageCount = Math.max(1, Math.ceil(total / limit));
+  const start = Math.min(offset + 1, total);
+  const end = Math.min(offset + limit, total);
+  return (
+    <div className="mt-4 flex flex-col gap-3 rounded-lg border border-line bg-white px-3 py-3 text-sm text-steel sm:flex-row sm:items-center sm:justify-between">
+      <span>显示 {start}-{end} / {total}</span>
+      <div className="flex flex-wrap items-center gap-2">
+        <select className="select" value={limit} onChange={(event) => onChange(0, Number(event.target.value))}>
+          {[20, 50, 100, 200].map((size) => <option key={size} value={size}>{size} / 页</option>)}
+        </select>
+        <button className="secondary-button" type="button" disabled={page <= 1} onClick={() => onChange(Math.max(0, offset - limit), limit)}>
+          上一页
+        </button>
+        <span className="px-2">{page} / {pageCount}</span>
+        <button className="secondary-button" type="button" disabled={page >= pageCount} onClick={() => onChange(offset + limit, limit)}>
+          下一页
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function AgentPage() {
   type AgentTurn = { role: "user" | "assistant"; content: string; response?: AgentResponse };
   const [message, setMessage] = useState("");
@@ -2598,6 +2633,9 @@ function OrganizationManagementPage() {
   const [orgTreeExpanded, setOrgTreeExpanded] = useState<Set<number>>(() => new Set());
   const [unitForm, setUnitForm] = useState({ name: "", unit_type: "department", parent_id: 0, city: "", headcount_plan: "" });
   const [resumeFiles, setResumeFiles] = useState<File[]>([]);
+  const [employeeTotal, setEmployeeTotal] = useState(0);
+  const [employeeLimit, setEmployeeLimit] = useState(100);
+  const [employeeOffset, setEmployeeOffset] = useState(0);
   const flatUnits = useMemo(() => flattenOrganizationUnits(units), [units]);
   const selectedUnit = flatUnits.find((unit) => unit.id === selectedId);
   const selectedPath = useMemo(() => organizationPath(flatUnits, selectedId), [flatUnits, selectedId]);
@@ -2613,15 +2651,18 @@ function OrganizationManagementPage() {
     return flatUnits.filter((unit) => `${unit.name} ${unit.city || ""} ${unit.unit_type || ""}`.toLowerCase().includes(keyword)).slice(0, 20);
   }, [flatUnits, orgQuery]);
 
-  async function load(nextSelectedId = selectedId) {
+  async function load(nextSelectedId = selectedId, nextOffset = employeeOffset, nextLimit = employeeLimit) {
     const tree = await api.organizationTree();
     setUnits(tree.items);
     const flattened = flattenOrganizationUnits(tree.items);
     const activeId = nextSelectedId || flattened[0]?.id || 0;
     if (activeId) {
       setSelectedId(activeId);
-      const data = await api.organizationEmployees(activeId);
+      const data = await api.organizationEmployees(activeId, { limit: nextLimit, offset: nextOffset });
       setEmployees(data.items);
+      setEmployeeTotal(data.total);
+      setEmployeeLimit(data.limit);
+      setEmployeeOffset(data.offset);
       const unit = flattened.find((item) => item.id === activeId);
       if (unit) {
         setUnitForm({
@@ -2642,7 +2683,14 @@ function OrganizationManagementPage() {
   async function selectUnit(id: number) {
     setOrgFormOpen(false);
     setOrgFormMode(null);
-    await load(id);
+    setEmployeeOffset(0);
+    await load(id, 0, employeeLimit);
+  }
+
+  async function changeOrganizationEmployeePage(nextOffset: number, nextLimit = employeeLimit) {
+    setEmployeeOffset(nextOffset);
+    setEmployeeLimit(nextLimit);
+    await load(selectedId, nextOffset, nextLimit);
   }
 
   function toggleOrgTreeUnit(unitId: number) {
@@ -2965,7 +3013,7 @@ function OrganizationManagementPage() {
             <div className="flex items-center justify-between">
               <div>
                 <h3 className="font-semibold">部门员工</h3>
-                <p className="text-xs text-steel">{selectedUnit?.name || "全部"} · {employees.length} 人</p>
+                <p className="text-xs text-steel">{selectedUnit?.name || "全部"} · {employeeTotal} 人</p>
               </div>
             </div>
             {employees.length === 0 ? (
@@ -2993,6 +3041,12 @@ function OrganizationManagementPage() {
                 ))}
               </div>
             )}
+            <PaginationControls
+              total={employeeTotal}
+              limit={employeeLimit}
+              offset={employeeOffset}
+              onChange={changeOrganizationEmployeePage}
+            />
           </div>
         </section>
       </main>
@@ -3016,6 +3070,9 @@ function InternalTalentPage() {
   const [orgTreeQuery, setOrgTreeQuery] = useState("");
   const [orgTreeExpanded, setOrgTreeExpanded] = useState<Set<number>>(() => new Set());
   const [batchResult, setBatchResult] = useState<{ analyzed_count: number; skipped_count: number } | null>(null);
+  const [employeeTotal, setEmployeeTotal] = useState(0);
+  const [employeeLimit, setEmployeeLimit] = useState(100);
+  const [employeeOffset, setEmployeeOffset] = useState(0);
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState({
     candidate_id: 0,
@@ -3042,15 +3099,18 @@ function InternalTalentPage() {
     return flatUnits.filter((unit) => `${unit.name} ${unit.city || ""} ${unit.unit_type || ""}`.toLowerCase().includes(keyword)).slice(0, 20);
   }, [flatUnits, orgTreeQuery]);
 
-  async function load(unitId = selectedUnitId) {
+  async function load(unitId = selectedUnitId, nextOffset = employeeOffset, nextLimit = employeeLimit) {
     const [tree, employeeData, candidateData, jobData] = await Promise.all([
       api.organizationTree(),
-      api.employees(unitId || undefined),
+      api.employees(unitId || undefined, { limit: nextLimit, offset: nextOffset }),
       api.candidates(),
       api.jobs()
     ]);
     setUnits(tree.items);
     setEmployees(employeeData.items);
+    setEmployeeTotal(employeeData.total);
+    setEmployeeLimit(employeeData.limit);
+    setEmployeeOffset(employeeData.offset);
     setCandidates(candidateData.items);
     setJobs(jobData.items);
     const firstUnit = flattenOrganizationUnits(tree.items)[0];
@@ -3069,7 +3129,14 @@ function InternalTalentPage() {
   async function selectUnit(unitId: number) {
     setSelectedUnitId(unitId);
     setSelectedEmployee(null);
-    await load(unitId);
+    setEmployeeOffset(0);
+    await load(unitId, 0, employeeLimit);
+  }
+
+  async function changeInternalEmployeePage(nextOffset: number, nextLimit = employeeLimit) {
+    setEmployeeOffset(nextOffset);
+    setEmployeeLimit(nextLimit);
+    await load(selectedUnitId, nextOffset, nextLimit);
   }
 
   function toggleOrgTreeUnit(unitId: number) {
@@ -3202,7 +3269,7 @@ function InternalTalentPage() {
               <>
                 <button className={`org-search-row ${selectedUnitId === 0 ? "active" : ""}`} type="button" onClick={() => selectUnit(0)}>
                   <span>全部内部人才</span>
-                  <span>{employees.length} 人</span>
+                  <span>{employeeTotal} 人</span>
                 </button>
                 <CompactOrganizationTree
                   units={units}
@@ -3371,7 +3438,7 @@ function InternalTalentPage() {
           <label className="secondary-button mt-4 w-full cursor-pointer">
             <Upload size={16} />
             选择薪资表
-            <input className="hidden" type="file" accept=".csv,.xlsx" onChange={(event) => importSalaryFile(event.target.files)} />
+            <input className="hidden" type="file" accept=".csv,.xlsx,.xls" onChange={(event) => importSalaryFile(event.target.files)} />
           </label>
           <div className="mt-3 rounded-md bg-slate-50 p-3 text-xs text-steel">
             表头示例：employee_no、salary_monthly_k、salary_months、bonus_k、effective_date
@@ -3425,7 +3492,7 @@ function InternalTalentPage() {
         </div>
 
         <div className="grid gap-3 md:grid-cols-4">
-          <KpiMini label="员工总数" value={employees.length} hint="当前组织范围" />
+          <KpiMini label="员工总数" value={employeeTotal} hint="当前组织范围" />
           <KpiMini label="有薪资数据" value={employees.filter((item) => item.compensation).length} hint="可做薪资分析" />
           <KpiMini label="已分析" value={employees.filter((item) => item.analyses?.length).length} hint="岗位/薪资分析" />
           <KpiMini label="平均司龄" value={`${Math.round((employees.reduce((sum, item) => sum + (item.seniority_years || 0), 0) / Math.max(employees.filter((item) => item.seniority_years != null).length, 1)) * 10) / 10} 年`} hint="按入职时间统计" />
@@ -3467,6 +3534,12 @@ function InternalTalentPage() {
             ))}
           </div>
         )}
+        <PaginationControls
+          total={employeeTotal}
+          limit={employeeLimit}
+          offset={employeeOffset}
+          onChange={changeInternalEmployeePage}
+        />
       </main>
     </section>
   );

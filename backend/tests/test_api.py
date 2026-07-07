@@ -564,15 +564,25 @@ def test_employee_import_replaces_org_tree_and_tracks_demographics(client, admin
     assert employee["birth_date"] == "1995-05-20"
     assert employee["seniority_years"] >= 6
     assert employee["organization_unit"]["name"] == "支付产品组"
+    assert employee["current_job"]["title"] == "产品经理"
+    assert employee["current_job"]["job_code"].startswith("INTERNAL-")
 
     tree = client.get("/api/organization/tree", headers=admin_headers).get_json()["data"]["items"]
     root = tree[0]
     assert root["name"] == "总公司"
     assert {item["name"] for item in root["children"]} == {"产品中心", "研发中心"}
+    assert root["employee_count"] == 2
+    assert next(item for item in root["children"] if item["name"] == "产品中心")["employee_count"] == 1
 
     employees = client.get("/api/employees", headers=admin_headers).get_json()["data"]
     assert employees["total"] == 2
     assert employees["overview"]["avg_seniority_years"] >= 5
+
+    paged = client.get("/api/employees?limit=1&offset=1", headers=admin_headers).get_json()["data"]
+    assert paged["total"] == 2
+    assert paged["limit"] == 1
+    assert paged["offset"] == 1
+    assert len(paged["items"]) == 1
 
 
 def test_organization_excel_import_and_department_resume_upload(client, admin_headers):

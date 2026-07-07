@@ -576,6 +576,7 @@ def test_employee_import_replaces_org_tree_and_tracks_demographics(client, admin
 
     employees = client.get("/api/employees", headers=admin_headers).get_json()["data"]
     assert employees["total"] == 2
+    assert employees["limit"] == 20
     assert employees["overview"]["avg_seniority_years"] >= 5
 
     paged = client.get("/api/employees?limit=1&offset=1", headers=admin_headers).get_json()["data"]
@@ -583,6 +584,13 @@ def test_employee_import_replaces_org_tree_and_tracks_demographics(client, admin
     assert paged["limit"] == 1
     assert paged["offset"] == 1
     assert len(paged["items"]) == 1
+
+    name_search = client.get("/api/employees?q=组织员工A", headers=admin_headers).get_json()["data"]
+    assert name_search["total"] == 1
+    assert name_search["items"][0]["name"] == "组织员工A"
+    title_search = client.get("/api/employees?q=Java工程师", headers=admin_headers).get_json()["data"]
+    assert title_search["total"] == 1
+    assert title_search["items"][0]["current_job"]["title"] == "Java工程师"
 
 
 def test_organization_excel_import_and_department_resume_upload(client, admin_headers):

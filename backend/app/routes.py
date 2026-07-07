@@ -11,7 +11,7 @@ import zipfile
 
 import jwt
 from flask import Blueprint, Response, current_app, request
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.exc import IntegrityError
 
 from . import db, production_config_checks
@@ -461,8 +461,9 @@ def organization_unit_employees(user, unit_id):
     if not unit:
         return error("组织节点不存在", "NOT_FOUND", 404)
     unit_ids = organization_descendant_ids(unit_id)
-    query = EmployeeProfile.query.filter(EmployeeProfile.organization_unit_id.in_(unit_ids)).order_by(EmployeeProfile.updated_at.desc())
-    employees, meta = paginate_query(query, default_limit=100, max_limit=200)
+    query = apply_employee_search(EmployeeProfile.query.filter(EmployeeProfile.organization_unit_id.in_(unit_ids)))
+    query = query.order_by(EmployeeProfile.updated_at.desc())
+    employees, meta = paginate_query(query, default_limit=20, max_limit=200)
     audit_log(user, "view", "organization_unit", unit.id, unit.name, {"scope": "employees"})
     db.session.commit()
     return ok({"unit": unit.to_dict(include_counts=True), "items": [employee_payload(employee, user) for employee in employees], **meta})
@@ -493,8 +494,9 @@ def list_employees(user):
     status = request.args.get("status")
     if status and status != "all":
         query = query.filter_by(employment_status=status)
+    query = apply_employee_search(query)
     overview = employee_group_overview(query.all())
-    employees, meta = paginate_query(query, default_limit=100, max_limit=200)
+    employees, meta = paginate_query(query, default_limit=20, max_limit=200)
     return ok({"items": [employee_payload(employee, user) for employee in employees], "overview": overview, **meta})
 
 
@@ -3359,6 +3361,21 @@ def employee_group_overview(employees):
         "avg_match_score": avg_match,
         "avg_seniority_years": avg_seniority,
     }
+
+
+def apply_employee_search(query):
+    keyword = str(request.args.get("q") or "").strip().lower()
+    if not keyword:
+        return query
+    like = f"%{keyword}%"
+    return query.filter(
+        or_(
+            func.lower(EmployeeProfile.name).like(like),
+            func.lower(EmployeeProfile.current_title).like(like),
+            func.lower(EmployeeProfile.employee_no).like(like),
+            func.lower(EmployeeProfile.department).like(like),
+        )
+    )
 
 
 def reset_internal_talent_data():

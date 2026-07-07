@@ -106,8 +106,7 @@ function App() {
 
   const navItems = [
     { key: "candidates", icon: <Users size={17} />, label: "人才库" },
-    { key: "organization", icon: <Building2 size={17} />, label: "组织架构" },
-    { key: "internal", icon: <Building2 size={17} />, label: "内部人才" },
+    { key: "organization", icon: <Building2 size={17} />, label: "组织与内部人才" },
     { key: "jobs", icon: <BriefcaseBusiness size={17} />, label: "岗位匹配" },
     { key: "pipeline", icon: <ChevronRight size={17} />, label: "流程看板" },
     { key: "interviews", icon: <CalendarDays size={17} />, label: "面试管理" },
@@ -168,7 +167,7 @@ function App() {
         <AntLayout.Content className="app-content p-4 lg:p-8">
           <MobileTabs view={view} setView={setView} isAdmin={user.role === "admin"} canUseTasks={user.role !== "interviewer"} />
           {view === "candidates" && <CandidatesPage />}
-          {view === "organization" && <OrganizationManagementPage />}
+          {view === "organization" && <InternalTalentPage />}
           {view === "internal" && <InternalTalentPage />}
           {view === "jobs" && <JobsPage />}
           {view === "pipeline" && <PipelinePage />}
@@ -2634,7 +2633,7 @@ function OrganizationManagementPage() {
   const [unitForm, setUnitForm] = useState({ name: "", unit_type: "department", parent_id: 0, city: "", headcount_plan: "" });
   const [resumeFiles, setResumeFiles] = useState<File[]>([]);
   const [employeeTotal, setEmployeeTotal] = useState(0);
-  const [employeeLimit, setEmployeeLimit] = useState(100);
+  const [employeeLimit, setEmployeeLimit] = useState(20);
   const [employeeOffset, setEmployeeOffset] = useState(0);
   const flatUnits = useMemo(() => flattenOrganizationUnits(units), [units]);
   const selectedUnit = flatUnits.find((unit) => unit.id === selectedId);
@@ -3067,12 +3066,18 @@ function InternalTalentPage() {
   const [salaryImportOpen, setSalaryImportOpen] = useState(false);
   const [employeeImportOpen, setEmployeeImportOpen] = useState(false);
   const [employeeImport, setEmployeeImport] = useState<{ created_count: number; updated_count: number; skipped_count: number; failed_count: number } | null>(null);
+  const [orgFormOpen, setOrgFormOpen] = useState(false);
+  const [orgFormMode, setOrgFormMode] = useState<"create" | "edit" | null>(null);
+  const [orgResumeOpen, setOrgResumeOpen] = useState(false);
+  const [resumeFiles, setResumeFiles] = useState<File[]>([]);
+  const [unitForm, setUnitForm] = useState({ name: "", unit_type: "department", parent_id: 0, city: "", headcount_plan: "" });
   const [orgTreeQuery, setOrgTreeQuery] = useState("");
   const [orgTreeExpanded, setOrgTreeExpanded] = useState<Set<number>>(() => new Set());
   const [batchResult, setBatchResult] = useState<{ analyzed_count: number; skipped_count: number } | null>(null);
   const [employeeTotal, setEmployeeTotal] = useState(0);
-  const [employeeLimit, setEmployeeLimit] = useState(100);
+  const [employeeLimit, setEmployeeLimit] = useState(20);
   const [employeeOffset, setEmployeeOffset] = useState(0);
+  const [employeeQuery, setEmployeeQuery] = useState("");
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState({
     candidate_id: 0,
@@ -3099,10 +3104,10 @@ function InternalTalentPage() {
     return flatUnits.filter((unit) => `${unit.name} ${unit.city || ""} ${unit.unit_type || ""}`.toLowerCase().includes(keyword)).slice(0, 20);
   }, [flatUnits, orgTreeQuery]);
 
-  async function load(unitId = selectedUnitId, nextOffset = employeeOffset, nextLimit = employeeLimit) {
+  async function load(unitId = selectedUnitId, nextOffset = employeeOffset, nextLimit = employeeLimit, nextQuery = employeeQuery) {
     const [tree, employeeData, candidateData, jobData] = await Promise.all([
       api.organizationTree(),
-      api.employees(unitId || undefined, { limit: nextLimit, offset: nextOffset }),
+      api.employees(unitId || undefined, { limit: nextLimit, offset: nextOffset, q: nextQuery.trim() || undefined }),
       api.candidates(),
       api.jobs()
     ]);
@@ -3113,7 +3118,18 @@ function InternalTalentPage() {
     setEmployeeOffset(employeeData.offset);
     setCandidates(candidateData.items);
     setJobs(jobData.items);
-    const firstUnit = flattenOrganizationUnits(tree.items)[0];
+    const flattened = flattenOrganizationUnits(tree.items);
+    const firstUnit = flattened[0];
+    const activeUnit = flattened.find((unit) => unit.id === unitId) || firstUnit;
+    if (activeUnit) {
+      setUnitForm({
+        name: activeUnit.name || "",
+        unit_type: activeUnit.unit_type || "department",
+        parent_id: activeUnit.parent_id || 0,
+        city: activeUnit.city || "",
+        headcount_plan: activeUnit.headcount_plan ? String(activeUnit.headcount_plan) : ""
+      });
+    }
     setForm((current) => ({
       ...current,
       candidate_id: current.candidate_id || candidateData.items[0]?.id || 0,
@@ -3130,13 +3146,25 @@ function InternalTalentPage() {
     setSelectedUnitId(unitId);
     setSelectedEmployee(null);
     setEmployeeOffset(0);
-    await load(unitId, 0, employeeLimit);
+    await load(unitId, 0, employeeLimit, employeeQuery);
   }
 
   async function changeInternalEmployeePage(nextOffset: number, nextLimit = employeeLimit) {
     setEmployeeOffset(nextOffset);
     setEmployeeLimit(nextLimit);
-    await load(selectedUnitId, nextOffset, nextLimit);
+    await load(selectedUnitId, nextOffset, nextLimit, employeeQuery);
+  }
+
+  async function searchInternalEmployees(event: React.FormEvent) {
+    event.preventDefault();
+    setEmployeeOffset(0);
+    await load(selectedUnitId, 0, employeeLimit, employeeQuery);
+  }
+
+  async function clearInternalEmployeeSearch() {
+    setEmployeeQuery("");
+    setEmployeeOffset(0);
+    await load(selectedUnitId, 0, employeeLimit, "");
   }
 
   function toggleOrgTreeUnit(unitId: number) {
@@ -3146,6 +3174,94 @@ function InternalTalentPage() {
       else next.add(unitId);
       return next;
     });
+  }
+
+  function addChildOrganization() {
+    const parentId = selectedUnitId || flatUnits[0]?.id || 0;
+    setUnitForm({ name: "", unit_type: "department", parent_id: parentId, city: currentUnit?.city || "", headcount_plan: "" });
+    setOrgFormMode("create");
+    setOrgFormOpen(true);
+  }
+
+  function editCurrentOrganization() {
+    if (!currentUnit) return;
+    setUnitForm({
+      name: currentUnit.name || "",
+      unit_type: currentUnit.unit_type || "department",
+      parent_id: currentUnit.parent_id || 0,
+      city: currentUnit.city || "",
+      headcount_plan: currentUnit.headcount_plan ? String(currentUnit.headcount_plan) : ""
+    });
+    setOrgFormMode("edit");
+    setOrgFormOpen(true);
+  }
+
+  async function saveOrganization(event: React.FormEvent) {
+    event.preventDefault();
+    if (!unitForm.name.trim()) {
+      notify("error", "组织名称必填");
+      return;
+    }
+    setBusy(true);
+    try {
+      const payload = {
+        ...unitForm,
+        parent_id: unitForm.parent_id || undefined,
+        headcount_plan: unitForm.headcount_plan ? Number(unitForm.headcount_plan) : undefined
+      };
+      const unit = orgFormMode === "create" ? await api.createOrganizationUnit(payload) : await api.updateOrganizationUnit(selectedUnitId, payload);
+      setMessage(`${unit.name} 已保存`);
+      setOrgFormOpen(false);
+      setOrgFormMode(null);
+      setSelectedUnitId(unit.id);
+      await load(unit.id, 0, employeeLimit, employeeQuery);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function deleteCurrentOrganization() {
+    if (!currentUnit) return;
+    if (!window.confirm(`确认删除组织「${currentUnit.name}」？有员工或下级组织时不能删除。`)) return;
+    await api.deleteOrganizationUnit(currentUnit.id);
+    setMessage("组织节点已删除");
+    setSelectedUnitId(0);
+    await load(0, 0, employeeLimit, employeeQuery);
+  }
+
+  async function importOrganizationExcel(files: FileList | null) {
+    const file = files?.[0];
+    if (!file) return;
+    setBusy(true);
+    try {
+      const data = await api.importOrganizationExcel(file);
+      setMessage(`组织架构已导入，新增 ${data.created.length} 个节点`);
+      await load(selectedUnitId, 0, employeeLimit, employeeQuery);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function uploadOrganizationResumes(event: React.FormEvent) {
+    event.preventDefault();
+    if (!selectedUnitId) {
+      notify("error", "请先选择组织节点");
+      return;
+    }
+    if (!resumeFiles.length) {
+      notify("error", "请先选择员工简历");
+      return;
+    }
+    setBusy(true);
+    try {
+      const data = await api.uploadOrganizationEmployeeResumes(selectedUnitId, resumeFiles);
+      setMessage(`已导入 ${data.success_count} 名员工，失败 ${data.failed_count} 个文件`);
+      setResumeFiles([]);
+      setOrgResumeOpen(false);
+      await load(selectedUnitId, 0, employeeLimit, employeeQuery);
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function createEmployee(event: React.FormEvent) {
@@ -3297,6 +3413,105 @@ function InternalTalentPage() {
             </div>
           )}
         </div>
+
+        <div className="design-card">
+          <h2 className="font-semibold">组织维护</h2>
+          <p className="mt-1 text-xs text-steel">组织架构和内部员工在同一页面维护，避免重复入口。</p>
+          <div className="mt-4 grid gap-2">
+            <button className="secondary-button w-full" type="button" onClick={addChildOrganization}>
+              <Plus size={16} />
+              添加组织
+            </button>
+            <button className="secondary-button w-full" type="button" onClick={editCurrentOrganization} disabled={!currentUnit}>
+              <Check size={16} />
+              编辑当前组织
+            </button>
+            <button className="secondary-button w-full" type="button" onClick={() => setOrgResumeOpen(true)} disabled={!selectedUnitId}>
+              <Upload size={16} />
+              上传部门员工简历
+            </button>
+            <label className="secondary-button w-full cursor-pointer">
+              <Upload size={16} />
+              导入组织架构 Excel
+              <input className="hidden" type="file" accept=".xlsx" onChange={(event) => importOrganizationExcel(event.target.files)} />
+            </label>
+            <button className="secondary-button w-full text-red-700" type="button" onClick={deleteCurrentOrganization} disabled={!currentUnit}>
+              <Trash2 size={16} />
+              删除当前组织
+            </button>
+          </div>
+        </div>
+
+        {orgFormOpen && (
+          <div className="modal-backdrop" onClick={() => { setOrgFormOpen(false); setOrgFormMode(null); }}>
+            <form className="modal-panel" onSubmit={saveOrganization} onClick={(event) => event.stopPropagation()}>
+              <div className="modal-head">
+                <div>
+                  <h2 className="font-semibold">{orgFormMode === "create" ? "添加组织" : "编辑组织"}</h2>
+                  <p>维护组织名称、上级组织、类型和编制信息。</p>
+                </div>
+                <button className="icon-button" type="button" onClick={() => { setOrgFormOpen(false); setOrgFormMode(null); }}>
+                  <X size={16} />
+                </button>
+              </div>
+              <label className="field-label mt-4">组织名称</label>
+              <input className="input" value={unitForm.name} onChange={(event) => setUnitForm({ ...unitForm, name: event.target.value })} />
+              <label className="field-label mt-3">上级组织</label>
+              <select className="select w-full" value={unitForm.parent_id} onChange={(event) => setUnitForm({ ...unitForm, parent_id: Number(event.target.value) })}>
+                <option value={0}>无上级</option>
+                {flatUnits.filter((unit) => unit.id !== selectedUnitId).map((unit) => (
+                  <option key={unit.id} value={unit.id}>{"　".repeat(unit.depth)}{unit.name}</option>
+                ))}
+              </select>
+              <label className="field-label mt-3">组织类型</label>
+              <select className="select w-full" value={unitForm.unit_type} onChange={(event) => setUnitForm({ ...unitForm, unit_type: event.target.value })}>
+                <option value="company">公司</option>
+                <option value="business_unit">事业部</option>
+                <option value="department">部门</option>
+                <option value="team">小组</option>
+              </select>
+              <div className="mt-3 grid grid-cols-2 gap-3">
+                <input className="input" placeholder="城市" value={unitForm.city} onChange={(event) => setUnitForm({ ...unitForm, city: event.target.value })} />
+                <input className="input" placeholder="编制人数" value={unitForm.headcount_plan} onChange={(event) => setUnitForm({ ...unitForm, headcount_plan: event.target.value })} />
+              </div>
+              <button className="primary-button mt-4 w-full" disabled={busy}>
+                <Check size={17} />
+                保存组织
+              </button>
+            </form>
+          </div>
+        )}
+
+        {orgResumeOpen && (
+          <div className="modal-backdrop" onClick={() => setOrgResumeOpen(false)}>
+            <form className="modal-panel" onSubmit={uploadOrganizationResumes} onClick={(event) => event.stopPropagation()}>
+              <div className="modal-head">
+                <div>
+                  <h2 className="font-semibold">上传部门员工简历</h2>
+                  <p>支持多文件和 ZIP，导入后员工会进入当前组织节点。</p>
+                </div>
+                <button className="icon-button" type="button" onClick={() => setOrgResumeOpen(false)}>
+                  <X size={16} />
+                </button>
+              </div>
+              <label className="upload-drop mt-4">
+                <FileText size={28} />
+                <strong>{resumeFiles.length ? `已选择 ${resumeFiles.length} 个文件` : "选择员工简历或 ZIP"}</strong>
+                <span>上传到：{currentUnit?.name || "未选择组织"}</span>
+                <input type="file" multiple accept=".txt,.md,.docx,.pdf,.zip" onChange={(event) => setResumeFiles(Array.from(event.target.files || []))} />
+              </label>
+              {resumeFiles.length > 0 && (
+                <div className="mt-3 flex max-h-24 flex-wrap gap-1.5 overflow-auto">
+                  {resumeFiles.map((file) => <span className="chip" key={`${file.name}-${file.size}`}>{file.name}</span>)}
+                </div>
+              )}
+              <button className="primary-button mt-4 w-full" type="submit" disabled={busy || !selectedUnitId || !resumeFiles.length}>
+                <Upload size={17} />
+                上传并归档员工
+              </button>
+            </form>
+          </div>
+        )}
 
         <div className="hidden">
           <div className="flex items-center justify-between">
@@ -3490,6 +3705,27 @@ function InternalTalentPage() {
             导出员工
           </button>
         </div>
+
+        <form className="design-card flex flex-col gap-3 md:flex-row md:items-end" onSubmit={searchInternalEmployees}>
+          <div className="min-w-0 flex-1">
+            <label className="field-label">搜索员工</label>
+            <input
+              className="input"
+              value={employeeQuery}
+              onChange={(event) => setEmployeeQuery(event.target.value)}
+              placeholder="输入姓名、职位、员工编号或部门"
+            />
+          </div>
+          <button className="primary-button" type="submit">
+            <Search size={16} />
+            搜索
+          </button>
+          {employeeQuery && (
+            <button className="secondary-button" type="button" onClick={clearInternalEmployeeSearch}>
+              清空
+            </button>
+          )}
+        </form>
 
         <div className="grid gap-3 md:grid-cols-4">
           <KpiMini label="员工总数" value={employeeTotal} hint="当前组织范围" />
@@ -4391,7 +4627,7 @@ function parseInterviewDimensions(comment: string) {
 }
 
 function MobileTabs({ view, setView, isAdmin, canUseTasks }: { view: View; setView: (view: View) => void; isAdmin: boolean; canUseTasks: boolean }) {
-  const tabs: [View, string][] = [["candidates", "人才"], ["organization", "组织"], ["internal", "内部"], ["jobs", "岗位"], ["pipeline", "流程"], ["interviews", "面试"], ["offers", "Offer"], ["boss", "BOSS"], ["bi", "BI"], ["agent", "AI"]];
+  const tabs: [View, string][] = [["candidates", "人才"], ["organization", "组织与内部人才"], ["jobs", "岗位"], ["pipeline", "流程"], ["interviews", "面试"], ["offers", "Offer"], ["boss", "BOSS"], ["bi", "BI"], ["agent", "AI"]];
   if (canUseTasks) tabs.push(["tasks", "任务"]);
   if (isAdmin) {
     tabs.push(["audit", "日志"]);
@@ -4426,8 +4662,8 @@ function EmptyState({ icon, text }: { icon: React.ReactNode; text: string }) {
 function titleFor(view: View) {
   return {
     candidates: "人才库",
-    organization: "组织架构",
-    internal: "内部人才",
+    organization: "组织与内部人才",
+    internal: "组织与内部人才",
     jobs: "岗位匹配",
     pipeline: "流程看板",
     interviews: "面试管理",

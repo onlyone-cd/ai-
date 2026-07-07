@@ -2943,6 +2943,7 @@ function InternalTalentPage() {
   const [selectedEmployee, setSelectedEmployee] = useState<EmployeeProfile | null>(null);
   const [message, setMessage] = useState("");
   const [salaryImport, setSalaryImport] = useState<{ updated_count: number; skipped_count: number; failed_count: number } | null>(null);
+  const [transferOpen, setTransferOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState({
     candidate_id: 0,
@@ -3001,6 +3002,7 @@ function InternalTalentPage() {
     try {
       const employee = await api.createEmployeeFromCandidate(form);
       setMessage(`${employee.name} 已转为内部员工`);
+      setTransferOpen(false);
       setSelectedEmployee(employee);
       await load(selectedUnitId);
     } catch (error) {
@@ -3093,6 +3095,21 @@ function InternalTalentPage() {
           </div>
         </div>
 
+        <div className="design-card">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h2 className="font-semibold">内部员工转入</h2>
+              <p className="mt-1 text-xs text-steel">从人才库候选人建立内部员工档案，默认不占用页面空间。</p>
+            </div>
+            <button className="primary-button" type="button" onClick={() => setTransferOpen(true)}>
+              <Plus size={17} />
+              转入内部员工
+            </button>
+          </div>
+          {message && <p className="mt-3 text-sm text-mint">{message}</p>}
+        </div>
+
+        {transferOpen && (
         <form className="design-card" onSubmit={createEmployee}>
           <h2 className="font-semibold">候选人转内部员工</h2>
           <p className="mt-1 text-xs text-steel">不会复制成两份简历，只建立员工档案并关联原候选人。</p>
@@ -3121,8 +3138,12 @@ function InternalTalentPage() {
             <Plus size={17} />
             {busy ? "转入中" : "转为内部员工"}
           </button>
+          <button className="secondary-button mt-2 w-full" type="button" onClick={() => setTransferOpen(false)}>
+            取消
+          </button>
           {message && <p className="mt-3 text-sm text-mint">{message}</p>}
         </form>
+        )}
 
         <div className="design-card">
           <h2 className="font-semibold">薪资表批量导入</h2>

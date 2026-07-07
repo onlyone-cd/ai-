@@ -19,7 +19,7 @@ from .auth import hash_password, issue_token, login_required, roles_required, va
 from .job_service import build_jd_structured, ensure_jd_structured, persist_matches, preview_matches
 from .llm_client import LLMError, chat_json, llm_available, llm_status
 from .matching import match_candidate
-from .models import AuditLog, BackgroundTask, BossAccount, BossDraft, Candidate, CandidateTag, EmployeeAnalysis, EmployeeCompensation, EmployeeProfile, EmployeeRecommendation, InterviewAssignment, InterviewFeedback, Job, LLMUsage, Match, OfferRecord, OrganizationUnit, PipelineStage, User
+from .models import AuditLog, BackgroundTask, BossAccount, BossDraft, Candidate, CandidateTag, EmployeeAnalysis, EmployeeCompensation, EmployeeProfile, EmployeeRecommendation, InterviewAssignment, InterviewFeedback, Job, LLMUsage, Match, OfferRecord, OrganizationUnit, PipelineStage, User, years_between
 from .rbac import ROLES, role_permissions
 from .resume_service import ARCHIVE_EXTENSIONS, parse_and_save_archive, parse_and_save_resume, parse_and_save_text, reparse_candidate
 from .responses import error, ok
@@ -492,8 +492,9 @@ def list_employees(user):
     status = request.args.get("status")
     if status and status != "all":
         query = query.filter_by(employment_status=status)
+    overview = employee_group_overview(query.all())
     employees, meta = paginate_query(query)
-    return ok({"items": [employee_payload(employee, user) for employee in employees], "overview": employee_group_overview(employees), **meta})
+    return ok({"items": [employee_payload(employee, user) for employee in employees], "overview": overview, **meta})
 
 
 @api.post("/employees/import-excel")
@@ -509,10 +510,16 @@ def import_employees_excel(user):
             rows = parse_csv_table(file.stream)
         elif suffix == ".xlsx":
             rows = parse_xlsx_table(file.stream)
+        elif suffix == ".xls":
+            rows = parse_xls_table(file.stream)
         else:
-            return error("仅支持 .csv 或 .xlsx 员工基础信息表")
+            return error("仅支持 .csv、.xlsx 或 .xls 员工基础信息表")
     except ValueError as exc:
         return error(str(exc))
+
+    replace_all = str(request.args.get("replace") or "").lower() in {"1", "true", "yes"}
+    if replace_all:
+        reset_internal_talent_data()
 
     created = []
     updated = []
@@ -535,7 +542,7 @@ def import_employees_excel(user):
                 updated.append({"row": index, "employee": item})
         except ValueError as exc:
             errors.append({"row": index, "error": str(exc), "data": row})
-    audit_log(user, "import", "employee", None, file.filename, {"created": len(created), "updated": len(updated), "skipped": len(skipped), "errors": len(errors)})
+    audit_log(user, "import", "employee", None, file.filename, {"created": len(created), "updated": len(updated), "skipped": len(skipped), "errors": len(errors), "replace": replace_all})
     db.session.commit()
     return ok(
         {
@@ -594,7 +601,7 @@ def update_employee(user, employee_id):
     if not employee:
         return error("员工不存在", "NOT_FOUND", 404)
     payload = request.get_json(force=True)
-    for field in ["employee_no", "name", "phone", "email", "department", "current_title", "level", "city", "employment_status", "manager_name"]:
+    for field in ["employee_no", "name", "phone", "email", "department", "current_title", "level", "city", "employment_status", "manager_name", "education", "graduation_school"]:
         if field in payload:
             setattr(employee, field, str(payload.get(field) or "").strip())
     for field in ["organization_unit_id", "current_job_id"]:
@@ -602,6 +609,10 @@ def update_employee(user, employee_id):
             setattr(employee, field, payload.get(field) or None)
     if "hire_date" in payload:
         employee.hire_date = parse_date(payload.get("hire_date"))
+    if "birth_date" in payload:
+        employee.birth_date = parse_date(payload.get("birth_date"))
+    if "graduation_date" in payload:
+        employee.graduation_date = parse_date(payload.get("graduation_date"))
     compensation = build_employee_compensation(employee.id, payload)
     if compensation:
         db.session.add(compensation)
@@ -636,8 +647,10 @@ def import_employee_compensations(user):
             rows = parse_csv_table(file.stream)
         elif suffix == ".xlsx":
             rows = parse_xlsx_table(file.stream)
+        elif suffix == ".xls":
+            rows = parse_xls_table(file.stream)
         else:
-            return error("仅支持 .csv 或 .xlsx 薪资表")
+            return error("仅支持 .csv、.xlsx 或 .xls 薪资表")
     except ValueError as exc:
         return error(str(exc))
 
@@ -1827,6 +1840,12 @@ def export_employees(user):
                 item.level or "",
                 item.city or "",
                 employment_status_label(item.employment_status),
+                item.hire_date.isoformat() if item.hire_date else "",
+                item.birth_date.isoformat() if item.birth_date else "",
+                item.education or "",
+                item.graduation_school or "",
+                item.graduation_date.isoformat() if item.graduation_date else "",
+                item.to_dict().get("seniority_years") or "",
                 compensation.salary_monthly_k if compensation else "",
                 compensation.salary_annual_k if compensation else "",
                 analysis.match_score if analysis else "",
@@ -1838,7 +1857,7 @@ def export_employees(user):
         )
     return csv_response(
         "employees.csv",
-        ["ID", "员工编号", "姓名", "组织", "当前岗位", "职级", "城市", "状态", "月薪K", "年包K", "岗位匹配分", "薪资状态", "风险等级", "技能标签", "更新时间"],
+        ["ID", "员工编号", "姓名", "组织", "当前岗位", "职级", "城市", "状态", "入职日期", "出生日期", "学历", "毕业院校", "毕业时间", "司龄", "月薪K", "年包K", "岗位匹配分", "薪资状态", "风险等级", "技能标签", "更新时间"],
         rows,
         user=user,
         audit_target="employees",
@@ -3268,6 +3287,17 @@ def ensure_default_organization(user):
     return root
 
 
+def ensure_organization_root(user):
+    root = OrganizationUnit.query.order_by(OrganizationUnit.id.asc()).first()
+    if root:
+        return root
+    root = OrganizationUnit(name="总公司", unit_type="company", city="", headcount_plan=None, sort_order=0)
+    db.session.add(root)
+    db.session.flush()
+    audit_log(user, "create", "organization_unit", root.id, root.name, {"seed": False})
+    return root
+
+
 def build_organization_tree(units):
     nodes = {unit.id: {**unit.to_dict(include_counts=True), "children": []} for unit in units}
     roots = []
@@ -3302,6 +3332,9 @@ def employee_group_overview(employees):
     high_fit = len([analysis for analysis in latest_analyses if analysis.match_score >= 80])
     salary_risk = len([analysis for analysis in latest_analyses if analysis.salary_status in {"low", "high"}])
     avg_match = round(sum(analysis.match_score for analysis in latest_analyses) / len(latest_analyses), 1) if latest_analyses else 0
+    today = date.today()
+    seniority_values = [years_between(employee.hire_date, today) for employee in employees if employee.hire_date]
+    avg_seniority = round(sum(seniority_values) / len(seniority_values), 1) if seniority_values else 0
     return {
         "total": total,
         "active": active,
@@ -3311,7 +3344,17 @@ def employee_group_overview(employees):
         "high_fit": high_fit,
         "salary_risk": salary_risk,
         "avg_match_score": avg_match,
+        "avg_seniority_years": avg_seniority,
     }
+
+
+def reset_internal_talent_data():
+    EmployeeRecommendation.query.delete()
+    EmployeeAnalysis.query.delete()
+    EmployeeCompensation.query.delete()
+    EmployeeProfile.query.delete()
+    OrganizationUnit.query.delete()
+    db.session.flush()
 
 
 def build_employee_compensation(employee_id, payload):
@@ -3372,6 +3415,50 @@ def parse_xlsx_table(stream):
     return parsed
 
 
+def parse_xls_table(stream):
+    try:
+        import xlrd
+    except ImportError as exc:
+        raise ValueError("当前环境缺少 xlrd，无法读取 .xls 文件，请安装依赖后重试") from exc
+    try:
+        workbook = xlrd.open_workbook(file_contents=stream.read())
+    except Exception as exc:
+        raise ValueError("Excel .xls 文件格式无效") from exc
+    sheet = next((item for item in workbook.sheets() if item.nrows > 1 and item.ncols > 0), None)
+    if not sheet:
+        raise ValueError("Excel 中没有可读取的数据")
+    headers = [str(sheet.cell_value(0, col) or "").strip() for col in range(sheet.ncols)]
+    parsed = []
+    for row_index in range(1, sheet.nrows):
+        item = {}
+        for col_index, header in enumerate(headers):
+            if header:
+                item[header] = xls_cell_text(workbook, sheet.cell(row_index, col_index))
+        if any(item.values()):
+            parsed.append(item)
+    if not parsed:
+        raise ValueError("Excel 中没有可导入的数据")
+    return parsed
+
+
+def xls_cell_text(workbook, cell):
+    try:
+        import xlrd
+    except ImportError:
+        xlrd = None
+    value = cell.value
+    if value in (None, ""):
+        return ""
+    if xlrd and cell.ctype == xlrd.XL_CELL_DATE:
+        try:
+            return xlrd.xldate.xldate_as_datetime(value, workbook.datemode).date().isoformat()
+        except (ValueError, OverflowError):
+            return str(value).strip()
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value).strip()
+
+
 def read_xlsx_rows(stream):
     try:
         with zipfile.ZipFile(stream) as archive:
@@ -3423,6 +3510,8 @@ def upsert_employee_from_import_row(row, user):
     current_title = row_value(row, ["当前岗位", "岗位", "职位", "current_title", "title", "job_title"])
     job = resolve_job_from_import_row(row)
     unit = resolve_organization_unit_from_import_row(row, user)
+    if not employee_no and name:
+        employee_no = stable_employee_no(row, name, unit, current_title)
     employee = find_employee_for_import_row(employee_no, phone, email_value)
     was_created = False
     if not employee:
@@ -3466,6 +3555,8 @@ def upsert_employee_from_import_row(row, user):
         "city": ["城市", "city"],
         "employment_status": ["在职状态", "状态", "status", "employment_status"],
         "manager_name": ["直属上级", "上级", "manager", "manager_name"],
+        "education": ["学历", "最高学历", "education"],
+        "graduation_school": ["毕业院校", "学校", "院校", "school", "graduation_school"],
     }.items():
         value = row_value(row, aliases)
         if value:
@@ -3473,11 +3564,18 @@ def upsert_employee_from_import_row(row, user):
     hire_date = row_value(row, ["入职日期", "入职时间", "hire_date", "hire date"])
     if hire_date:
         employee.hire_date = parse_date(hire_date)
+    birth_date = row_value(row, ["出生日期", "出生年月", "生日", "birth_date", "birthday"])
+    if birth_date:
+        employee.birth_date = parse_date(birth_date)
+    graduation_date = row_value(row, ["毕业时间", "毕业日期", "毕业年月", "graduation_date", "graduation date"])
+    if graduation_date:
+        employee.graduation_date = parse_date(graduation_date)
     summary = row_value(row, ["个人简介", "简介", "summary", "profile"])
     if summary:
         resume_json = dict(employee.resume_json or {})
         resume_json["summary"] = summary
         employee.resume_json = resume_json
+    employee.resume_json = employee_resume_json_from_profile(employee, row)
     return employee, was_created
 
 
@@ -3497,12 +3595,69 @@ def find_employee_for_import_row(employee_no, phone, email_value):
     return None
 
 
+def stable_employee_no(row, name, unit, current_title):
+    identity = "|".join(
+        [
+            name or "",
+            unit.name if unit else "",
+            current_title or "",
+            row_value(row, ["入职日期", "入职时间", "hire_date", "hire date"]),
+            row_value(row, ["出生日期", "出生年月", "birth_date"]),
+        ]
+    )
+    digest = hashlib.sha1(identity.encode("utf-8", errors="ignore")).hexdigest()[:10].upper()
+    return f"EMP-{digest}"
+
+
+def employee_resume_json_from_profile(employee, row):
+    resume_json = dict(employee.resume_json or {})
+    education_item = {
+        "school": employee.graduation_school or "",
+        "degree": employee.education or "",
+        "end": employee.graduation_date.isoformat() if employee.graduation_date else "",
+    }
+    if any(education_item.values()):
+        resume_json["education"] = [education_item]
+    resume_json["profile"] = {
+        "birth_date": employee.birth_date.isoformat() if employee.birth_date else None,
+        "hire_date": employee.hire_date.isoformat() if employee.hire_date else None,
+        "education": employee.education,
+        "graduation_school": employee.graduation_school,
+        "graduation_date": employee.graduation_date.isoformat() if employee.graduation_date else None,
+    }
+    if not resume_json.get("summary"):
+        resume_json["summary"] = "；".join(
+            item
+            for item in [
+                f"当前职位：{employee.current_title}" if employee.current_title else "",
+                f"学历：{employee.education}" if employee.education else "",
+                f"毕业院校：{employee.graduation_school}" if employee.graduation_school else "",
+            ]
+            if item
+        )
+    return resume_json
+
+
 def resolve_organization_unit_from_import_row(row, user):
     unit_id = parse_optional_int(row_value(row, ["organization_unit_id", "组织ID", "部门ID"]), None)
     if unit_id:
         unit = db.session.get(OrganizationUnit, unit_id)
         if unit:
             return unit
+    levels = [
+        row_value(row, ["1级部门", "一级部门", "一级组织", "level1_department"]),
+        row_value(row, ["2级部门", "二级部门", "二级组织", "level2_department"]),
+        row_value(row, ["3级部门", "三级部门", "三级组织", "level3_department"]),
+    ]
+    levels = [level for level in levels if level]
+    if levels:
+        parent = ensure_organization_root(user)
+        unit = parent
+        for index, name in enumerate(levels):
+            unit_type = "business_unit" if index == 0 else ("department" if index == 1 else "team")
+            unit = get_or_create_org_unit(name, parent.id, unit_type, index)["unit"]
+            parent = unit
+        return unit
     unit_name = row_value(row, ["组织", "组织名称", "部门", "部门名称", "organization", "department"])
     if unit_name:
         exact = OrganizationUnit.query.filter_by(name=unit_name).order_by(OrganizationUnit.id.asc()).first()
@@ -3616,6 +3771,10 @@ def employee_from_candidate_record(candidate, user, unit, job=None, payload=None
         city=payload.get("city") or candidate.city,
         employment_status=payload.get("employment_status") or "active",
         hire_date=parse_date(payload.get("hire_date")),
+        birth_date=parse_date(payload.get("birth_date")),
+        education=str(payload.get("education") or "").strip(),
+        graduation_school=str(payload.get("graduation_school") or "").strip(),
+        graduation_date=parse_date(payload.get("graduation_date")),
         manager_name=str(payload.get("manager_name") or "").strip(),
         raw_text=candidate.raw_text,
         resume_json=candidate.resume_json or {},
@@ -3861,10 +4020,25 @@ def parse_datetime(value):
 def parse_date(value):
     if not value:
         return None
+    if isinstance(value, datetime):
+        return value.date()
     if isinstance(value, date):
         return value
+    if isinstance(value, (int, float)):
+        try:
+            return (date(1899, 12, 30) + timedelta(days=int(value)))
+        except OverflowError:
+            return None
+    text = str(value).strip()
+    if re.fullmatch(r"\d+(\.\d+)?", text):
+        return parse_date(float(text))
+    text = text.replace("/", "-").replace(".", "-")
+    if re.fullmatch(r"\d{4}-\d{1,2}", text):
+        text = f"{text}-01"
+    if re.fullmatch(r"\d{4}", text):
+        text = f"{text}-01-01"
     try:
-        return date.fromisoformat(str(value)[:10])
+        return date.fromisoformat(text[:10])
     except ValueError:
         return None
 

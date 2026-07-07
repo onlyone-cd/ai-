@@ -7,6 +7,15 @@ def utcnow():
     return datetime.now(timezone.utc)
 
 
+def years_between(start, end):
+    if not start or not end:
+        return None
+    years = end.year - start.year
+    if (end.month, end.day) < (start.month, start.day):
+        years -= 1
+    return max(years, 0)
+
+
 class User(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(64), unique=True, nullable=False)
@@ -226,6 +235,10 @@ class EmployeeProfile(db.Model):
     city = db.Column(db.String(64), nullable=True)
     employment_status = db.Column(db.String(24), nullable=False, default="active")
     hire_date = db.Column(db.Date, nullable=True)
+    birth_date = db.Column(db.Date, nullable=True)
+    education = db.Column(db.String(64), nullable=True)
+    graduation_school = db.Column(db.String(128), nullable=True)
+    graduation_date = db.Column(db.Date, nullable=True)
     manager_name = db.Column(db.String(64), nullable=True)
     raw_text = db.Column(db.Text, nullable=False, default="")
     resume_json = db.Column(db.JSON, nullable=False, default=dict)
@@ -267,6 +280,12 @@ class EmployeeProfile(db.Model):
             "city": self.city,
             "employment_status": self.employment_status,
             "hire_date": self.hire_date.isoformat() if self.hire_date else None,
+            "birth_date": self.birth_date.isoformat() if self.birth_date else None,
+            "age": years_between(self.birth_date, utcnow().date()) if self.birth_date else None,
+            "seniority_years": years_between(self.hire_date, utcnow().date()) if self.hire_date else None,
+            "education": self.education,
+            "graduation_school": self.graduation_school,
+            "graduation_date": self.graduation_date.isoformat() if self.graduation_date else None,
             "manager_name": self.manager_name,
             "parse_status": self.parse_status,
             "compensation": compensation.to_dict() if compensation and include_salary else None,

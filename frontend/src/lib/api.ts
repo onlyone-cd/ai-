@@ -86,6 +86,12 @@ export type EmployeeProfile = {
   city?: string;
   employment_status: string;
   hire_date?: string | null;
+  birth_date?: string | null;
+  age?: number | null;
+  seniority_years?: number | null;
+  education?: string | null;
+  graduation_school?: string | null;
+  graduation_date?: string | null;
   manager_name?: string;
   compensation?: EmployeeCompensation | null;
   tags: CandidateTag[];
@@ -429,9 +435,9 @@ export const api = {
   },
   organizationEmployees: (unitId: number) => request<{ unit: OrganizationUnit; items: EmployeeProfile[] }>(`/organization/units/${unitId}/employees`),
   organizationOverview: (unitId: number) => request<{ total: number; active: number; inactive: number; with_compensation: number; analyzed: number; high_fit: number; salary_risk: number; avg_match_score: number; unit: OrganizationUnit }>(`/organization/units/${unitId}/overview`),
-  employees: (organizationUnitId?: number) => request<{ items: EmployeeProfile[]; overview: { total: number; active: number; inactive: number; with_compensation: number; analyzed: number; high_fit: number; salary_risk: number; avg_match_score: number } }>(`/employees${organizationUnitId ? `?organization_unit_id=${organizationUnitId}` : ""}`),
+  employees: (organizationUnitId?: number) => request<{ items: EmployeeProfile[]; overview: { total: number; active: number; inactive: number; with_compensation: number; analyzed: number; high_fit: number; salary_risk: number; avg_match_score: number; avg_seniority_years: number } }>(`/employees${organizationUnitId ? `?organization_unit_id=${organizationUnitId}` : ""}`),
   getEmployee: (id: number) => request<EmployeeProfile>(`/employees/${id}`),
-  createEmployeeFromCandidate: (payload: { candidate_id: number; organization_unit_id?: number; current_job_id?: number; employee_no?: string; level?: string; salary_monthly_k?: string | number; salary_annual_k?: string | number; salary_months?: string | number; hire_date?: string; manager_name?: string }) =>
+  createEmployeeFromCandidate: (payload: { candidate_id: number; organization_unit_id?: number; current_job_id?: number; employee_no?: string; level?: string; salary_monthly_k?: string | number; salary_annual_k?: string | number; salary_months?: string | number; hire_date?: string; birth_date?: string; education?: string; graduation_school?: string; graduation_date?: string; manager_name?: string }) =>
     request<EmployeeProfile>("/employees/from-candidate", { method: "POST", body: JSON.stringify(payload) }),
   updateEmployee: (id: number, payload: Partial<EmployeeProfile> & { salary_monthly_k?: string | number; salary_annual_k?: string | number; salary_months?: string | number; bonus_k?: string | number }) =>
     request<EmployeeProfile>(`/employees/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),

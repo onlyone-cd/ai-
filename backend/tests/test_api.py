@@ -537,6 +537,44 @@ def test_recruiter_cannot_view_internal_salary_details(client, admin_headers, re
     assert "234.0K" not in report_text
 
 
+def test_employee_import_replaces_org_tree_and_tracks_demographics(client, admin_headers):
+    client.get("/api/organization/tree", headers=admin_headers)
+    employee_csv = (
+        "姓名,1级部门,2级部门,3级部门,职位,入职时间,出生日期,学历,毕业院校,毕业时间\n"
+        "组织员工A,产品中心,平台产品部,支付产品组,产品经理,2020-01-15,1995-05-20,本科,湖南大学,2017-06\n"
+        "组织员工B,研发中心,后端研发部,Java组,Java工程师,2021/03/01,1996/08/09,硕士,中南大学,2020/06/30\n"
+    ).encode("utf-8")
+
+    imported = client.post(
+        "/api/employees/import-excel?replace=1",
+        headers=admin_headers,
+        data={"file": (BytesIO(employee_csv), "employees.csv")},
+        content_type="multipart/form-data",
+    )
+
+    assert imported.status_code == 200
+    data = imported.get_json()["data"]
+    assert data["created_count"] == 2
+    assert data["updated_count"] == 0
+    employee = data["created"][0]["employee"]
+    assert employee["employee_no"].startswith("EMP-")
+    assert employee["education"] == "本科"
+    assert employee["graduation_school"] == "湖南大学"
+    assert employee["graduation_date"] == "2017-06-01"
+    assert employee["birth_date"] == "1995-05-20"
+    assert employee["seniority_years"] >= 6
+    assert employee["organization_unit"]["name"] == "支付产品组"
+
+    tree = client.get("/api/organization/tree", headers=admin_headers).get_json()["data"]["items"]
+    root = tree[0]
+    assert root["name"] == "总公司"
+    assert {item["name"] for item in root["children"]} == {"产品中心", "研发中心"}
+
+    employees = client.get("/api/employees", headers=admin_headers).get_json()["data"]
+    assert employees["total"] == 2
+    assert employees["overview"]["avg_seniority_years"] >= 5
+
+
 def test_organization_excel_import_and_department_resume_upload(client, admin_headers):
     excel = minimal_organization_xlsx(
         [

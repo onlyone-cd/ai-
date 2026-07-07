@@ -2587,6 +2587,7 @@ function OrganizationManagementPage() {
   const [units, setUnits] = useState<OrganizationUnit[]>([]);
   const [employees, setEmployees] = useState<EmployeeProfile[]>([]);
   const [selectedId, setSelectedId] = useState(0);
+  const [selectedEmployee, setSelectedEmployee] = useState<EmployeeProfile | null>(null);
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const [orgFormOpen, setOrgFormOpen] = useState(false);
@@ -2720,6 +2721,25 @@ function OrganizationManagementPage() {
     } finally {
       setBusy(false);
     }
+  }
+
+  async function openEmployee(employeeId: number) {
+    const employee = await api.getEmployee(employeeId);
+    setSelectedEmployee(employee);
+  }
+
+  if (selectedEmployee) {
+    return (
+      <EmployeeDetailPage
+        employee={selectedEmployee}
+        onBack={() => setSelectedEmployee(null)}
+        onChanged={(employee) => {
+          setSelectedEmployee(employee);
+          load(selectedId);
+        }}
+        backLabel="返回组织架构"
+      />
+    );
   }
 
   return (
@@ -2896,7 +2916,13 @@ function OrganizationManagementPage() {
                       </div>
                       <p className="mt-1 text-sm text-steel">{employee.phone || "手机未维护"} · {employee.email || "邮箱未维护"}</p>
                     </div>
-                    <span className="badge">{employmentStatusLabel(employee.employment_status)}</span>
+                    <div className="flex flex-wrap gap-2">
+                      <span className="badge">{employmentStatusLabel(employee.employment_status)}</span>
+                      <button className="secondary-button" type="button" onClick={() => openEmployee(employee.id)}>
+                        <FileText size={16} />
+                        查看档案
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -3173,7 +3199,7 @@ function InternalTalentPage() {
   );
 }
 
-function EmployeeDetailPage({ employee, onBack, onChanged }: { employee: EmployeeProfile; onBack: () => void; onChanged: (employee: EmployeeProfile) => void }) {
+function EmployeeDetailPage({ employee, onBack, onChanged, backLabel = "返回内部人才" }: { employee: EmployeeProfile; onBack: () => void; onChanged: (employee: EmployeeProfile) => void; backLabel?: string }) {
   const [detail, setDetail] = useState(employee);
   const [analysis, setAnalysis] = useState<EmployeeAnalysis | null>(employee.analyses?.[0] || null);
   const [transfer, setTransfer] = useState<EmployeeRecommendation[]>([]);
@@ -3230,7 +3256,7 @@ function EmployeeDetailPage({ employee, onBack, onChanged }: { employee: Employe
         <div className="resume-hero-top">
           <button className="secondary-button" onClick={onBack}>
             <ArrowLeft size={17} />
-            返回内部人才
+            {backLabel}
           </button>
           <button className="primary-button" onClick={runAnalysis} disabled={busy}>
             <Sparkles size={17} />

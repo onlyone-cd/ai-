@@ -3013,6 +3013,7 @@ function InternalTalentPage() {
   const [salaryImportOpen, setSalaryImportOpen] = useState(false);
   const [orgTreeQuery, setOrgTreeQuery] = useState("");
   const [orgTreeExpanded, setOrgTreeExpanded] = useState<Set<number>>(() => new Set());
+  const [batchResult, setBatchResult] = useState<{ analyzed_count: number; skipped_count: number } | null>(null);
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState({
     candidate_id: 0,
@@ -3057,7 +3058,6 @@ function InternalTalentPage() {
       organization_unit_id: current.organization_unit_id || unitId || firstUnit?.id || 0,
       current_job_id: current.current_job_id || jobData.items[0]?.id || 0
     }));
-    if (!selectedUnitId && firstUnit) setSelectedUnitId(firstUnit.id);
   }
 
   useEffect(() => {
@@ -3118,6 +3118,21 @@ function InternalTalentPage() {
     }
   }
 
+  async function batchAnalyze() {
+    setBusy(true);
+    setMessage("");
+    try {
+      const result = await api.batchAnalyzeEmployees({ organization_unit_id: selectedUnitId || undefined, limit: 300 });
+      setBatchResult({ analyzed_count: result.analyzed_count, skipped_count: result.skipped_count });
+      setMessage(`批量分析完成：已分析 ${result.analyzed_count} 人，跳过 ${result.skipped_count} 人`);
+      await load(selectedUnitId);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "批量分析失败");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   if (selectedEmployee) {
     return (
       <EmployeeDetailPage
@@ -3159,13 +3174,19 @@ function InternalTalentPage() {
                 <div className="rounded-md border border-dashed border-line p-3 text-xs text-steel">未找到匹配组织</div>
               )
             ) : (
-              <CompactOrganizationTree
-                units={units}
-                selectedId={selectedUnitId}
-                expandedIds={orgTreeExpandedIds}
-                onToggle={toggleOrgTreeUnit}
-                onSelect={selectUnit}
-              />
+              <>
+                <button className={`org-search-row ${selectedUnitId === 0 ? "active" : ""}`} type="button" onClick={() => selectUnit(0)}>
+                  <span>全部内部人才</span>
+                  <span>{employees.length} 人</span>
+                </button>
+                <CompactOrganizationTree
+                  units={units}
+                  selectedId={selectedUnitId}
+                  expandedIds={orgTreeExpandedIds}
+                  onToggle={toggleOrgTreeUnit}
+                  onSelect={selectUnit}
+                />
+              </>
             )}
           </div>
           {currentPath.length > 0 && (
@@ -3319,6 +3340,14 @@ function InternalTalentPage() {
             <RefreshCw size={17} />
             刷新
           </button>
+          <button className="secondary-button" onClick={batchAnalyze} disabled={busy || !employees.length}>
+            <Sparkles size={17} />
+            批量分析
+          </button>
+          <button className="secondary-button" onClick={() => api.exportCsv("employees")}>
+            <Download size={17} />
+            导出员工
+          </button>
         </div>
 
         <div className="grid gap-3 md:grid-cols-4">
@@ -3327,6 +3356,11 @@ function InternalTalentPage() {
           <KpiMini label="已分析" value={employees.filter((item) => item.analyses?.length).length} hint="岗位/薪资分析" />
           <KpiMini label="高匹配人才" value={employees.filter((item) => (item.analyses?.[0]?.match_score || 0) >= 80).length} hint="匹配分 >= 80" />
         </div>
+        {batchResult && (
+          <div className="rounded-md bg-blue-50 px-3 py-2 text-sm text-blue-700">
+            最近批量分析：完成 {batchResult.analyzed_count} 人，跳过 {batchResult.skipped_count} 人
+          </div>
+        )}
 
         {employees.length === 0 ? (
           <EmptyState icon={<Building2 size={22} />} text="暂无内部员工，请先从候选人转入或导入员工档案" />
@@ -3433,6 +3467,10 @@ function EmployeeDetailPage({ employee, onBack, onChanged, backLabel = "返回�
           <button className="secondary-button" onClick={loadReplacement} disabled={busy}>
             <Users size={17} />
             离职替补
+          </button>
+          <button className="secondary-button" onClick={() => api.employeeReport(detail.id)}>
+            <Download size={17} />
+            导出报告
           </button>
         </div>
         <div className="resume-profile">

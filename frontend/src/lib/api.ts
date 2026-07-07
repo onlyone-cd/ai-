@@ -441,8 +441,11 @@ export const api = {
     return upload<{ updated_count: number; skipped_count: number; failed_count: number; updated: { row: number; employee: EmployeeProfile; compensation: EmployeeCompensation }[]; skipped: { row: number; reason: string }[]; errors: { row: number; error: string }[] }>("/employees/compensation-import", formData);
   },
   analyzeEmployeeCurrentJob: (id: number) => request<EmployeeAnalysis>(`/employees/${id}/analyze-current-job`, { method: "POST" }),
+  batchAnalyzeEmployees: (payload: { organization_unit_id?: number; employee_ids?: number[]; limit?: number }) =>
+    request<{ items: EmployeeAnalysis[]; skipped: { employee_id: number; name: string; reason: string }[]; analyzed_count: number; skipped_count: number }>("/employees/batch-analyze", { method: "POST", body: JSON.stringify(payload) }),
   recommendEmployeeTransfer: (id: number) => request<{ items: EmployeeRecommendation[] }>(`/employees/${id}/recommend-transfer`, { method: "POST" }),
   recommendEmployeeReplacement: (id: number) => request<{ items: EmployeeRecommendation[] }>(`/employees/${id}/recommend-replacement`, { method: "POST" }),
+  employeeReport: (id: number) => download(`/employees/${id}/report.txt`, `employee-${id}-report.txt`),
   jobs: () => request<{ items: Job[] }>("/jobs"),
   getJob: (id: number) => request<Job>(`/jobs/${id}`),
   createJob: (payload: Partial<Job> & { skill_tags_raw: string }) =>
@@ -493,7 +496,7 @@ export const api = {
   deleteOffer: (id: number) => request<{ deleted: number }>(`/offers/${id}`, { method: "DELETE" }),
   offerLetter: (id: number) => download(`/offers/${id}/letter.txt`, `offer-${id}.txt`),
   bi: (days = 30) => request<BiOverview>(`/bi/overview?days=${days}`),
-  exportCsv: (kind: "candidates" | "jobs" | "interviews" | "offers" | "pipeline") => download(`/exports/${kind}.csv`, `${kind}.csv`),
+  exportCsv: (kind: "candidates" | "jobs" | "interviews" | "offers" | "pipeline" | "employees") => download(`/exports/${kind}.csv`, `${kind}.csv`),
   tags: () => request<{ items: SkillTag[]; categories: string[] }>("/tags"),
   bossStatus: () => request<{
     cookie_bound: boolean;

@@ -389,6 +389,12 @@ def test_internal_talent_organization_employee_analysis_and_recommendations(clie
     assert analysis_data["match_score"] >= 50
     assert analysis_data["salary_status"] == "low"
 
+    batch_analysis = client.post("/api/employees/batch-analyze", headers=admin_headers, json={"organization_unit_id": unit["id"]})
+    assert batch_analysis.status_code == 200
+    batch_data = batch_analysis.get_json()["data"]
+    assert batch_data["analyzed_count"] >= 1
+    assert "skipped_count" in batch_data
+
     transfer = client.post(f"/api/employees/{employee['id']}/recommend-transfer", headers=admin_headers)
     assert transfer.status_code == 200
     assert "items" in transfer.get_json()["data"]
@@ -400,6 +406,17 @@ def test_internal_talent_organization_employee_analysis_and_recommendations(clie
     detail = client.get(f"/api/employees/{employee['id']}", headers=admin_headers)
     assert detail.status_code == 200
     assert detail.get_json()["data"]["candidate"]["id"] == candidate["id"]
+
+    report = client.get(f"/api/employees/{employee['id']}/report.txt", headers=admin_headers)
+    assert report.status_code == 200
+    assert "内部员工分析报告" in report.get_data(as_text=True)
+    assert "内部候选人" in report.get_data(as_text=True)
+
+    exported = client.get("/api/exports/employees.csv", headers=admin_headers)
+    assert exported.status_code == 200
+    exported_text = exported.get_data(as_text=True)
+    assert "员工编号" in exported_text
+    assert "EMP-T-001" in exported_text
 
     salary_csv = BytesIO(b"employee_no,salary_monthly_k,salary_months,bonus_k,effective_date\nEMP-T-001,26,14,8,2026-07-07\n")
     salary_import = client.post(

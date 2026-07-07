@@ -687,6 +687,48 @@ def recommend_employee_replacement(user, employee_id):
     return ok({"items": items}, "离职替补推荐已生成")
 
 
+@api.post("/employees/batch-analyze")
+@login_required
+@roles_required("admin", "manager")
+def batch_analyze_employees(user):
+    payload = request.get_json(silent=True) or {}
+    query = EmployeeProfile.query.order_by(EmployeeProfile.updated_at.desc())
+    unit_id = payload.get("organization_unit_id") or request.args.get("organization_unit_id", type=int)
+    if unit_id:
+        query = query.filter(EmployeeProfile.organization_unit_id.in_(organization_descendant_ids(int(unit_id))))
+    employee_ids = payload.get("employee_ids") or []
+    if employee_ids:
+        query = query.filter(EmployeeProfile.id.in_([int(employee_id) for employee_id in employee_ids]))
+    limit = min(parse_optional_int(payload.get("limit"), 100) or 100, 300)
+    employees = query.limit(limit).all()
+    analyzed = []
+    skipped = []
+    for employee in employees:
+        if not employee.current_job:
+            skipped.append({"employee_id": employee.id, "name": employee.name, "reason": "未绑定当前岗位"})
+            continue
+        analysis = analyze_employee_against_job(employee, employee.current_job)
+        db.session.add(analysis)
+        db.session.flush()
+        analyzed.append(analysis.to_dict())
+    audit_log(user, "batch_analyze", "employee", None, "内部员工批量分析", {"count": len(analyzed), "skipped": len(skipped), "organization_unit_id": unit_id})
+    db.session.commit()
+    return ok({"items": analyzed, "skipped": skipped, "analyzed_count": len(analyzed), "skipped_count": len(skipped)}, "内部员工批量分析已完成")
+
+
+@api.get("/employees/<int:employee_id>/report.txt")
+@login_required
+@roles_required("admin", "manager", "recruiter")
+def employee_report(user, employee_id):
+    employee = db.session.get(EmployeeProfile, employee_id)
+    if not employee:
+        return error("员工不存在", "NOT_FOUND", 404)
+    audit_log(user, "export", "employee", employee.id, employee.name, {"kind": "report"})
+    db.session.commit()
+    body = employee_report_text(employee)
+    return Response(body, mimetype="text/plain; charset=utf-8", headers={"Content-Disposition": f"attachment; filename=employee-{employee.id}-report.txt"})
+
+
 @api.get("/candidates")
 @login_required
 @roles_required("admin", "manager", "recruiter")
@@ -1709,6 +1751,42 @@ def export_pipeline(user):
         for item in latest_pipeline_items()
     ]
     return csv_response("pipeline.csv", ["ID", "候选人", "岗位", "当前阶段", "更新人", "备注", "更新时间"], rows, user=user, audit_target="pipeline")
+
+
+@api.get("/exports/employees.csv")
+@login_required
+@roles_required("admin", "manager")
+def export_employees(user):
+    rows = []
+    for item in EmployeeProfile.query.order_by(EmployeeProfile.updated_at.desc()).all():
+        compensation = item.latest_compensation()
+        analysis = item.analyses[0] if item.analyses else None
+        rows.append(
+            [
+                item.id,
+                item.employee_no or "",
+                item.name,
+                item.organization_unit.name if item.organization_unit else item.department or "",
+                item.current_job.title if item.current_job else item.current_title or "",
+                item.level or "",
+                item.city or "",
+                employment_status_label(item.employment_status),
+                compensation.salary_monthly_k if compensation else "",
+                compensation.salary_annual_k if compensation else "",
+                analysis.match_score if analysis else "",
+                salary_status_label(analysis.salary_status) if analysis else "",
+                risk_label(analysis.risk_level) if analysis else "",
+                "、".join(tag.tag for tag in item.tags()),
+                item.updated_at.isoformat() if item.updated_at else "",
+            ]
+        )
+    return csv_response(
+        "employees.csv",
+        ["ID", "员工编号", "姓名", "组织", "当前岗位", "职级", "城市", "状态", "月薪K", "年包K", "岗位匹配分", "薪资状态", "风险等级", "技能标签", "更新时间"],
+        rows,
+        user=user,
+        audit_target="employees",
+    )
 
 
 @api.get("/exports/boss-drafts.csv")
@@ -3505,6 +3583,66 @@ def employee_analysis_actions(match_score, salary_status, risk):
     if risk == "retention":
         actions.append("建议主管或 HRBP 主动沟通保留意愿。")
     return actions
+
+
+def employee_report_text(employee):
+    compensation = employee.latest_compensation()
+    analysis = employee.analyses[0] if employee.analyses else None
+    resume = employee.resume_json or {}
+    tags = "、".join(f"{tag.tag}({tag.score})" for tag in employee.tags()) or "暂无"
+    salary = "薪资未维护"
+    if compensation:
+        if compensation.salary_monthly_k:
+            salary = f"{compensation.salary_monthly_k:.1f}K · {compensation.salary_months}薪"
+        elif compensation.salary_annual_k:
+            salary = f"年包 {compensation.salary_annual_k:.1f}K"
+    lines = [
+        "内部员工分析报告",
+        "=" * 18,
+        f"员工：{employee.name}",
+        f"员工编号：{employee.employee_no or '-'}",
+        f"组织：{employee.organization_unit.name if employee.organization_unit else employee.department or '-'}",
+        f"当前岗位：{employee.current_job.title if employee.current_job else employee.current_title or '-'}",
+        f"职级：{employee.level or '-'}",
+        f"城市：{employee.city or '-'}",
+        f"状态：{employment_status_label(employee.employment_status)}",
+        f"薪资：{salary}",
+        f"技能标签：{tags}",
+        "",
+        "个人简介",
+        str(resume.get("summary") or employee.raw_text or "暂无简介")[:1200],
+        "",
+        "当前岗位与薪资分析",
+    ]
+    if analysis:
+        actions = analysis.analysis_json.get("actions", []) if analysis.analysis_json else []
+        lines.extend(
+            [
+                f"岗位匹配分：{analysis.match_score}/100",
+                f"薪资评分：{analysis.salary_score}/100",
+                f"薪资状态：{salary_status_label(analysis.salary_status)}",
+                f"风险等级：{risk_label(analysis.risk_level)}",
+                f"分析结论：{(analysis.analysis_json or {}).get('summary', '暂无分析摘要')}",
+                "",
+                "建议动作",
+                *(actions or ["暂无建议动作"]),
+            ]
+        )
+    else:
+        lines.append("暂未分析，请先在系统中执行当前岗位/薪资分析。")
+    return "\n".join(str(line) for line in lines)
+
+
+def employment_status_label(status):
+    return {"active": "在职", "departed": "离职", "leaving": "待离职", "transfer": "调岗中"}.get(status, status or "")
+
+
+def salary_status_label(status):
+    return {"low": "薪资偏低", "high": "薪资偏高", "reasonable": "薪资合理", "unknown": "数据不足"}.get(status, status or "")
+
+
+def risk_label(risk):
+    return {"normal": "正常", "retention": "保留风险", "job_mismatch": "岗位不匹配", "cost_mismatch": "成本不匹配", "unknown": "未分析"}.get(risk, risk or "")
 
 
 def parse_datetime(value):

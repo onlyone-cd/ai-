@@ -31,7 +31,8 @@ import {
   UserCog,
   UserRound,
   Wrench,
-  Users
+  Users,
+  X
 } from "lucide-react";
 import { api, AgentResponse, AiInterviewPlan, AuditLog, BackgroundTask, BiOverview, BossInboxItem, Candidate, clearToken, EmployeeAnalysis, EmployeeProfile, EmployeeRecommendation, InterviewAssignment, InterviewFeedback, InterviewMessage, Job, LLMUsageSummary, MatchResult, notify, OfferRecord, OrganizationUnit, PipelineItem, PublicInterviewRoom, setToken, SkillTag, SystemReadiness, User } from "./lib/api";
 
@@ -2592,6 +2593,7 @@ function OrganizationManagementPage() {
   const [busy, setBusy] = useState(false);
   const [orgFormOpen, setOrgFormOpen] = useState(false);
   const [orgFormMode, setOrgFormMode] = useState<"create" | "edit" | null>(null);
+  const [orgResumeOpen, setOrgResumeOpen] = useState(false);
   const [orgQuery, setOrgQuery] = useState("");
   const [unitForm, setUnitForm] = useState({ name: "", unit_type: "department", parent_id: 0, city: "", headcount_plan: "" });
   const [resumeFiles, setResumeFiles] = useState<File[]>([]);
@@ -2717,6 +2719,7 @@ function OrganizationManagementPage() {
       const data = await api.uploadOrganizationEmployeeResumes(selectedId, resumeFiles);
       setMessage(`已导入 ${data.success_count} 名员工，失败 ${data.failed_count} 个文件`);
       setResumeFiles([]);
+      setOrgResumeOpen(false);
       await load(selectedId);
     } finally {
       setBusy(false);
@@ -2818,17 +2821,17 @@ function OrganizationManagementPage() {
             <p className="text-xs text-steel">员工上传后会显示在当前组织节点下，并同步建立内部员工档案。</p>
           </div>
           <div className="flex flex-wrap gap-2">
-            <button className="secondary-button" onClick={addChild}>
+            <button className="secondary-button" type="button" onClick={addChild}>
               <Plus size={17} />
               添加组织
             </button>
             {selectedUnit && (
               <>
-                <button className="secondary-button" onClick={editCurrentUnit}>
+                <button className="secondary-button" type="button" onClick={editCurrentUnit}>
                   <Check size={17} />
                   编辑组织
                 </button>
-                <button className="secondary-button text-red-700" onClick={removeUnit}>
+                <button className="secondary-button text-red-700" type="button" onClick={removeUnit}>
                   <Trash2 size={17} />
                   删除
                 </button>
@@ -2842,8 +2845,17 @@ function OrganizationManagementPage() {
         <section className="grid gap-4 xl:grid-cols-[360px_1fr]">
           <div className="space-y-4">
             {orgFormOpen && (
-            <form className="design-card" onSubmit={saveUnit}>
-              <h3 className="font-semibold">组织信息</h3>
+            <div className="modal-backdrop" onClick={() => { setOrgFormOpen(false); setOrgFormMode(null); }}>
+            <form className="modal-panel" onSubmit={saveUnit} onClick={(event) => event.stopPropagation()}>
+              <div className="modal-head">
+                <div>
+                  <h3 className="font-semibold">{orgFormMode === "create" ? "添加组织" : "编辑组织"}</h3>
+                  <p>维护组织名称、上级组织、类型和编制信息。</p>
+                </div>
+                <button className="icon-button" type="button" onClick={() => { setOrgFormOpen(false); setOrgFormMode(null); }}>
+                  <X size={16} />
+                </button>
+              </div>
               <label className="field-label mt-4">组织名称</label>
               <input className="input" value={unitForm.name} onChange={(event) => setUnitForm({ ...unitForm, name: event.target.value })} />
               <label className="field-label mt-3">上级组织</label>
@@ -2872,11 +2884,21 @@ function OrganizationManagementPage() {
                 取消
               </button>
             </form>
+            </div>
             )}
 
-            <form className="design-card" onSubmit={uploadEmployeeResumes}>
-              <h3 className="font-semibold">上传当前部门员工简历</h3>
-              <p className="mt-1 text-xs text-steel">支持多文件和 ZIP，导入后员工名字会显示在右侧列表。</p>
+            {orgResumeOpen && (
+            <div className="modal-backdrop" onClick={() => setOrgResumeOpen(false)}>
+            <form className="modal-panel" onSubmit={uploadEmployeeResumes} onClick={(event) => event.stopPropagation()}>
+              <div className="modal-head">
+                <div>
+                  <h3 className="font-semibold">上传部门员工简历</h3>
+                  <p>支持多文件和 ZIP，导入后员工名字会显示在部门员工列表。</p>
+                </div>
+                <button className="icon-button" type="button" onClick={() => setOrgResumeOpen(false)}>
+                  <X size={16} />
+                </button>
+              </div>
               <label className="upload-drop mt-4">
                 <FileText size={28} />
                 <strong>{resumeFiles.length ? `已选择 ${resumeFiles.length} 个文件` : "选择员工简历或 ZIP"}</strong>
@@ -2892,7 +2914,21 @@ function OrganizationManagementPage() {
                 <Upload size={17} />
                 上传并归档员工
               </button>
+              <button className="secondary-button mt-2 w-full" type="button" onClick={() => setOrgResumeOpen(false)}>
+                取消
+              </button>
             </form>
+            </div>
+            )}
+
+            <div className="design-card">
+              <h3 className="font-semibold">员工简历归档</h3>
+              <p className="mt-1 text-xs text-steel">从当前组织入口上传员工简历，导入后自动建立内部员工档案。</p>
+              <button className="primary-button mt-4 w-full" type="button" onClick={() => setOrgResumeOpen(true)} disabled={!selectedId}>
+                <Upload size={17} />
+                上传员工简历
+              </button>
+            </div>
           </div>
 
           <div className="design-card">
@@ -2944,6 +2980,7 @@ function InternalTalentPage() {
   const [message, setMessage] = useState("");
   const [salaryImport, setSalaryImport] = useState<{ updated_count: number; skipped_count: number; failed_count: number } | null>(null);
   const [transferOpen, setTransferOpen] = useState(false);
+  const [salaryImportOpen, setSalaryImportOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState({
     candidate_id: 0,
@@ -3021,6 +3058,7 @@ function InternalTalentPage() {
       const result = await api.importEmployeeCompensations(file);
       setSalaryImport(result);
       setMessage(`薪资表已导入：更新 ${result.updated_count} 人，跳过 ${result.skipped_count} 行，失败 ${result.failed_count} 行`);
+      setSalaryImportOpen(false);
       await load(selectedUnitId);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "薪资导入失败");
@@ -3051,7 +3089,7 @@ function InternalTalentPage() {
               <h2 className="font-semibold">组织筛选</h2>
               <p className="text-xs text-steel">通过下拉框切换部门，减少组织树占用空间。</p>
             </div>
-            <button className="secondary-button" onClick={() => load(selectedUnitId)}>
+            <button className="secondary-button" type="button" onClick={() => load(selectedUnitId)}>
               <RefreshCw size={16} />
             </button>
           </div>
@@ -3069,7 +3107,7 @@ function InternalTalentPage() {
           {currentChildren.length > 0 && (
             <div className="mt-3 flex flex-wrap gap-2">
               {currentChildren.map((unit) => (
-                <button className="secondary-button" key={unit.id} onClick={() => selectUnit(unit.id)}>
+                <button className="secondary-button" key={unit.id} type="button" onClick={() => selectUnit(unit.id)}>
                   {unit.name}
                   <span className="badge muted">{unit.employee_count || 0}</span>
                 </button>
@@ -3110,9 +3148,17 @@ function InternalTalentPage() {
         </div>
 
         {transferOpen && (
-        <form className="design-card" onSubmit={createEmployee}>
-          <h2 className="font-semibold">候选人转内部员工</h2>
-          <p className="mt-1 text-xs text-steel">不会复制成两份简历，只建立员工档案并关联原候选人。</p>
+        <div className="modal-backdrop" onClick={() => setTransferOpen(false)}>
+        <form className="modal-panel" onSubmit={createEmployee} onClick={(event) => event.stopPropagation()}>
+          <div className="modal-head">
+            <div>
+              <h2 className="font-semibold">候选人转内部员工</h2>
+              <p>不会复制成两份简历，只建立员工档案并关联原候选人。</p>
+            </div>
+            <button className="icon-button" type="button" onClick={() => setTransferOpen(false)}>
+              <X size={16} />
+            </button>
+          </div>
           <label className="field-label mt-4">候选人</label>
           <select className="select w-full" value={form.candidate_id} onChange={(event) => setForm({ ...form, candidate_id: Number(event.target.value) })}>
             {candidates.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.name_masked} · {candidate.title}</option>)}
@@ -3143,11 +3189,21 @@ function InternalTalentPage() {
           </button>
           {message && <p className="mt-3 text-sm text-mint">{message}</p>}
         </form>
+        </div>
         )}
 
-        <div className="design-card">
-          <h2 className="font-semibold">薪资表批量导入</h2>
-          <p className="mt-1 text-xs text-steel">支持 CSV/XLSX，按员工编号、手机号、邮箱或姓名匹配员工。</p>
+        {salaryImportOpen && (
+        <div className="modal-backdrop" onClick={() => setSalaryImportOpen(false)}>
+        <div className="modal-panel" onClick={(event) => event.stopPropagation()}>
+          <div className="modal-head">
+            <div>
+              <h2 className="font-semibold">薪资表批量导入</h2>
+              <p>支持 CSV/XLSX，按员工编号、手机号、邮箱或姓名匹配员工。</p>
+            </div>
+            <button className="icon-button" type="button" onClick={() => setSalaryImportOpen(false)}>
+              <X size={16} />
+            </button>
+          </div>
           <label className="secondary-button mt-4 w-full cursor-pointer">
             <Upload size={16} />
             选择薪资表
@@ -3156,6 +3212,24 @@ function InternalTalentPage() {
           <div className="mt-3 rounded-md bg-slate-50 p-3 text-xs text-steel">
             表头示例：employee_no、salary_monthly_k、salary_months、bonus_k、effective_date
           </div>
+          {salaryImport && (
+            <div className="mt-3 grid grid-cols-3 gap-2 text-center text-xs">
+              <div className="rounded-md bg-green-50 p-2 text-green-700">更新 {salaryImport.updated_count}</div>
+              <div className="rounded-md bg-orange-50 p-2 text-orange-700">跳过 {salaryImport.skipped_count}</div>
+              <div className="rounded-md bg-red-50 p-2 text-red-700">失败 {salaryImport.failed_count}</div>
+            </div>
+          )}
+        </div>
+        </div>
+        )}
+
+        <div className="design-card">
+          <h2 className="font-semibold">薪资数据</h2>
+          <p className="mt-1 text-xs text-steel">薪资表导入改为弹窗，避免侧栏被低频表单撑高。</p>
+          <button className="secondary-button mt-4 w-full" type="button" onClick={() => setSalaryImportOpen(true)}>
+            <Upload size={16} />
+            导入薪资表
+          </button>
           {salaryImport && (
             <div className="mt-3 grid grid-cols-3 gap-2 text-center text-xs">
               <div className="rounded-md bg-green-50 p-2 text-green-700">更新 {salaryImport.updated_count}</div>

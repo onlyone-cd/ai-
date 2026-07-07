@@ -103,6 +103,24 @@ def system_llm_usage(user):
     completion_tokens = sum(item.completion_tokens or 0 for item in rows)
     total_tokens = prompt_tokens + completion_tokens
     total_cost_usd = sum(float(item.cost_usd or 0) for item in rows)
+    success_rate = round(((total_calls - failed_calls) / total_calls * 100), 2) if total_calls else 100
+    failure_rate = round((failed_calls / total_calls * 100), 2) if total_calls else 0
+    avg_daily_calls = round(total_calls / days, 2)
+    avg_daily_cost_usd = round(total_cost_usd / days, 6)
+    daily_call_limit = int(current_app.config.get("LLM_DAILY_CALL_LIMIT", 0) or 0)
+    daily_cost_limit = float(current_app.config.get("LLM_DAILY_COST_LIMIT_USD", 0) or 0)
+    failure_rate_limit = float(current_app.config.get("LLM_FAILURE_RATE_WARN_PERCENT", 20) or 20)
+    alerts = []
+    if daily_call_limit > 0 and avg_daily_calls >= daily_call_limit:
+        alerts.append({"key": "daily_calls", "severity": "error", "message": f"AI 日均调用 {avg_daily_calls:g} 次，已达到阈值 {daily_call_limit} 次"})
+    elif daily_call_limit > 0 and avg_daily_calls >= daily_call_limit * 0.8:
+        alerts.append({"key": "daily_calls", "severity": "warning", "message": f"AI 日均调用 {avg_daily_calls:g} 次，接近阈值 {daily_call_limit} 次"})
+    if daily_cost_limit > 0 and avg_daily_cost_usd >= daily_cost_limit:
+        alerts.append({"key": "daily_cost", "severity": "error", "message": f"AI 日均成本 ${avg_daily_cost_usd:.4f}，已达到阈值 ${daily_cost_limit:.4f}"})
+    elif daily_cost_limit > 0 and avg_daily_cost_usd >= daily_cost_limit * 0.8:
+        alerts.append({"key": "daily_cost", "severity": "warning", "message": f"AI 日均成本 ${avg_daily_cost_usd:.4f}，接近阈值 ${daily_cost_limit:.4f}"})
+    if total_calls >= 5 and failure_rate >= failure_rate_limit:
+        alerts.append({"key": "failure_rate", "severity": "warning", "message": f"AI 失败率 {failure_rate:g}%，超过告警阈值 {failure_rate_limit:g}%"})
     query = base_query.order_by(LLMUsage.created_at.desc())
     items, meta = paginate_query(query, default_limit=50, max_limit=200)
     return ok(
@@ -111,12 +129,21 @@ def system_llm_usage(user):
             "summary": {
                 "total_calls": total_calls,
                 "failed_calls": failed_calls,
-                "success_rate": round(((total_calls - failed_calls) / total_calls * 100), 2) if total_calls else 100,
+                "success_rate": success_rate,
+                "failure_rate": failure_rate,
                 "prompt_tokens": prompt_tokens,
                 "completion_tokens": completion_tokens,
                 "total_tokens": total_tokens,
                 "estimated_cost_usd": round(total_cost_usd, 6),
+                "avg_daily_calls": avg_daily_calls,
+                "avg_daily_cost_usd": avg_daily_cost_usd,
             },
+            "limits": {
+                "daily_call_limit": daily_call_limit,
+                "daily_cost_limit_usd": daily_cost_limit,
+                "failure_rate_warn_percent": failure_rate_limit,
+            },
+            "alerts": alerts,
             "items": [item.to_dict() for item in items],
             **meta,
         }

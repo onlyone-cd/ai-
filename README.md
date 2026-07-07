@@ -179,6 +179,7 @@ deploy/                     Nginx 示例配置
 - `POST /api/auth/login`
 - `GET /api/system/readiness`
 - `GET /api/system/llm/status`
+- `GET /api/system/llm/usage`：AI 调用、成本、失败率与阈值告警
 - `GET /api/candidates`
 - `POST /api/resume/upload`
 - `POST /api/resume/<id>/retry-parse`
@@ -203,9 +204,13 @@ deploy/                     Nginx 示例配置
 ## 上线前仍建议补齐
 
 - BOSS 插件真实页面采集的稳定性、重试和导入日志
-- 内部薪资按角色脱敏展示
 - AI 面试正式 ASR/TTS 接入、设备检测、异常恢复
 - Redis/Celery 或更稳定的后台任务队列
 - 对象存储或专用文件服务
 - 前端 Playwright/E2E 自动化测试
-- 集中日志、错误告警、AI 费用阈值告警
+- 集中日志、错误告警与告警通知渠道
+
+## 已具备的上线保护
+
+- 内部员工薪资按角色脱敏，员工薪资导出仅管理员/经理可用
+- AI 调用量、成本、失败率阈值告警，生产环境建议配置 `LLM_DAILY_CALL_LIMIT`、`LLM_DAILY_COST_LIMIT_USD`、`LLM_FAILURE_RATE_WARN_PERCENT`

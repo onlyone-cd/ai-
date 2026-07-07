@@ -2226,6 +2226,28 @@ function BiPage() {
         </div>
       )}
 
+      {llmUsage?.alerts?.length ? (
+        <div className="design-card">
+          <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h2 className="font-semibold">AI 用量告警</h2>
+              <p className="text-xs text-steel">
+                日均调用 {llmUsage.summary.avg_daily_calls} 次 · 日均成本 ${llmUsage.summary.avg_daily_cost_usd.toFixed(4)} · 失败率 {llmUsage.summary.failure_rate}%
+              </p>
+            </div>
+            <span className="badge danger">{llmUsage.alerts.length} 项告警</span>
+          </div>
+          <div className="grid gap-2 md:grid-cols-2">
+            {llmUsage.alerts.map((item) => (
+              <div className="rounded-md border border-line px-3 py-2 text-sm" key={item.key}>
+                <span className={item.severity === "error" ? "text-red-700" : "text-amber-700"}>{item.severity === "error" ? "阻塞" : "提醒"}</span>
+                <span className="ml-2 text-ink">{item.message}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
       <div className="kpi-grid">
         <KpiCard label="在招专员" value={data.active_jobs} hint="开放岗位" tone="blue" />
         <KpiCard label="当前入职" value={onboarded} hint="归档结果" tone="green" />
@@ -2236,7 +2258,7 @@ function BiPage() {
         <KpiCard label="面试通过" value={`${offers} / ${interviews}`} hint={`通过率 ${interviews ? ((offers / interviews) * 100).toFixed(1) : "0.0"}%`} tone="purple" />
         <KpiCard label="待补反馈" value={funnel.business_review || 0} hint="业务复核中" tone="red" />
         <KpiCard label="AI 调用" value={llmUsage?.summary.total_calls ?? 0} hint={`成功率 ${llmUsage?.summary.success_rate ?? 100}%`} tone="blue" />
-        <KpiCard label="AI 成本" value={`$${(llmUsage?.summary.estimated_cost_usd ?? 0).toFixed(4)}`} hint={`${llmUsage?.summary.total_tokens ?? 0} tokens`} tone="green" />
+        <KpiCard label="AI 成本" value={`$${(llmUsage?.summary.estimated_cost_usd ?? 0).toFixed(4)}`} hint={`日均 $${(llmUsage?.summary.avg_daily_cost_usd ?? 0).toFixed(4)} · ${llmUsage?.summary.total_tokens ?? 0} tokens`} tone="green" />
       </div>
 
       <div className="grid gap-5 xl:grid-cols-2">

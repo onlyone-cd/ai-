@@ -24,6 +24,9 @@ class Config:
     LLM_USAGE_LOG_ENABLED = os.getenv("LLM_USAGE_LOG_ENABLED", "true").lower() == "true"
     LLM_PROMPT_PRICE_PER_1M_TOKENS_USD = float(os.getenv("LLM_PROMPT_PRICE_PER_1M_TOKENS_USD", "0"))
     LLM_COMPLETION_PRICE_PER_1M_TOKENS_USD = float(os.getenv("LLM_COMPLETION_PRICE_PER_1M_TOKENS_USD", "0"))
+    LLM_DAILY_CALL_LIMIT = int(os.getenv("LLM_DAILY_CALL_LIMIT", "0"))
+    LLM_DAILY_COST_LIMIT_USD = float(os.getenv("LLM_DAILY_COST_LIMIT_USD", "0"))
+    LLM_FAILURE_RATE_WARN_PERCENT = float(os.getenv("LLM_FAILURE_RATE_WARN_PERCENT", "20"))
     SECURITY_HEADERS_ENABLED = os.getenv("SECURITY_HEADERS_ENABLED", "true").lower() == "true"
     LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
     ACCESS_LOG_ENABLED = os.getenv("ACCESS_LOG_ENABLED", "true").lower() == "true"

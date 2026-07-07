@@ -231,11 +231,16 @@ export type LLMUsageSummary = {
     total_calls: number;
     failed_calls: number;
     success_rate: number;
+    failure_rate: number;
     prompt_tokens: number;
     completion_tokens: number;
     total_tokens: number;
     estimated_cost_usd: number;
+    avg_daily_calls: number;
+    avg_daily_cost_usd: number;
   };
+  limits: { daily_call_limit: number; daily_cost_limit_usd: number; failure_rate_warn_percent: number };
+  alerts: { key: string; severity: "error" | "warning"; message: string }[];
 };
 
 export type SystemReadiness = {

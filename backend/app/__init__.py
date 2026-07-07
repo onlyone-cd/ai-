@@ -192,5 +192,11 @@ def production_config_checks(app):
     add("rate_limit", app.config.get("RATE_LIMIT_ENABLED", True), "公网环境需要开启 RATE_LIMIT_ENABLED")
     add("security_headers", app.config.get("SECURITY_HEADERS_ENABLED", True), "公网环境需要开启 SECURITY_HEADERS_ENABLED")
     add("llm_key", (not app.config.get("LLM_ENABLED")) or bool(app.config.get("DEEPSEEK_API_KEY")), "启用大模型时必须配置生产 API Key")
+    add(
+        "llm_budget_limits",
+        (not app.config.get("LLM_ENABLED")) or app.config.get("LLM_DAILY_CALL_LIMIT", 0) > 0 or app.config.get("LLM_DAILY_COST_LIMIT_USD", 0) > 0,
+        "建议配置 LLM_DAILY_CALL_LIMIT 或 LLM_DAILY_COST_LIMIT_USD，避免上线后 AI 调用失控",
+        "warning",
+    )
     add("upload_folder", bool(app.config.get("UPLOAD_FOLDER")), "必须配置 UPLOAD_FOLDER")
     return checks

@@ -213,6 +213,9 @@ def test_llm_chat_json_retries_transient_failure(app, monkeypatch):
 
 
 def test_llm_usage_endpoint_summarizes_without_secrets(client, admin_headers, app):
+    app.config["LLM_DAILY_CALL_LIMIT"] = 1
+    app.config["LLM_DAILY_COST_LIMIT_USD"] = 0.001
+    app.config["LLM_FAILURE_RATE_WARN_PERCENT"] = 10
     with app.app_context():
         db.session.add(
             LLMUsage(
@@ -249,14 +252,18 @@ def test_llm_usage_endpoint_summarizes_without_secrets(client, admin_headers, ap
         )
         db.session.commit()
 
-    response = client.get("/api/system/llm/usage?days=30", headers=admin_headers)
+    response = client.get("/api/system/llm/usage?days=1", headers=admin_headers)
 
     assert response.status_code == 200
     data = response.get_json()["data"]
     assert data["summary"]["total_calls"] >= 2
     assert data["summary"]["failed_calls"] >= 1
+    assert data["summary"]["failure_rate"] > 0
     assert data["summary"]["total_tokens"] >= 160
     assert data["summary"]["estimated_cost_usd"] >= 0.01
+    assert data["summary"]["avg_daily_calls"] > 0
+    assert data["limits"]["daily_call_limit"] == 1
+    assert {item["key"] for item in data["alerts"]} >= {"daily_calls", "daily_cost"}
     assert {"source", "tool_name", "api_path"} <= set(data["items"][0])
     assert "DEEPSEEK_API_KEY" not in json.dumps(data)
     assert "test-key" not in json.dumps(data)

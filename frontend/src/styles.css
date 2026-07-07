@@ -232,6 +232,42 @@ textarea {
     @apply mt-1 text-xs text-steel;
   }
 
+  .org-tree {
+    @apply max-h-80 overflow-auto rounded-lg border border-line bg-slate-50/60 p-2;
+  }
+
+  .org-tree-row {
+    @apply flex items-center gap-1 rounded-md transition hover:bg-white;
+  }
+
+  .org-tree-row.active {
+    @apply bg-blue-50 text-mint ring-1 ring-mint/20;
+  }
+
+  .org-tree-toggle {
+    @apply grid h-8 w-8 shrink-0 place-items-center rounded-md text-steel transition hover:bg-slate-100 disabled:opacity-30;
+  }
+
+  .org-tree-toggle svg {
+    @apply transition-transform;
+  }
+
+  .org-tree-name {
+    @apply flex min-w-0 flex-1 items-center justify-between gap-2 rounded-md px-2 py-2 text-left text-sm font-semibold text-ink;
+  }
+
+  .org-tree-row.active .org-tree-name {
+    @apply text-mint;
+  }
+
+  .org-search-row {
+    @apply flex w-full items-center justify-between gap-3 rounded-md px-3 py-2 text-left text-sm font-semibold text-ink transition hover:bg-white;
+  }
+
+  .org-search-row.active {
+    @apply bg-blue-50 text-mint ring-1 ring-mint/20;
+  }
+
   .toolbar {
     @apply flex flex-col gap-3 rounded-lg border border-line bg-white p-4 shadow-panel sm:flex-row sm:items-center sm:justify-between;
     box-shadow: 0 10px 30px rgba(15, 23, 42, 0.07);

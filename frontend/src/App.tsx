@@ -2981,6 +2981,8 @@ function InternalTalentPage() {
   const [salaryImport, setSalaryImport] = useState<{ updated_count: number; skipped_count: number; failed_count: number } | null>(null);
   const [transferOpen, setTransferOpen] = useState(false);
   const [salaryImportOpen, setSalaryImportOpen] = useState(false);
+  const [orgTreeQuery, setOrgTreeQuery] = useState("");
+  const [orgTreeExpanded, setOrgTreeExpanded] = useState<Set<number>>(() => new Set());
   const [busy, setBusy] = useState(false);
   const [form, setForm] = useState({
     candidate_id: 0,
@@ -2996,6 +2998,16 @@ function InternalTalentPage() {
   const currentUnit = flatUnits.find((unit) => unit.id === selectedUnitId);
   const currentPath = useMemo(() => organizationPath(flatUnits, selectedUnitId), [flatUnits, selectedUnitId]);
   const currentChildren = currentUnit?.children || [];
+  const orgTreeExpandedIds = useMemo(() => {
+    const next = new Set(orgTreeExpanded);
+    currentPath.forEach((unit) => next.add(unit.id));
+    return next;
+  }, [orgTreeExpanded, currentPath]);
+  const orgSearchResults = useMemo(() => {
+    const keyword = orgTreeQuery.trim().toLowerCase();
+    if (!keyword) return [];
+    return flatUnits.filter((unit) => `${unit.name} ${unit.city || ""} ${unit.unit_type || ""}`.toLowerCase().includes(keyword)).slice(0, 20);
+  }, [flatUnits, orgTreeQuery]);
 
   async function load(unitId = selectedUnitId) {
     const [tree, employeeData, candidateData, jobData] = await Promise.all([
@@ -3026,6 +3038,15 @@ function InternalTalentPage() {
     setSelectedUnitId(unitId);
     setSelectedEmployee(null);
     await load(unitId);
+  }
+
+  function toggleOrgTreeUnit(unitId: number) {
+    setOrgTreeExpanded((current) => {
+      const next = new Set(current);
+      if (next.has(unitId)) next.delete(unitId);
+      else next.add(unitId);
+      return next;
+    });
   }
 
   async function createEmployee(event: React.FormEvent) {
@@ -3087,24 +3108,42 @@ function InternalTalentPage() {
           <div className="flex items-center justify-between">
             <div>
               <h2 className="font-semibold">组织筛选</h2>
-              <p className="text-xs text-steel">通过下拉框切换部门，减少组织树占用空间。</p>
+              <p className="text-xs text-steel">按上级部门折叠展开，快速定位员工所在组织。</p>
             </div>
             <button className="secondary-button" type="button" onClick={() => load(selectedUnitId)}>
               <RefreshCw size={16} />
             </button>
           </div>
-          <label className="field-label mt-4">当前组织</label>
-          <select className="select w-full" value={selectedUnitId} onChange={(event) => selectUnit(Number(event.target.value))}>
-            {flatUnits.map((unit) => (
-              <option key={unit.id} value={unit.id}>{"　".repeat(unit.depth)}{unit.name}（{unit.employee_count || 0} 人）</option>
-            ))}
-          </select>
+          <label className="field-label mt-4">搜索组织</label>
+          <input className="input" value={orgTreeQuery} onChange={(event) => setOrgTreeQuery(event.target.value)} placeholder="输入部门或团队名称" />
+          <div className="org-tree mt-3">
+            {orgTreeQuery.trim() ? (
+              orgSearchResults.length ? (
+                orgSearchResults.map((unit) => (
+                  <button className={`org-search-row ${selectedUnitId === unit.id ? "active" : ""}`} key={unit.id} type="button" onClick={() => selectUnit(unit.id)}>
+                    <span>{"　".repeat(unit.depth)}{unit.name}</span>
+                    <span>{unit.employee_count || 0} 人</span>
+                  </button>
+                ))
+              ) : (
+                <div className="rounded-md border border-dashed border-line p-3 text-xs text-steel">未找到匹配组织</div>
+              )
+            ) : (
+              <CompactOrganizationTree
+                units={units}
+                selectedId={selectedUnitId}
+                expandedIds={orgTreeExpandedIds}
+                onToggle={toggleOrgTreeUnit}
+                onSelect={selectUnit}
+              />
+            )}
+          </div>
           {currentPath.length > 0 && (
             <div className="mt-3 flex flex-wrap gap-2">
               {currentPath.map((unit) => <span className="chip" key={unit.id}>{unit.name}</span>)}
             </div>
           )}
-          {currentChildren.length > 0 && (
+          {currentChildren.length > 0 && orgTreeQuery.trim() && (
             <div className="mt-3 flex flex-wrap gap-2">
               {currentChildren.map((unit) => (
                 <button className="secondary-button" key={unit.id} type="button" onClick={() => selectUnit(unit.id)}>
@@ -3452,6 +3491,56 @@ function OrganizationNode({ unit, selectedId, onSelect, depth = 0 }: { unit: Org
         <span className="float-right text-xs opacity-75">{unit.employee_count || 0}</span>
       </button>
       {unit.children?.map((child) => <OrganizationNode key={child.id} unit={child} selectedId={selectedId} onSelect={onSelect} depth={depth + 1} />)}
+    </div>
+  );
+}
+
+function CompactOrganizationTree({
+  units,
+  selectedId,
+  expandedIds,
+  onToggle,
+  onSelect,
+  depth = 0
+}: {
+  units: OrganizationUnit[];
+  selectedId: number;
+  expandedIds: Set<number>;
+  onToggle: (id: number) => void;
+  onSelect: (id: number) => void;
+  depth?: number;
+}) {
+  if (!units.length) return <div className="rounded-md border border-dashed border-line p-3 text-xs text-steel">暂无组织数据</div>;
+  return (
+    <div className="space-y-1">
+      {units.map((unit) => {
+        const children = unit.children || [];
+        const hasChildren = children.length > 0;
+        const expanded = expandedIds.has(unit.id);
+        const active = selectedId === unit.id;
+        return (
+          <div key={unit.id}>
+            <div className={`org-tree-row ${active ? "active" : ""}`} style={{ paddingLeft: depth * 12 }}>
+              <button
+                aria-label={expanded ? "收起组织" : "展开组织"}
+                className="org-tree-toggle"
+                disabled={!hasChildren}
+                type="button"
+                onClick={() => onToggle(unit.id)}
+              >
+                {hasChildren && <ChevronRight className={expanded ? "rotate-90" : ""} size={15} />}
+              </button>
+              <button className="org-tree-name" type="button" onClick={() => onSelect(unit.id)}>
+                <span className="truncate">{unit.name}</span>
+                <span className="badge muted">{unit.employee_count || 0}</span>
+              </button>
+            </div>
+            {hasChildren && expanded && (
+              <CompactOrganizationTree units={children} selectedId={selectedId} expandedIds={expandedIds} onToggle={onToggle} onSelect={onSelect} depth={depth + 1} />
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }

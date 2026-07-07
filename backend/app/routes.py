@@ -443,7 +443,7 @@ def upload_employee_resumes_to_unit(user, unit_id):
     return ok(
         {
             "unit": unit.to_dict(include_counts=True),
-            "employees": [employee.to_dict(detail=True) for employee in employees],
+            "employees": [employee_payload(employee, user, detail=True) for employee in employees],
             "candidates": [candidate.to_dict(detail=True) for candidate in candidates],
             "errors": errors,
             "success_count": len(employees),
@@ -464,7 +464,7 @@ def organization_unit_employees(user, unit_id):
     employees = EmployeeProfile.query.filter(EmployeeProfile.organization_unit_id.in_(unit_ids)).order_by(EmployeeProfile.updated_at.desc()).all()
     audit_log(user, "view", "organization_unit", unit.id, unit.name, {"scope": "employees"})
     db.session.commit()
-    return ok({"unit": unit.to_dict(include_counts=True), "items": [employee.to_dict() for employee in employees]})
+    return ok({"unit": unit.to_dict(include_counts=True), "items": [employee_payload(employee, user) for employee in employees]})
 
 
 @api.get("/organization/units/<int:unit_id>/overview")
@@ -493,7 +493,7 @@ def list_employees(user):
     if status and status != "all":
         query = query.filter_by(employment_status=status)
     employees, meta = paginate_query(query)
-    return ok({"items": [employee.to_dict() for employee in employees], "overview": employee_group_overview(employees), **meta})
+    return ok({"items": [employee_payload(employee, user) for employee in employees], "overview": employee_group_overview(employees), **meta})
 
 
 @api.post("/employees/import-excel")
@@ -528,7 +528,7 @@ def import_employees_excel(user):
             if compensation:
                 db.session.add(compensation)
             employee.updated_at = datetime.now(timezone.utc)
-            item = employee.to_dict(detail=True)
+            item = employee_payload(employee, user, detail=True)
             if was_created:
                 created.append({"row": index, "employee": item})
             else:
@@ -561,7 +561,7 @@ def get_employee(user, employee_id):
         return error("员工不存在", "NOT_FOUND", 404)
     audit_log(user, "view", "employee", employee.id, employee.name, {"detail": True})
     db.session.commit()
-    return ok(employee.to_dict(detail=True))
+    return ok(employee_payload(employee, user, detail=True))
 
 
 @api.post("/employees/from-candidate")
@@ -574,16 +574,16 @@ def create_employee_from_candidate(user):
         return error("候选人不存在", "NOT_FOUND", 404)
     existing = EmployeeProfile.query.filter_by(candidate_id=candidate.id).first()
     if existing:
-        return ok(existing.to_dict(detail=True), "候选人已转为内部员工，无需重复创建")
+        return ok(employee_payload(existing, user, detail=True), "候选人已转为内部员工，无需重复创建")
     unit = db.session.get(OrganizationUnit, payload.get("organization_unit_id")) if payload.get("organization_unit_id") else ensure_default_organization(user)
     job = db.session.get(Job, payload.get("current_job_id")) if payload.get("current_job_id") else None
     employee, _ = employee_from_candidate_record(candidate, user, unit, job=job, payload=payload)
-    compensation = build_employee_compensation(employee.id, payload)
+    compensation = build_employee_compensation(employee.id, payload) if can_view_employee_salary(user) else None
     if compensation:
         db.session.add(compensation)
     audit_log(user, "create", "employee", employee.id, employee.name, {"candidate_id": candidate.id})
     db.session.commit()
-    return ok(employee.to_dict(detail=True), "候选人已转为内部员工")
+    return ok(employee_payload(employee, user, detail=True), "候选人已转为内部员工")
 
 
 @api.patch("/employees/<int:employee_id>")
@@ -607,7 +607,7 @@ def update_employee(user, employee_id):
         db.session.add(compensation)
     audit_log(user, "update", "employee", employee.id, employee.name)
     db.session.commit()
-    return ok(employee.to_dict(detail=True), "员工档案已更新")
+    return ok(employee_payload(employee, user, detail=True), "员工档案已更新")
 
 
 @api.delete("/employees/<int:employee_id>")
@@ -686,7 +686,7 @@ def analyze_employee_current_job(user, employee_id):
     db.session.add(analysis)
     audit_log(user, "analyze", "employee", employee.id, employee.name, {"job_id": employee.current_job_id})
     db.session.commit()
-    return ok(analysis.to_dict(), "员工岗位与薪资分析已完成")
+    return ok(analysis.to_dict(include_salary=can_view_employee_salary(user)), "员工岗位与薪资分析已完成")
 
 
 @api.post("/employees/<int:employee_id>/recommend-transfer")
@@ -781,7 +781,7 @@ def employee_report(user, employee_id):
         return error("员工不存在", "NOT_FOUND", 404)
     audit_log(user, "export", "employee", employee.id, employee.name, {"kind": "report"})
     db.session.commit()
-    body = employee_report_text(employee)
+    body = employee_report_text(employee, include_salary=can_view_employee_salary(user))
     return Response(body, mimetype="text/plain; charset=utf-8", headers={"Content-Disposition": f"attachment; filename=employee-{employee.id}-report.txt"})
 
 
@@ -2363,6 +2363,14 @@ def with_permissions(user):
     return data
 
 
+def can_view_employee_salary(user):
+    return user.role in {"admin", "manager"}
+
+
+def employee_payload(employee, user, detail=False):
+    return employee.to_dict(detail=detail, include_salary=can_view_employee_salary(user))
+
+
 def run_agent_tool(user, message, pending_action=None):
     text = (message or "").strip()
     lowered = text.lower()
@@ -3774,12 +3782,15 @@ def employee_analysis_actions(match_score, salary_status, risk):
     return actions
 
 
-def employee_report_text(employee):
-    compensation = employee.latest_compensation()
+def employee_report_text(employee, include_salary=True):
+    actual_compensation = employee.latest_compensation()
+    compensation = actual_compensation if include_salary else None
     analysis = employee.analyses[0] if employee.analyses else None
     resume = employee.resume_json or {}
     tags = "、".join(f"{tag.tag}({tag.score})" for tag in employee.tags()) or "暂无"
     salary = "薪资未维护"
+    if not include_salary and actual_compensation:
+        salary = "薪资已隐藏（仅管理员和经理可见）"
     if compensation:
         if compensation.salary_monthly_k:
             salary = f"{compensation.salary_monthly_k:.1f}K · {compensation.salary_months}薪"

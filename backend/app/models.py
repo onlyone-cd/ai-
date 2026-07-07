@@ -246,7 +246,7 @@ class EmployeeProfile(db.Model):
     def tags(self):
         return self.candidate.tags if self.candidate else []
 
-    def to_dict(self, detail=False):
+    def to_dict(self, detail=False, include_salary=True):
         compensation = self.latest_compensation()
         data = {
             "id": self.id,
@@ -269,10 +269,11 @@ class EmployeeProfile(db.Model):
             "hire_date": self.hire_date.isoformat() if self.hire_date else None,
             "manager_name": self.manager_name,
             "parse_status": self.parse_status,
-            "compensation": compensation.to_dict() if compensation else None,
+            "compensation": compensation.to_dict() if compensation and include_salary else None,
+            "salary_hidden": bool(compensation and not include_salary),
             "tags": [tag.to_dict() for tag in self.tags()],
             "experience_analysis": (self.resume_json or {}).get("experience_analysis", {}),
-            "analyses": [self.analyses[0].to_dict()] if self.analyses else [],
+            "analyses": [self.analyses[0].to_dict(include_salary=include_salary)] if self.analyses else [],
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
@@ -280,7 +281,7 @@ class EmployeeProfile(db.Model):
             data["resume_json"] = self.resume_json or {}
             data["raw_text"] = self.raw_text or ""
             data["candidate"] = self.candidate.to_dict(detail=True) if self.candidate else None
-            data["analyses"] = [analysis.to_dict() for analysis in self.analyses]
+            data["analyses"] = [analysis.to_dict(include_salary=include_salary) for analysis in self.analyses]
         return data
 
 
@@ -334,7 +335,14 @@ class EmployeeAnalysis(db.Model):
 
     job = db.relationship("Job")
 
-    def to_dict(self):
+    def to_dict(self, include_salary=True):
+        analysis = self.analysis_json or {}
+        if not include_salary and isinstance(analysis, dict):
+            analysis = dict(analysis)
+            salary = dict(analysis.get("salary") or {})
+            salary.pop("monthly_k", None)
+            salary.pop("range", None)
+            analysis["salary"] = salary
         return {
             "id": self.id,
             "employee_id": self.employee_id,
@@ -344,7 +352,7 @@ class EmployeeAnalysis(db.Model):
             "salary_score": self.salary_score,
             "salary_status": self.salary_status,
             "risk_level": self.risk_level,
-            "analysis": self.analysis_json or {},
+            "analysis": analysis,
             "source": self.source,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }

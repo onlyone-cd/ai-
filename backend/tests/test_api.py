@@ -471,6 +471,72 @@ def test_internal_talent_organization_employee_analysis_and_recommendations(clie
     assert AuditLog.query.filter_by(target_type="employee", target_id=employee["id"]).count() >= 2
 
 
+def test_recruiter_cannot_view_internal_salary_details(client, admin_headers, recruiter_headers):
+    root = client.get("/api/organization/tree", headers=admin_headers).get_json()["data"]["items"][0]
+    unit = client.post(
+        "/api/organization/units",
+        headers=admin_headers,
+        json={"parent_id": root["id"], "name": "薪资隔离测试部", "unit_type": "department"},
+    ).get_json()["data"]
+    job = client.post(
+        "/api/jobs",
+        headers=admin_headers,
+        json={
+            "title": "内部 Java 工程师",
+            "city": "上海",
+            "jd_text": "负责 Java 后端服务开发，薪资 20-30K，要求 Spring Boot、MySQL、Redis。",
+            "skill_tags_raw": "Java 5\nSpring Boot 5\nMySQL 4\nRedis 4",
+        },
+    ).get_json()["data"]
+    candidate = client.post(
+        "/api/boss/candidates/batch-import",
+        headers=admin_headers,
+        json={"items": [{"external_id": "salary-mask", "raw_text": "姓名：薪资隔离员工\n电话：13800001234\n5 年 Java 后端开发经验，熟悉 Spring Boot、MySQL、Redis。"}]},
+    ).get_json()["data"]["items"][0]
+    employee = client.post(
+        "/api/employees/from-candidate",
+        headers=admin_headers,
+        json={
+            "candidate_id": candidate["id"],
+            "organization_unit_id": unit["id"],
+            "current_job_id": job["id"],
+            "employee_no": "EMP-SALARY-MASK",
+            "salary_monthly_k": 18,
+            "salary_months": 13,
+        },
+    ).get_json()["data"]
+    assert employee["compensation"]["salary_annual_k"] == 234
+
+    list_response = client.get("/api/employees", headers=recruiter_headers)
+    assert list_response.status_code == 200
+    listed = [item for item in list_response.get_json()["data"]["items"] if item["id"] == employee["id"]][0]
+    assert listed["compensation"] is None
+    assert listed["salary_hidden"] is True
+
+    detail = client.get(f"/api/employees/{employee['id']}", headers=recruiter_headers)
+    assert detail.status_code == 200
+    detail_data = detail.get_json()["data"]
+    assert detail_data["compensation"] is None
+    assert detail_data["salary_hidden"] is True
+    assert "salary_monthly_k" not in json.dumps(detail_data, ensure_ascii=False)
+    assert "salary_annual_k" not in json.dumps(detail_data, ensure_ascii=False)
+
+    analysis = client.post(f"/api/employees/{employee['id']}/analyze-current-job", headers=recruiter_headers)
+    assert analysis.status_code == 200
+    analysis_data = analysis.get_json()["data"]
+    assert analysis_data["salary_status"] == "low"
+    assert analysis_data["salary_score"] > 0
+    assert "monthly_k" not in analysis_data["analysis"]["salary"]
+    assert "range" not in analysis_data["analysis"]["salary"]
+
+    report = client.get(f"/api/employees/{employee['id']}/report.txt", headers=recruiter_headers)
+    assert report.status_code == 200
+    report_text = report.get_data(as_text=True)
+    assert "薪资已隐藏" in report_text
+    assert "18.0K" not in report_text
+    assert "234.0K" not in report_text
+
+
 def test_organization_excel_import_and_department_resume_upload(client, admin_headers):
     excel = minimal_organization_xlsx(
         [

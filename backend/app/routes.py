@@ -19,9 +19,9 @@ from .auth import hash_password, issue_token, login_required, roles_required, va
 from .job_service import build_jd_structured, ensure_jd_structured, persist_matches, preview_matches
 from .llm_client import LLMError, chat_json, llm_available, llm_status
 from .matching import match_candidate
-from .models import AuditLog, BackgroundTask, BossAccount, BossDraft, Candidate, CandidateTag, EmployeeAnalysis, EmployeeCompensation, EmployeeProfile, EmployeeRecommendation, InterviewAssignment, InterviewFeedback, Job, LLMUsage, Match, OfferRecord, OrganizationUnit, PipelineStage, User, years_between
+from .models import AuditLog, BackgroundTask, BossAccount, BossDraft, Candidate, CandidateTag, EmployeeAnalysis, EmployeeCompensation, EmployeeProfile, EmployeeRecommendation, InterviewAssignment, InterviewFeedback, Job, LLMUsage, Match, OfferRecord, OrganizationUnit, PipelineStage, UploadBatch, User, years_between
 from .rbac import ROLES, role_permissions
-from .resume_service import ARCHIVE_EXTENSIONS, parse_and_save_archive, parse_and_save_resume, parse_and_save_text, reparse_candidate
+from .resume_service import ARCHIVE_EXTENSIONS, parse_and_save_archive, parse_and_save_resume, parse_and_save_text, reparse_candidate, resume_upload_dir
 from .responses import error, ok
 from .tag_library import label_map, load_labels
 from .task_service import enqueue_task, retry_task
@@ -85,6 +85,142 @@ def system_readiness(user):
             "database": db.engine.dialect.name,
             "checks": checks,
             "summary": {"errors": error_count, "warnings": warning_count, "total": len(checks)},
+        }
+    )
+
+
+@api.get("/system/data-integrity")
+@login_required
+@roles_required("admin", "manager")
+def system_data_integrity(user):
+    checks = []
+
+    def add_check(key, severity, count, message):
+        checks.append({"key": key, "ok": count == 0, "severity": severity, "count": int(count or 0), "message": message})
+
+    def missing_fk_count(model, fk_column, target_model, nullable=False):
+        query = db.session.query(func.count(model.id)).outerjoin(target_model, fk_column == target_model.id).filter(target_model.id.is_(None))
+        if nullable:
+            query = query.filter(fk_column.isnot(None))
+        return query.scalar() or 0
+
+    def duplicate_values(model, column, limit=5):
+        rows = (
+            db.session.query(column.label("value"), func.count(model.id).label("count"))
+            .filter(column.isnot(None), column != "")
+            .group_by(column)
+            .having(func.count(model.id) > 1)
+            .order_by(func.count(model.id).desc())
+            .limit(limit)
+            .all()
+        )
+        return [{"value": row.value, "count": int(row.count)} for row in rows]
+
+    orphan_checks = {
+        "candidate_owner": missing_fk_count(Candidate, Candidate.owner_hr_id, User),
+        "candidate_tag_candidate": missing_fk_count(CandidateTag, CandidateTag.candidate_id, Candidate),
+        "job_owner": missing_fk_count(Job, Job.owner_hr_id, User),
+        "pipeline_candidate": missing_fk_count(PipelineStage, PipelineStage.candidate_id, Candidate),
+        "pipeline_job": missing_fk_count(PipelineStage, PipelineStage.job_id, Job),
+        "pipeline_user": missing_fk_count(PipelineStage, PipelineStage.updated_by, User),
+        "match_candidate": missing_fk_count(Match, Match.candidate_id, Candidate),
+        "match_job": missing_fk_count(Match, Match.job_id, Job),
+        "interview_candidate": missing_fk_count(InterviewAssignment, InterviewAssignment.candidate_id, Candidate),
+        "interview_job": missing_fk_count(InterviewAssignment, InterviewAssignment.job_id, Job),
+        "interview_interviewer": missing_fk_count(InterviewAssignment, InterviewAssignment.interviewer_id, User),
+        "interview_creator": missing_fk_count(InterviewAssignment, InterviewAssignment.created_by, User),
+        "offer_candidate": missing_fk_count(OfferRecord, OfferRecord.candidate_id, Candidate),
+        "offer_job": missing_fk_count(OfferRecord, OfferRecord.job_id, Job),
+        "offer_creator": missing_fk_count(OfferRecord, OfferRecord.created_by, User),
+        "employee_owner": missing_fk_count(EmployeeProfile, EmployeeProfile.owner_hr_id, User),
+        "employee_candidate": missing_fk_count(EmployeeProfile, EmployeeProfile.candidate_id, Candidate, nullable=True),
+        "employee_org": missing_fk_count(EmployeeProfile, EmployeeProfile.organization_unit_id, OrganizationUnit, nullable=True),
+        "employee_job": missing_fk_count(EmployeeProfile, EmployeeProfile.current_job_id, Job, nullable=True),
+        "employee_compensation": missing_fk_count(EmployeeCompensation, EmployeeCompensation.employee_id, EmployeeProfile),
+        "employee_analysis_employee": missing_fk_count(EmployeeAnalysis, EmployeeAnalysis.employee_id, EmployeeProfile),
+        "employee_analysis_job": missing_fk_count(EmployeeAnalysis, EmployeeAnalysis.job_id, Job, nullable=True),
+        "employee_recommendation_employee": missing_fk_count(EmployeeRecommendation, EmployeeRecommendation.employee_id, EmployeeProfile),
+        "employee_recommendation_job": missing_fk_count(EmployeeRecommendation, EmployeeRecommendation.target_job_id, Job, nullable=True),
+        "employee_recommendation_candidate": missing_fk_count(EmployeeRecommendation, EmployeeRecommendation.candidate_id, Candidate, nullable=True),
+        "boss_account_owner": missing_fk_count(BossAccount, BossAccount.owner_hr_id, User),
+        "boss_draft_candidate": missing_fk_count(BossDraft, BossDraft.candidate_id, Candidate),
+        "boss_draft_job": missing_fk_count(BossDraft, BossDraft.job_id, Job),
+        "audit_user": missing_fk_count(AuditLog, AuditLog.user_id, User),
+        "task_creator": missing_fk_count(BackgroundTask, BackgroundTask.created_by, User, nullable=True),
+    }
+    orphan_total = sum(orphan_checks.values())
+    add_check("orphan_relations", "error", orphan_total, f"发现 {orphan_total} 条引用异常数据，需要修复后再上线")
+    candidate_missing_batch = missing_fk_count(Candidate, Candidate.upload_batch_id, UploadBatch)
+
+    duplicate_employee_no = duplicate_values(EmployeeProfile, EmployeeProfile.employee_no)
+    duplicate_employee_phone = duplicate_values(EmployeeProfile, EmployeeProfile.phone)
+    duplicate_employee_email = duplicate_values(EmployeeProfile, EmployeeProfile.email)
+    add_check("duplicate_employee_no", "error", len(duplicate_employee_no), "存在重复员工编号，可能导致员工档案覆盖或统计不准")
+    add_check("duplicate_employee_phone", "warning", len(duplicate_employee_phone), "存在重复员工手机号，请确认是否为同一员工")
+    add_check("duplicate_employee_email", "warning", len(duplicate_employee_email), "存在重复员工邮箱，请确认是否为同一员工")
+
+    failed_candidates = Candidate.query.filter(Candidate.parse_status != "ok").count()
+    untagged_candidates = Candidate.query.outerjoin(CandidateTag).filter(CandidateTag.id.is_(None)).count()
+    active_employee_without_org = EmployeeProfile.query.filter_by(employment_status="active").filter(EmployeeProfile.organization_unit_id.is_(None)).count()
+    active_employee_without_job = EmployeeProfile.query.filter_by(employment_status="active").filter(EmployeeProfile.current_job_id.is_(None)).count()
+    active_employee_without_resume = EmployeeProfile.query.filter_by(employment_status="active").filter((EmployeeProfile.raw_text == "") | EmployeeProfile.raw_text.is_(None)).count()
+    active_jobs_without_skills = sum(
+        1
+        for job in Job.query.filter_by(status="active").all()
+        if not (job.jd_structured or {}).get("skills") and not (job.jd_structured or {}).get("skill_tags_raw")
+    )
+
+    add_check("candidate_parse_failed", "warning", failed_candidates, f"{failed_candidates} 份简历解析失败或未完成")
+    add_check("candidate_missing_batch", "warning", candidate_missing_batch, f"{candidate_missing_batch} 位候选人缺少上传批次记录，可能来自历史种子数据或旧版本导入")
+    add_check("candidate_without_tags", "warning", untagged_candidates, f"{untagged_candidates} 位候选人没有技能标签，会影响岗位匹配")
+    add_check("employee_without_org", "warning", active_employee_without_org, f"{active_employee_without_org} 名在职员工未关联组织")
+    add_check("employee_without_job", "warning", active_employee_without_job, f"{active_employee_without_job} 名在职员工未关联岗位")
+    add_check("employee_without_resume", "warning", active_employee_without_resume, f"{active_employee_without_resume} 名在职员工缺少简历文本")
+    add_check("job_without_skills", "warning", active_jobs_without_skills, f"{active_jobs_without_skills} 个开放岗位缺少结构化技能权重")
+
+    missing_uploads = []
+    upload_dir = resume_upload_dir()
+    for batch in UploadBatch.query.filter_by(source="upload", status="ok").order_by(UploadBatch.created_at.desc()).limit(500).all():
+        if not list(upload_dir.glob(f"{batch.id}_*")):
+            missing_uploads.append({"batch_id": batch.id, "filename": batch.filename})
+            if len(missing_uploads) >= 20:
+                break
+    add_check("missing_upload_files", "warning", len(missing_uploads), f"{len(missing_uploads)} 个上传批次找不到原始附件")
+
+    table_counts = {
+        "users": User.query.count(),
+        "candidates": Candidate.query.count(),
+        "candidate_tags": CandidateTag.query.count(),
+        "jobs": Job.query.count(),
+        "matches": Match.query.count(),
+        "pipeline_stages": PipelineStage.query.count(),
+        "interviews": InterviewAssignment.query.count(),
+        "offers": OfferRecord.query.count(),
+        "organizations": OrganizationUnit.query.count(),
+        "employees": EmployeeProfile.query.count(),
+        "compensations": EmployeeCompensation.query.count(),
+        "audit_logs": AuditLog.query.count(),
+    }
+    error_count = sum(1 for item in checks if not item["ok"] and item["severity"] == "error")
+    warning_count = sum(1 for item in checks if not item["ok"] and item["severity"] == "warning")
+    return ok(
+        {
+            "ready": error_count == 0,
+            "checked_at": datetime.now(timezone.utc).isoformat(),
+            "database": db.engine.dialect.name,
+            "upload_dir": str(upload_dir),
+            "summary": {"errors": error_count, "warnings": warning_count, "total": len(checks)},
+            "counts": table_counts,
+            "checks": checks,
+            "details": {
+                "orphan_relations": {key: value for key, value in orphan_checks.items() if value},
+                "duplicates": {
+                    "employee_no": duplicate_employee_no,
+                    "phone": duplicate_employee_phone,
+                    "email": duplicate_employee_email,
+                },
+                "missing_uploads": missing_uploads,
+            },
         }
     )
 

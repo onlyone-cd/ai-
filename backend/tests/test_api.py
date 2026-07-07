@@ -165,6 +165,18 @@ def test_system_readiness_reports_config_without_secrets(client, admin_headers):
     assert "test-secret" not in json.dumps(data)
 
 
+def test_system_data_integrity_reports_counts_and_checks(client, admin_headers):
+    response = client.get("/api/system/data-integrity", headers=admin_headers)
+
+    assert response.status_code == 200
+    data = response.get_json()["data"]
+    assert {"ready", "checked_at", "database", "summary", "counts", "checks", "details"} <= set(data)
+    assert data["counts"]["candidates"] >= 1
+    assert data["counts"]["jobs"] >= 1
+    assert any(item["key"] == "orphan_relations" for item in data["checks"])
+    assert "DEEPSEEK_API_KEY" not in json.dumps(data)
+
+
 def test_llm_chat_json_retries_transient_failure(app, monkeypatch):
     calls = {"count": 0}
 

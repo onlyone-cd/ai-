@@ -251,6 +251,21 @@ export type SystemReadiness = {
   checks: { key: string; ok: boolean; message: string; severity: "error" | "warning" }[];
 };
 
+export type DataIntegrity = {
+  ready: boolean;
+  checked_at: string;
+  database: string;
+  upload_dir: string;
+  summary: { errors: number; warnings: number; total: number };
+  counts: Record<string, number>;
+  checks: { key: string; ok: boolean; message: string; severity: "error" | "warning"; count: number }[];
+  details: {
+    orphan_relations: Record<string, number>;
+    duplicates: Record<string, { value: string; count: number }[]>;
+    missing_uploads: { batch_id: string; filename: string }[];
+  };
+};
+
 export type OfferRecord = {
   id: number;
   candidate_id: number;
@@ -398,6 +413,7 @@ export const api = {
   users: () => request<{ items: User[] }>("/users"),
   auditLogs: () => request<{ items: AuditLog[] }>("/audit/logs"),
   readiness: () => request<SystemReadiness>("/system/readiness"),
+  dataIntegrity: () => request<DataIntegrity>("/system/data-integrity"),
   llmUsage: (days = 30) => request<LLMUsageSummary>(`/system/llm/usage?days=${days}`),
   tasks: (status = "all") => request<{ items: BackgroundTask[]; status_counts: Record<string, number> }>(`/tasks?status=${status}`),
   retryTask: (id: number) => request<BackgroundTask>(`/tasks/${id}/retry`, { method: "POST" }),

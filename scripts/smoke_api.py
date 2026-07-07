@@ -86,6 +86,7 @@ def main():
     run_step(results, "auth.login", login)
     run_step(results, "auth.me", lambda: client.request("GET", "/api/auth/me")["username"])
     run_step(results, "system.readiness", lambda: "ready" if "checks" in client.request("GET", "/api/system/readiness") else "missing checks")
+    run_step(results, "system.data_integrity", lambda: client.request("GET", "/api/system/data-integrity")["summary"]["total"])
     run_step(results, "system.llm_usage", lambda: client.request("GET", "/api/system/llm/usage?days=7")["summary"]["total_calls"])
     run_step(results, "candidates.list", lambda: assert_items(client.request("GET", "/api/candidates?limit=5")))
     run_step(results, "jobs.list", lambda: assert_items(client.request("GET", "/api/jobs?limit=5")))

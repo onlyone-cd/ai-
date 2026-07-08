@@ -322,6 +322,23 @@ export type OpsBackupStatus = {
   commands: Record<string, string>;
 };
 
+export type OpsDataQualityIssue = {
+  key: string;
+  severity: "error" | "warning";
+  title: string;
+  count: number;
+  impact: string;
+  module: string;
+  action: string;
+  samples: { id: number | string; name: string; subtitle?: string; status?: string; created_at?: string | null; error?: string }[];
+};
+
+export type OpsDataQuality = {
+  ready: boolean;
+  summary: { errors: number; warnings: number; issues: number; items: number };
+  issues: OpsDataQualityIssue[];
+};
+
 export type ResumeAttachment = {
   id: number;
   upload_batch_id: string;
@@ -587,6 +604,7 @@ export const api = {
   tasks: (status = "all") => request<{ items: BackgroundTask[]; status_counts: Record<string, number> }>(`/tasks?status=${status}`),
   retryTask: (id: number) => request<BackgroundTask>(`/tasks/${id}/retry`, { method: "POST" }),
   opsBackupStatus: () => request<OpsBackupStatus>("/ops/backup/status"),
+  opsDataQuality: () => request<OpsDataQuality>("/ops/data-quality"),
   createBackupExport: () => request<{ task: BackgroundTask }>("/ops/backup/export", { method: "POST" }),
   interviewers: () => request<{ items: User[] }>("/users/interviewers"),
   createUser: (payload: { username: string; name: string; role: string; password: string }) =>

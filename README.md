@@ -211,6 +211,9 @@ deploy/                     Nginx 示例配置
 - `POST /api/auth/login`
 - `GET /api/system/readiness`
 - `GET /api/system/data-integrity`
+- `GET /api/ops/data-quality`
+- `GET /api/ops/backup/status`
+- `POST /api/ops/backup/export`
 - `GET /api/system/llm/status`
 - `GET /api/system/llm/usage`：AI 调用、成本、失败率与阈值告警
 - `GET /api/notifications/channels`

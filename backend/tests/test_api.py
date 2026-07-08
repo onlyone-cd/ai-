@@ -208,6 +208,34 @@ def test_ops_backup_export_runs_as_background_task(app, client, admin_headers, t
         assert "data.json" in archive.namelist()
 
 
+def test_ops_data_quality_reports_actionable_issues(client, admin_headers):
+    response = client.get("/api/ops/data-quality", headers=admin_headers)
+
+    assert response.status_code == 200
+    data = response.get_json()["data"]
+    assert {"ready", "summary", "issues"} <= set(data)
+    assert {"errors", "warnings", "issues", "items"} <= set(data["summary"])
+    assert "DEEPSEEK_API_KEY" not in json.dumps(data)
+    assert "test-secret" not in json.dumps(data)
+
+
+def test_ops_data_quality_excludes_internal_jobs_from_recruiting_skill_issue(client, admin_headers):
+    admin_id = client.get("/api/auth/me", headers=admin_headers).get_json()["data"]["id"]
+    internal_job = Job(owner_hr_id=admin_id, title="内部架构师", city="长沙", department="内部", job_code="INTERNAL-QUALITY", jd_text="内部任职岗位", jd_structured={}, status="active")
+    recruiting_job = Job(owner_hr_id=admin_id, title="外部招聘岗位", city="长沙", department="招聘", job_code="QUALITY-OPEN", jd_text="招聘岗位", jd_structured={}, status="active")
+    db.session.add_all([internal_job, recruiting_job])
+    db.session.commit()
+
+    response = client.get("/api/ops/data-quality", headers=admin_headers)
+
+    assert response.status_code == 200
+    issues = response.get_json()["data"]["issues"]
+    skill_issue = next(item for item in issues if item["key"] == "recruiting_job_without_skills")
+    sample_names = [item["name"] for item in skill_issue["samples"]]
+    assert "外部招聘岗位" in sample_names
+    assert "内部架构师" not in sample_names
+
+
 def test_notification_center_channel_event_and_logs(client, admin_headers):
     created = client.post(
         "/api/notifications/channels",

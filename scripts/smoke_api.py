@@ -89,6 +89,7 @@ def main():
     run_step(results, "system.data_integrity", lambda: client.request("GET", "/api/system/data-integrity")["summary"]["total"])
     run_step(results, "system.llm_usage", lambda: client.request("GET", "/api/system/llm/usage?days=7")["summary"]["total_calls"])
     run_step(results, "ops.backup_status", lambda: client.request("GET", "/api/ops/backup/status")["storage"]["backup_dir"])
+    run_step(results, "ops.data_quality", lambda: client.request("GET", "/api/ops/data-quality")["summary"]["issues"])
     run_step(results, "notifications.channels", lambda: assert_items(client.request("GET", "/api/notifications/channels")))
     run_step(results, "candidates.list", lambda: assert_items(client.request("GET", "/api/candidates?limit=5")))
     run_step(results, "resume.attachments", lambda: client.request("GET", "/api/resume/attachments?limit=5").get("total", 0))

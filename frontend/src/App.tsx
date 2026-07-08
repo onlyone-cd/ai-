@@ -34,7 +34,7 @@ import {
   Users,
   X
 } from "lucide-react";
-import { api, AgentResponse, AiInterviewPlan, AuditLog, BackgroundTask, BiOverview, BossInboxItem, Candidate, clearToken, DataIntegrity, EmployeeAnalysis, EmployeeProfile, EmployeeRecommendation, InterviewAssignment, InterviewFeedback, InterviewMessage, InterviewSpeechStatus, Job, LLMUsageSummary, MatchResult, notify, OfferRecord, OpsBackupStatus, OrganizationUnit, PipelineItem, PublicInterviewRoom, setToken, SkillTag, SystemReadiness, User } from "./lib/api";
+import { api, AgentResponse, AiInterviewPlan, AuditLog, BackgroundTask, BiOverview, BossInboxItem, Candidate, clearToken, DataIntegrity, EmployeeAnalysis, EmployeeProfile, EmployeeRecommendation, InterviewAssignment, InterviewFeedback, InterviewMessage, InterviewSpeechStatus, Job, LLMUsageSummary, MatchResult, notify, OfferRecord, OpsBackupStatus, OpsDataQuality, OrganizationUnit, PipelineItem, PublicInterviewRoom, setToken, SkillTag, SystemReadiness, User } from "./lib/api";
 
 const stageLabels: Record<string, string> = {
   pending: "待处理",
@@ -176,7 +176,7 @@ function App() {
           {view === "boss" && <BossPage />}
           {view === "bi" && <BiPage />}
           {view === "agent" && <AgentPage />}
-          {view === "tasks" && <TasksPage />}
+          {view === "tasks" && <TasksPage setView={setView} />}
           {view === "audit" && <AuditLogsPage />}
           {view === "users" && <UsersPage currentUser={user} />}
         </AntLayout.Content>
@@ -2530,12 +2530,13 @@ function AgentTrace({ response }: { response: AgentResponse }) {
   );
 }
 
-function TasksPage() {
+function TasksPage({ setView }: { setView: (view: View) => void }) {
   const [tasks, setTasks] = useState<BackgroundTask[]>([]);
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [status, setStatus] = useState("all");
   const [busyId, setBusyId] = useState<number | null>(null);
   const [opsStatus, setOpsStatus] = useState<OpsBackupStatus | null>(null);
+  const [dataQuality, setDataQuality] = useState<OpsDataQuality | null>(null);
   const [opsBusy, setOpsBusy] = useState(false);
 
   async function load(nextStatus = status) {
@@ -2545,8 +2546,9 @@ function TasksPage() {
   }
 
   async function loadOps() {
-    const data = await api.opsBackupStatus();
-    setOpsStatus(data);
+    const [statusData, qualityData] = await Promise.all([api.opsBackupStatus(), api.opsDataQuality()]);
+    setOpsStatus(statusData);
+    setDataQuality(qualityData);
   }
 
   useEffect(() => {
@@ -2577,6 +2579,11 @@ function TasksPage() {
   const statuses = ["all", "queued", "running", "succeeded", "failed"];
   const pagedTasks = useClientPagination(tasks, 20);
   const totalRows = opsStatus ? Object.values(opsStatus.counts || {}).reduce((sum, value) => sum + Number(value || 0), 0) : 0;
+  const moduleTarget: Record<string, View> = {
+    "人才库": "candidates",
+    "组织与内部人才": "organization",
+    "岗位匹配": "jobs",
+  };
 
   return (
     <section className="space-y-4">
@@ -2616,6 +2623,59 @@ function TasksPage() {
               <KpiMini label="预检" value={opsStatus.readiness.ready ? "可上线" : "需处理"} hint={`${opsStatus.readiness.summary.errors} 错误 / ${opsStatus.readiness.summary.warnings} 警告`} />
               <KpiMini label="迁移版本" value={opsStatus.migration.at_head ? "最新" : "未对齐"} hint={opsStatus.migration.current.join(", ") || "未记录"} />
               <KpiMini label="数据行数" value={totalRows} hint="全表合计，仅用于备份校验" />
+            </div>
+            <div className="design-card">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h3 className="font-semibold">上线数据质量</h3>
+                  <p className="text-xs text-steel">上线前重点处理会影响解析、匹配、组织统计和迁移追溯的数据风险。</p>
+                </div>
+                {dataQuality && (
+                  <div className="flex flex-wrap gap-2">
+                    <span className={`badge ${dataQuality.ready ? "success" : "danger"}`}>{dataQuality.ready ? "无阻断项" : "存在阻断项"}</span>
+                    <span className="badge muted">{dataQuality.summary.issues} 类问题 · {dataQuality.summary.items} 条数据</span>
+                  </div>
+                )}
+              </div>
+              {!dataQuality ? (
+                <div className="mt-4"><AntSpin tip="正在读取数据质量" /></div>
+              ) : dataQuality.issues.length === 0 ? (
+                <EmptyState icon={<ShieldCheck size={22} />} text="暂无上线数据质量风险" />
+              ) : (
+                <div className="mt-4 grid gap-3">
+                  {dataQuality.issues.map((issue) => (
+                    <div className="rounded-lg border border-line bg-white p-3" key={issue.key}>
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className={`badge ${issue.severity === "error" ? "danger" : "muted"}`}>{issue.severity === "error" ? "阻断" : "待优化"}</span>
+                            <h4 className="font-semibold">{issue.title}</h4>
+                            <span className="badge">{issue.count} 条</span>
+                          </div>
+                          <p className="mt-1 text-sm text-steel">{issue.impact}</p>
+                          <p className="mt-1 text-xs text-steel">建议：{issue.action}</p>
+                        </div>
+                        <button className="secondary-button" type="button" onClick={() => setView(moduleTarget[issue.module] || "tasks")}>
+                          打开{issue.module}
+                        </button>
+                      </div>
+                      {issue.samples.length > 0 && (
+                        <div className="mt-3 grid gap-2 md:grid-cols-2">
+                          {issue.samples.map((sample) => (
+                            <div className="rounded-md bg-slate-50 px-3 py-2 text-sm" key={`${issue.key}-${sample.id}`}>
+                              <div className="flex items-center justify-between gap-2">
+                                <strong className="truncate">{sample.name}</strong>
+                                {sample.status && <span className="badge muted">{sample.status}</span>}
+                              </div>
+                              <p className="mt-1 truncate text-xs text-steel">{sample.subtitle || sample.error || `#${sample.id}`}</p>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
             <div className="grid gap-4 lg:grid-cols-[1fr_1.2fr]">
               <div className="design-card">

@@ -20,7 +20,7 @@ from .job_service import build_jd_structured, ensure_jd_structured, persist_matc
 from .llm_client import LLMError, chat_json, llm_available, llm_status
 from .matching import match_candidate
 from .models import AuditLog, BackgroundTask, BossAccount, BossDraft, BossSyncItem, BossSyncJob, Candidate, CandidateTag, EmployeeAnalysis, EmployeeCompensation, EmployeeProfile, EmployeeRecommendation, InterviewAssignment, InterviewFeedback, InterviewSpeechLog, Job, LLMUsage, Match, NotificationChannel, NotificationEvent, NotificationLog, OfferRecord, OrganizationUnit, PipelineStage, ResumeAttachment, UploadBatch, User, years_between
-from .ops_service import list_backup_packages, migration_status, storage_status, table_counts
+from .ops_service import build_data_quality_report, list_backup_packages, migration_status, storage_status, table_counts
 from .rbac import ROLES, role_permissions
 from .resume_service import ARCHIVE_EXTENSIONS, parse_and_save_archive, parse_and_save_resume, parse_and_save_text, reparse_candidate, rescan_attachment, resume_upload_dir
 from .responses import error, ok
@@ -305,6 +305,16 @@ def ops_backup_export(user):
     audit_log(user, "enqueue", "background_task", task.id, "backup_export")
     db.session.commit()
     return ok({"task": task.to_dict()}, "本地备份任务已加入后台队列")
+
+
+@api.get("/ops/data-quality")
+@login_required
+@roles_required("admin", "manager")
+def ops_data_quality(user):
+    report = build_data_quality_report()
+    audit_log(user, "view", "ops_data_quality", None, "data_quality")
+    db.session.commit()
+    return ok(report)
 
 
 @api.get("/system/llm/usage")

@@ -19,7 +19,7 @@ from .auth import hash_password, issue_token, login_required, roles_required, va
 from .job_service import build_jd_structured, ensure_jd_structured, persist_matches, preview_matches
 from .llm_client import LLMError, chat_json, llm_available, llm_status
 from .matching import match_candidate
-from .models import AuditLog, BackgroundTask, BossAccount, BossDraft, BossSyncItem, BossSyncJob, Candidate, CandidateTag, EmployeeAnalysis, EmployeeCompensation, EmployeeProfile, EmployeeRecommendation, InterviewAssignment, InterviewFeedback, Job, LLMUsage, Match, NotificationChannel, NotificationEvent, NotificationLog, OfferRecord, OrganizationUnit, PipelineStage, UploadBatch, User, years_between
+from .models import AuditLog, BackgroundTask, BossAccount, BossDraft, BossSyncItem, BossSyncJob, Candidate, CandidateTag, EmployeeAnalysis, EmployeeCompensation, EmployeeProfile, EmployeeRecommendation, InterviewAssignment, InterviewFeedback, InterviewSpeechLog, Job, LLMUsage, Match, NotificationChannel, NotificationEvent, NotificationLog, OfferRecord, OrganizationUnit, PipelineStage, UploadBatch, User, years_between
 from .rbac import ROLES, role_permissions
 from .resume_service import ARCHIVE_EXTENSIONS, parse_and_save_archive, parse_and_save_resume, parse_and_save_text, reparse_candidate, resume_upload_dir
 from .responses import error, ok
@@ -129,6 +129,7 @@ def system_data_integrity(user):
         "interview_job": missing_fk_count(InterviewAssignment, InterviewAssignment.job_id, Job),
         "interview_interviewer": missing_fk_count(InterviewAssignment, InterviewAssignment.interviewer_id, User),
         "interview_creator": missing_fk_count(InterviewAssignment, InterviewAssignment.created_by, User),
+        "interview_speech_assignment": missing_fk_count(InterviewSpeechLog, InterviewSpeechLog.assignment_id, InterviewAssignment),
         "offer_candidate": missing_fk_count(OfferRecord, OfferRecord.candidate_id, Candidate),
         "offer_job": missing_fk_count(OfferRecord, OfferRecord.job_id, Job),
         "offer_creator": missing_fk_count(OfferRecord, OfferRecord.created_by, User),
@@ -201,6 +202,7 @@ def system_data_integrity(user):
         "matches": Match.query.count(),
         "pipeline_stages": PipelineStage.query.count(),
         "interviews": InterviewAssignment.query.count(),
+        "interview_speech_logs": InterviewSpeechLog.query.count(),
         "offers": OfferRecord.query.count(),
         "organizations": OrganizationUnit.query.count(),
         "employees": EmployeeProfile.query.count(),
@@ -1743,6 +1745,24 @@ def list_interview_assignments(user):
     return ok({"items": [item.to_dict() for item in assignments], **meta})
 
 
+@api.get("/interview/speech/logs")
+@login_required
+@roles_required("admin", "manager", "recruiter")
+def list_interview_speech_logs(user):
+    query = InterviewSpeechLog.query.order_by(InterviewSpeechLog.created_at.desc())
+    assignment_id = request.args.get("assignment_id", type=int)
+    operation = request.args.get("operation")
+    status = request.args.get("status")
+    if assignment_id:
+        query = query.filter_by(assignment_id=assignment_id)
+    if operation:
+        query = query.filter_by(operation=operation)
+    if status and status != "all":
+        query = query.filter_by(status=status)
+    logs, meta = paginate_query(query, default_limit=50, max_limit=200)
+    return ok({"items": [log.to_dict() for log in logs], **meta})
+
+
 @api.get("/interview/assignments/<int:assignment_id>")
 @login_required
 def get_interview_assignment(user, assignment_id):
@@ -1803,6 +1823,117 @@ def public_interview_turn(token):
     if payload_error:
         return payload_error
     return ok(build_interview_turn_reply(assignment, payload))
+
+
+@api.get("/public/interview-room/<token>/speech/status")
+def public_interview_speech_status(token):
+    limited = public_interview_rate_limit(token)
+    if limited:
+        return limited
+    assignment = assignment_from_room_token(token, allow_completed=True)
+    if not assignment:
+        return error("Interview room link is invalid or expired", "INVALID_INTERVIEW_ROOM", 404)
+    return ok({"assignment_id": assignment.id, "speech": speech_status_payload()})
+
+
+@api.post("/public/interview-room/<token>/speech/asr")
+def public_interview_speech_asr(token):
+    limited = public_interview_rate_limit(token)
+    if limited:
+        return limited
+    assignment = assignment_from_room_token(token)
+    if not assignment:
+        return error("Interview room link is invalid or expired", "INVALID_INTERVIEW_ROOM", 404)
+    started = time()
+    payload = request.get_json(silent=True) if request.is_json else {}
+    transcript = str((payload or {}).get("transcript") or request.form.get("transcript") or "").strip()
+    source = str((payload or {}).get("source") or request.form.get("source") or "browser_recognition").strip()[:64]
+    duration_ms = parse_optional_int((payload or {}).get("duration_ms") or request.form.get("duration_ms"), 0)
+    audio = request.files.get("audio")
+    audio_bytes = 0
+    if audio:
+        audio_bytes = len(audio.read())
+        audio.stream.seek(0)
+        max_bytes = int(current_app.config.get("SPEECH_MAX_AUDIO_BYTES", 8 * 1024 * 1024))
+        if audio_bytes > max_bytes:
+            log_interview_speech(assignment, "asr", source, "failed", audio_bytes=audio_bytes, duration_ms=duration_ms, error_message="Audio file too large")
+            db.session.commit()
+            return error("Audio file too large", "AUDIO_TOO_LARGE", 413, {"max_audio_bytes": max_bytes})
+    if not current_app.config.get("SPEECH_ASR_ENABLED", True):
+        log_interview_speech(assignment, "asr", source, "skipped", audio_bytes=audio_bytes, duration_ms=duration_ms, error_message="ASR disabled")
+        db.session.commit()
+        return error("ASR is disabled", "ASR_DISABLED", 503)
+    if transcript:
+        log = log_interview_speech(
+            assignment,
+            "asr",
+            source,
+            "succeeded",
+            transcript=transcript,
+            audio_bytes=audio_bytes,
+            duration_ms=duration_ms or int((time() - started) * 1000),
+            meta={"mode": "browser_transcript"},
+        )
+        db.session.commit()
+        return ok({"transcript": transcript, "source": source, "log": log.to_dict()}, "ASR transcript synced")
+    if not current_app.config.get("SPEECH_ASR_API_URL"):
+        log_interview_speech(assignment, "asr", source, "failed", audio_bytes=audio_bytes, duration_ms=duration_ms, error_message="ASR provider not configured")
+        db.session.commit()
+        return error("Backend ASR provider is not configured; sync browser transcript instead", "ASR_PROVIDER_NOT_CONFIGURED", 422)
+    log_interview_speech(assignment, "asr", current_app.config.get("SPEECH_PROVIDER", "external"), "failed", audio_bytes=audio_bytes, duration_ms=duration_ms, error_message="ASR provider adapter pending")
+    db.session.commit()
+    return error("ASR provider adapter is not ready", "ASR_PROVIDER_NOT_READY", 501)
+
+
+@api.post("/public/interview-room/<token>/speech/tts")
+def public_interview_speech_tts(token):
+    limited = public_interview_rate_limit(token)
+    if limited:
+        return limited
+    assignment = assignment_from_room_token(token, allow_completed=True)
+    if not assignment:
+        return error("Interview room link is invalid or expired", "INVALID_INTERVIEW_ROOM", 404)
+    payload = request.get_json(force=True)
+    text = str(payload.get("text") or "").strip()
+    voice = str(payload.get("voice") or "zh-CN").strip()[:64]
+    if not text:
+        return error("TTS text is required", "VALIDATION_ERROR")
+    max_chars = int(current_app.config.get("SPEECH_TTS_MAX_CHARS", 1000))
+    if len(text) > max_chars:
+        return error("TTS text is too long", "TTS_TEXT_TOO_LONG", 413, {"max_chars": max_chars})
+    if not current_app.config.get("SPEECH_TTS_ENABLED", True):
+        log_interview_speech(assignment, "tts", "browser_synthesis", "skipped", text=text, error_message="TTS disabled")
+        db.session.commit()
+        return error("TTS is disabled", "TTS_DISABLED", 503)
+    provider = current_app.config.get("SPEECH_PROVIDER", "browser")
+    mode = "browser_synthesis"
+    status = "succeeded"
+    error_message = None
+    if current_app.config.get("SPEECH_TTS_API_URL"):
+        mode = "external_provider_pending"
+        status = "skipped"
+        error_message = "TTS provider adapter pending"
+    log = log_interview_speech(
+        assignment,
+        "tts",
+        provider if mode != "browser_synthesis" else "browser_synthesis",
+        status,
+        text=text,
+        meta={"mode": mode, "voice": voice, "audio_url": None},
+        error_message=error_message,
+    )
+    db.session.commit()
+    return ok(
+        {
+            "text": text,
+            "voice": voice,
+            "mode": mode,
+            "audio_url": None,
+            "browser_fallback": True,
+            "log": log.to_dict(),
+        },
+        "TTS task created",
+    )
 
 
 @api.post("/public/interview-room/<token>/complete")
@@ -3848,6 +3979,44 @@ def assignment_from_room_token(token, allow_completed=False):
     if not assignment or assignment.status not in allowed:
         return None
     return assignment
+
+
+def speech_status_payload():
+    asr_provider_ready = bool(current_app.config.get("SPEECH_ASR_API_URL"))
+    tts_provider_ready = bool(current_app.config.get("SPEECH_TTS_API_URL"))
+    return {
+        "provider": current_app.config.get("SPEECH_PROVIDER", "browser"),
+        "asr": {
+            "enabled": bool(current_app.config.get("SPEECH_ASR_ENABLED", True)),
+            "backend_provider_ready": asr_provider_ready,
+            "browser_fallback": True,
+            "max_audio_bytes": int(current_app.config.get("SPEECH_MAX_AUDIO_BYTES", 8 * 1024 * 1024)),
+        },
+        "tts": {
+            "enabled": bool(current_app.config.get("SPEECH_TTS_ENABLED", True)),
+            "backend_provider_ready": tts_provider_ready,
+            "browser_fallback": True,
+            "max_chars": int(current_app.config.get("SPEECH_TTS_MAX_CHARS", 1000)),
+        },
+    }
+
+
+def log_interview_speech(assignment, operation, provider, status, transcript=None, text=None, audio_bytes=0, duration_ms=0, error_message=None, meta=None):
+    log = InterviewSpeechLog(
+        assignment_id=assignment.id,
+        operation=operation,
+        provider=str(provider or current_app.config.get("SPEECH_PROVIDER", "browser"))[:64],
+        status=status,
+        transcript=(transcript or None),
+        text=(text or None),
+        audio_bytes=max(0, int(audio_bytes or 0)),
+        duration_ms=max(0, int(duration_ms or 0)),
+        error=error_message,
+        meta_json=meta or {},
+    )
+    db.session.add(log)
+    db.session.flush()
+    return log
 
 
 def build_interview_ai_plan(assignment, prefer_deepseek=False):

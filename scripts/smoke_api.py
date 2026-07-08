@@ -140,6 +140,23 @@ def main():
             temp["notification_channel_id"] = data["id"]
             return data["id"]
 
+        def create_interview_room():
+            data = client.request(
+                "POST",
+                "/api/interview/assignments",
+                {
+                    "candidate_id": temp["candidate_id"],
+                    "job_id": temp["job_id"],
+                    "interviewer_id": 2,
+                    "round": "interview_first",
+                    "scheduled_at": "2026-07-09T10:00:00",
+                },
+            )
+            temp["interview_id"] = data["id"]
+            link = client.request("POST", f"/api/interview/assignments/{data['id']}/room-link")
+            temp["interview_token"] = link["token"]
+            return data["id"]
+
         run_step(results, "mutating.candidate_create", create_candidate)
         run_step(results, "mutating.boss_sync_detail", lambda: client.request("GET", f"/api/boss/sync/jobs/{temp['boss_sync_job_id']}")["status"])
         run_step(results, "mutating.job_create", create_job)
@@ -160,11 +177,17 @@ def main():
             lambda: len(client.request("POST", f"/api/jobs/{temp['job_id']}/batch-pipeline", {"candidate_id": temp["candidate_id"], "stage": "pending"})["created"]),
         )
         run_step(results, "mutating.business_notification_logs", lambda: client.request("GET", "/api/notifications/logs?event_type=candidate_imported")["total"])
+        run_step(results, "mutating.interview_room_create", create_interview_room)
+        run_step(results, "mutating.speech_status", lambda: client.request("GET", f"/api/public/interview-room/{temp['interview_token']}/speech/status")["speech"]["asr"]["enabled"])
+        run_step(results, "mutating.speech_asr", lambda: client.request("POST", f"/api/public/interview-room/{temp['interview_token']}/speech/asr", {"transcript": "Smoke voice answer", "source": "browser_recognition"})["transcript"])
+        run_step(results, "mutating.speech_tts", lambda: client.request("POST", f"/api/public/interview-room/{temp['interview_token']}/speech/tts", {"text": "Smoke interview question", "voice": "zh-CN"})["mode"])
+        run_step(results, "mutating.speech_logs", lambda: client.request("GET", f"/api/interview/speech/logs?assignment_id={temp['interview_id']}")["total"])
 
     cleanup_errors: list[str] = []
     if args.mutating:
         for key, path in [
             ("notification_channel_id", "/api/notifications/channels/{id}"),
+            ("interview_id", "/api/interview/assignments/{id}"),
             ("job_id", "/api/jobs/{id}"),
             ("candidate_id", "/api/candidates/{id}"),
         ]:

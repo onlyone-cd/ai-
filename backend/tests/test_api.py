@@ -13,7 +13,7 @@ from app import create_app, db
 from app.config import Config
 from app.auth import verify_password
 from app.llm_client import chat_json
-from app.models import AuditLog, BackgroundTask, BossDraft, BossSyncJob, Candidate, CandidateTag, EmployeeProfile, InterviewAssignment, InterviewFeedback, Job, LLMUsage, Match, NotificationLog, OfferRecord, OrganizationUnit, PipelineStage, User
+from app.models import AuditLog, BackgroundTask, BossDraft, BossSyncJob, Candidate, CandidateTag, EmployeeProfile, InterviewAssignment, InterviewFeedback, InterviewSpeechLog, Job, LLMUsage, Match, NotificationLog, OfferRecord, OrganizationUnit, PipelineStage, User
 from app.task_service import run_next_task
 
 
@@ -1248,6 +1248,38 @@ def test_public_interview_room_and_turn_work_without_login(client, admin_headers
     assert reopened.get_json()["data"]["assignment"]["status"] == "completed"
     assert blocked_turn.status_code == 404
     assert InterviewFeedback.query.filter_by(assignment_id=assignment["id"]).count() == 1
+
+
+def test_public_interview_speech_asr_tts_and_logs(client, admin_headers):
+    assignment = client.post(
+        "/api/interview/assignments",
+        headers=admin_headers,
+        json={"candidate_id": 1, "job_id": 1, "interviewer_id": 2, "round": "interview_first", "scheduled_at": "2026-07-03T10:00:00"},
+    ).get_json()["data"]
+    link = client.post(f"/api/interview/assignments/{assignment['id']}/room-link", headers=admin_headers).get_json()["data"]
+
+    status = client.get(f"/api/public/interview-room/{link['token']}/speech/status")
+    assert status.status_code == 200
+    speech = status.get_json()["data"]["speech"]
+    assert speech["asr"]["enabled"] is True
+    assert speech["tts"]["browser_fallback"] is True
+
+    asr = client.post(
+        f"/api/public/interview-room/{link['token']}/speech/asr",
+        json={"transcript": "我负责 Java 后端服务开发", "source": "browser_recognition", "duration_ms": 1200},
+    )
+    assert asr.status_code == 200
+    assert asr.get_json()["data"]["transcript"] == "我负责 Java 后端服务开发"
+
+    tts = client.post(f"/api/public/interview-room/{link['token']}/speech/tts", json={"text": "请介绍一个项目", "voice": "zh-CN"})
+    assert tts.status_code == 200
+    assert tts.get_json()["data"]["browser_fallback"] is True
+
+    logs = client.get(f"/api/interview/speech/logs?assignment_id={assignment['id']}", headers=admin_headers)
+    assert logs.status_code == 200
+    items = logs.get_json()["data"]["items"]
+    assert {item["operation"] for item in items} == {"asr", "tts"}
+    assert InterviewSpeechLog.query.filter_by(assignment_id=assignment["id"]).count() == 2
 
 
 def test_public_interview_room_token_uses_configured_expiry(client, admin_headers, app):

@@ -183,6 +183,25 @@ export type AiInterviewPlan = {
 export type PublicInterviewRoom = { assignment: InterviewAssignment; plan: AiInterviewPlan };
 export type InterviewTurnReply = { reply: string; source: string };
 export type InterviewMessage = { role: "ai" | "candidate"; text: string };
+export type InterviewSpeechLog = {
+  id: number;
+  assignment_id: number;
+  operation: "asr" | "tts" | string;
+  provider: string;
+  status: string;
+  transcript?: string | null;
+  text?: string | null;
+  audio_bytes: number;
+  duration_ms: number;
+  error?: string | null;
+  meta: Record<string, unknown>;
+  created_at?: string | null;
+};
+export type InterviewSpeechStatus = {
+  provider: string;
+  asr: { enabled: boolean; backend_provider_ready: boolean; browser_fallback: boolean; max_audio_bytes: number };
+  tts: { enabled: boolean; backend_provider_ready: boolean; browser_fallback: boolean; max_chars: number };
+};
 
 export type InterviewFeedback = {
   id: number;
@@ -604,8 +623,15 @@ export const api = {
   publicInterviewRoom: (token: string) => request<PublicInterviewRoom>(`/public/interview-room/${token}`),
   publicInterviewTurn: (token: string, payload: { question: string; answer?: string; intent?: "followup" | "clarify"; candidate_question?: string }) =>
     request<InterviewTurnReply>(`/public/interview-room/${token}/turn`, { method: "POST", body: JSON.stringify(payload) }),
+  publicInterviewSpeechStatus: (token: string) => request<{ assignment_id: number; speech: InterviewSpeechStatus }>(`/public/interview-room/${token}/speech/status`),
+  publicInterviewAsr: (token: string, payload: { transcript?: string; source?: string; duration_ms?: number }) =>
+    request<{ transcript: string; source: string; log: InterviewSpeechLog }>(`/public/interview-room/${token}/speech/asr`, { method: "POST", body: JSON.stringify(payload) }),
+  publicInterviewTts: (token: string, payload: { text: string; voice?: string }) =>
+    request<{ text: string; voice: string; mode: string; audio_url?: string | null; browser_fallback: boolean; log: InterviewSpeechLog }>(`/public/interview-room/${token}/speech/tts`, { method: "POST", body: JSON.stringify(payload) }),
   publicInterviewComplete: (token: string, payload: { answers: string[]; messages: InterviewMessage[]; cheat_events?: string[] }) =>
     request<{ assignment: InterviewAssignment; feedback: InterviewFeedback; closing: string }>(`/public/interview-room/${token}/complete`, { method: "POST", body: JSON.stringify(payload) }),
+  interviewSpeechLogs: (params?: { assignment_id?: number; operation?: string; status?: string; limit?: number; offset?: number }) =>
+    request<{ items: InterviewSpeechLog[] } & PaginationMeta>(`/interview/speech/logs${queryString(params)}`),
   cancelInterviewAssignment: (id: number) => request<InterviewAssignment>(`/interview/assignments/${id}/cancel`, { method: "POST" }),
   deleteInterviewAssignment: (id: number) => request<{ deleted: number }>(`/interview/assignments/${id}`, { method: "DELETE" }),
   submitInterviewFeedback: (payload: { assignment_id: number; rating: number; decision: string; strengths?: string; risks?: string; comment?: string }) =>

@@ -549,6 +549,44 @@ class InterviewFeedback(db.Model):
         }
 
 
+class InterviewSpeechLog(db.Model):
+    __table_args__ = (
+        db.Index("ix_interview_speech_assignment_created", "assignment_id", "created_at"),
+        db.Index("ix_interview_speech_operation_status", "operation", "status"),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    assignment_id = db.Column(db.Integer, db.ForeignKey("interview_assignment.id"), nullable=False)
+    operation = db.Column(db.String(16), nullable=False)
+    provider = db.Column(db.String(64), nullable=False, default="browser")
+    status = db.Column(db.String(24), nullable=False, default="succeeded")
+    transcript = db.Column(db.Text, nullable=True)
+    text = db.Column(db.Text, nullable=True)
+    audio_bytes = db.Column(db.Integer, nullable=False, default=0)
+    duration_ms = db.Column(db.Integer, nullable=False, default=0)
+    error = db.Column(db.Text, nullable=True)
+    meta_json = db.Column(db.JSON, nullable=False, default=dict)
+    created_at = db.Column(db.DateTime(timezone=True), default=utcnow)
+
+    assignment = db.relationship("InterviewAssignment")
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "assignment_id": self.assignment_id,
+            "operation": self.operation,
+            "provider": self.provider,
+            "status": self.status,
+            "transcript": self.transcript,
+            "text": self.text,
+            "audio_bytes": self.audio_bytes,
+            "duration_ms": self.duration_ms,
+            "error": self.error,
+            "meta": self.meta_json or {},
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
 class OfferRecord(db.Model):
     __table_args__ = (
         db.Index("ix_offer_status_updated", "status", "updated_at"),

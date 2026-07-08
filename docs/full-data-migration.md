@@ -12,7 +12,7 @@ The generated package contains sensitive business data. It is written under
 - Users and RBAC data
 - Candidates, resume text, tags, matches, pipeline history
 - Jobs and JD structures
-- Interviews, feedback, offers
+- Interviews, feedback, interview speech logs, offers
 - BOSS accounts, drafts, sync jobs and sync item logs
 - Organization units, employees, compensation, employee analyses and recommendations
 - Background tasks, LLM usage, audit logs

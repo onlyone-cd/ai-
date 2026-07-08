@@ -34,7 +34,7 @@ import {
   Users,
   X
 } from "lucide-react";
-import { api, AgentResponse, AiInterviewPlan, AuditLog, BackgroundTask, BiOverview, BossInboxItem, Candidate, clearToken, DataIntegrity, EmployeeAnalysis, EmployeeProfile, EmployeeRecommendation, InterviewAssignment, InterviewFeedback, InterviewMessage, Job, LLMUsageSummary, MatchResult, notify, OfferRecord, OrganizationUnit, PipelineItem, PublicInterviewRoom, setToken, SkillTag, SystemReadiness, User } from "./lib/api";
+import { api, AgentResponse, AiInterviewPlan, AuditLog, BackgroundTask, BiOverview, BossInboxItem, Candidate, clearToken, DataIntegrity, EmployeeAnalysis, EmployeeProfile, EmployeeRecommendation, InterviewAssignment, InterviewFeedback, InterviewMessage, InterviewSpeechStatus, Job, LLMUsageSummary, MatchResult, notify, OfferRecord, OrganizationUnit, PipelineItem, PublicInterviewRoom, setToken, SkillTag, SystemReadiness, User } from "./lib/api";
 
 const stageLabels: Record<string, string> = {
   pending: "待处理",
@@ -242,6 +242,7 @@ function CandidateInterviewRoom({ token }: { token: string }) {
   const [submitted, setSubmitted] = useState(false);
   const [cheatEvents, setCheatEvents] = useState<string[]>([]);
   const [speechSupport, setSpeechSupport] = useState({ recognition: false, synthesis: false });
+  const [speechStatus, setSpeechStatus] = useState<InterviewSpeechStatus | null>(null);
   const recognitionRef = useRef<any>(null);
   const current = room?.plan.questions[index];
 
@@ -258,6 +259,9 @@ function CandidateInterviewRoom({ token }: { token: string }) {
         setSubmitted(data.assignment.status === "completed");
       })
       .catch((err) => setError(err instanceof Error ? err.message : "面试间不可用"));
+    api.publicInterviewSpeechStatus(token)
+      .then((data) => setSpeechStatus(data.speech))
+      .catch(() => setSpeechStatus(null));
     return () => {
       window.speechSynthesis?.cancel();
       recognitionRef.current?.stop?.();
@@ -294,11 +298,12 @@ function CandidateInterviewRoom({ token }: { token: string }) {
     };
   }, []);
 
-  function speak(text: string) {
+  async function speak(text: string) {
     if (!window.speechSynthesis) {
       setNotice("当前浏览器不支持语音合成，已切换为文字面试模式。请使用 Chrome 打开候选人链接体验语音播报。");
       return;
     }
+    api.publicInterviewTts(token, { text, voice: room?.plan.avatar.voice || "zh-CN" }).catch(() => undefined);
     window.speechSynthesis?.cancel();
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.lang = "zh-CN";
@@ -319,18 +324,26 @@ function CandidateInterviewRoom({ token }: { token: string }) {
       return;
     }
     const recognition = new SpeechRecognition();
+    const startedAt = Date.now();
+    let recognizedText = "";
     recognition.lang = "zh-CN";
     recognition.continuous = true;
     recognition.interimResults = true;
     recognition.onresult = (event: any) => {
       const text = Array.from(event.results).map((result: any) => result[0]?.transcript || "").join("");
+      recognizedText = text;
       if (mode === "question") {
         setQuestionText(text);
       } else {
         setAnswers((items) => items.map((item, itemIndex) => itemIndex === index ? text : item));
       }
     };
-    recognition.onend = () => setListening(false);
+    recognition.onend = () => {
+      setListening(false);
+      if (recognizedText.trim()) {
+        api.publicInterviewAsr(token, { transcript: recognizedText.trim(), source: "browser_recognition", duration_ms: Date.now() - startedAt }).catch(() => undefined);
+      }
+    };
     recognitionRef.current = recognition;
     setListening(true);
     recognition.start();
@@ -395,6 +408,9 @@ function CandidateInterviewRoom({ token }: { token: string }) {
               <div className="mt-1">面试方式：网页面试</div>
               <div className="mt-1">答题进度：{progress}/100</div>
               <div className="mt-1">异常操作记录：{cheatEvents.length} 次</div>
+            </div>
+            <div className="mt-3 rounded-md bg-slate-50 px-3 py-2 text-xs text-steel">
+              语音后端：{speechStatus?.asr.enabled ? "ASR" : "ASR未启用"} / {speechStatus?.tts.enabled ? "TTS" : "TTS未启用"}
             </div>
             {!speechSupport.recognition && (
               <div className="mt-3 rounded-md bg-orange-50 px-3 py-2 text-xs text-orange-700">

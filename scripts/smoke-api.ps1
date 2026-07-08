@@ -158,6 +158,10 @@ Test-Step "interview.public_room_and_report" {
   Invoke-Api "POST" "/api/interview/assignments/$script:TempInterviewId/ai-plan" | Out-Null
   $link = Invoke-Api "POST" "/api/interview/assignments/$script:TempInterviewId/room-link"
   Invoke-Api "GET" "/api/public/interview-room/$($link.data.token)" | Out-Null
+  Invoke-Api "GET" "/api/public/interview-room/$($link.data.token)/speech/status" | Out-Null
+  Invoke-Api "POST" "/api/public/interview-room/$($link.data.token)/speech/asr" @{ transcript = "I owned Java backend APIs."; source = "browser_recognition" } | Out-Null
+  Invoke-Api "POST" "/api/public/interview-room/$($link.data.token)/speech/tts" @{ text = "Please introduce one backend project."; voice = "zh-CN" } | Out-Null
+  Invoke-Api "GET" "/api/interview/speech/logs?assignment_id=$script:TempInterviewId" | Out-Null
   Invoke-Api "POST" "/api/public/interview-room/$($link.data.token)/turn" @{ question = "Please introduce one backend project."; answer = "I owned Java backend APIs, database design and release work." } | Out-Null
   Invoke-Api "POST" "/api/public/interview-room/$($link.data.token)/complete" @{
     answers = @("I owned Java backend APIs, database design and release work.")

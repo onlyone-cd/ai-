@@ -122,9 +122,12 @@ python /app/scripts/preflight_production.py --require-migration-head
 后端测试：
 
 ```powershell
-cd backend
-.\.venv\Scripts\python.exe -m pytest -q
+.\backend\.venv\Scripts\python.exe scripts\run_backend_tests.py --mode all --timeout-seconds 600
+.\backend\.venv\Scripts\python.exe scripts\run_backend_tests.py --mode unit --timeout-seconds 120
+.\backend\.venv\Scripts\python.exe scripts\run_backend_tests.py --mode api --timeout-seconds 600 --durations 30
 ```
+
+`unit` 只跑匹配和标签库规则；`api` 跑完整后端接口集成测试；`all` 是上线前默认后端测试入口，会输出最慢测试阶段，避免长时间无反馈。
 
 前端构建：
 

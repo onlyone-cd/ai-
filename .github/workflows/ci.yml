@@ -40,7 +40,7 @@ jobs:
       - name: Run tests
         env:
           LLM_ENABLED: "false"
-        run: python -m pytest -q
+        run: python ../scripts/run_backend_tests.py --mode all --timeout-seconds 600
 
   frontend:
     name: Frontend build

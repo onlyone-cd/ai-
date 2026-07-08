@@ -20,6 +20,16 @@ docker compose -f docker-compose.production.yml --env-file .env exec app \
   python /app/scripts/preflight_production.py --require-migration-head
 ```
 
+Recommended release test gates:
+
+```bash
+python scripts/run_backend_tests.py --mode unit --timeout-seconds 120
+python scripts/run_backend_tests.py --mode api --timeout-seconds 600 --durations 30
+python scripts/smoke_api.py --base-url http://localhost:5001
+```
+
+The backend API suite currently takes about 3 minutes on the local Windows dev machine because each integration test creates an isolated app and seed database. The wrapper reports slow setup/call phases and exits with code `124` when a slice exceeds its timeout.
+
 The check fails when:
 
 - production config still uses demo JWT secrets

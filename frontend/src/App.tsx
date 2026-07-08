@@ -2191,12 +2191,10 @@ function BossPage() {
 function BiPage() {
   const [data, setData] = useState<BiOverview | null>(null);
   const [llmUsage, setLlmUsage] = useState<LLMUsageSummary | null>(null);
-  const [dataIntegrity, setDataIntegrity] = useState<DataIntegrity | null>(null);
   const [periodDays, setPeriodDays] = useState(30);
   useEffect(() => {
     api.bi(periodDays).then(setData);
     api.llmUsage(periodDays).then(setLlmUsage).catch(() => setLlmUsage(null));
-    api.dataIntegrity().then(setDataIntegrity).catch(() => setDataIntegrity(null));
   }, [periodDays]);
   if (!data) return <EmptyState icon={<BarChart3 size={22} />} text="正在加载 BI 数据" />;
   const funnel = data.pipeline_funnel;
@@ -2220,29 +2218,6 @@ function BiPage() {
           ))}
         </div>
       </div>
-
-      {dataIntegrity && (
-        <div className="design-card">
-          <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <h2 className="font-semibold">数据完整性巡检</h2>
-              <p className="text-xs text-steel">
-                {dataIntegrity.database} · 候选人 {dataIntegrity.counts.candidates || 0} · 员工 {dataIntegrity.counts.employees || 0} · 岗位 {dataIntegrity.counts.jobs || 0}
-              </p>
-            </div>
-            <span className={`badge ${dataIntegrity.ready ? "" : "danger"}`}>{dataIntegrity.ready ? "数据可迁移" : `${dataIntegrity.summary.errors} 项阻塞`}</span>
-          </div>
-          <div className="grid gap-2 md:grid-cols-2">
-            {dataIntegrity.checks.filter((item) => !item.ok).slice(0, 6).map((item) => (
-              <div className="rounded-md border border-line px-3 py-2 text-sm" key={item.key}>
-                <span className={item.severity === "error" ? "text-red-700" : "text-amber-700"}>{item.severity === "error" ? "阻塞" : "提醒"}</span>
-                <span className="ml-2 text-ink">{item.message}</span>
-              </div>
-            ))}
-            {dataIntegrity.checks.every((item) => item.ok) && <p className="text-sm text-steel">当前数据引用、重复项和附件检查全部通过。</p>}
-          </div>
-        </div>
-      )}
 
       {llmUsage?.alerts?.length ? (
         <div className="design-card">

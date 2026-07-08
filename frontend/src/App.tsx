@@ -2520,6 +2520,16 @@ function TasksPage({ setView }: { setView: (view: View) => void }) {
     }
   }
 
+  async function runTaskNow(task: BackgroundTask) {
+    setBusyId(task.id);
+    try {
+      await api.runTask(task.id);
+      await load(status);
+    } finally {
+      setBusyId(null);
+    }
+  }
+
   async function createBackup() {
     setOpsBusy(true);
     try {
@@ -2720,12 +2730,20 @@ function TasksPage({ setView }: { setView: (view: View) => void }) {
                   {task.finished_at ? ` · 完成 ${formatDateTime(task.finished_at)}` : ""}
                 </p>
               </div>
-              {task.status === "failed" && (
-                <button className="secondary-button" disabled={busyId === task.id} onClick={() => retry(task)}>
-                  <RefreshCw size={17} />
-                  重新排队
-                </button>
-              )}
+              <div className="flex flex-wrap gap-2">
+                {task.status === "queued" && (
+                  <button className="primary-button" disabled={busyId === task.id} onClick={() => runTaskNow(task)}>
+                    <RefreshCw size={17} />
+                    {busyId === task.id ? "执行中" : "立即执行"}
+                  </button>
+                )}
+                {task.status === "failed" && (
+                  <button className="secondary-button" disabled={busyId === task.id} onClick={() => retry(task)}>
+                    <RefreshCw size={17} />
+                    重新排队
+                  </button>
+                )}
+              </div>
             </div>
             {task.error && <p className="mt-2 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{task.error}</p>}
             {Object.keys(task.result || {}).length > 0 && <p className="mt-2 text-xs text-steel">{JSON.stringify(task.result)}</p>}
@@ -4462,12 +4480,15 @@ function CandidateDetailPage({ candidate, onBack, onDeleted, backLabel = "返回
 
   async function retryParse() {
     setBusy(true);
-    setMessage("正在创建后台解析任务...");
+    setMessage("正在重新解析简历...");
     try {
-      const data = await api.retryParseResumeAsync(detail.id);
-      setMessage(`已加入后台任务 #${data.task.id}，可在后台任务页面查看进度`);
+      const data = await api.retryParseResume(detail.id);
+      setDetail(data.candidate);
+      setEdit(candidateEditFields(data.candidate));
+      setTagText(formatTagText(data.candidate.tags));
+      setMessage(`简历已重新解析，识别到 ${data.candidate.tags.length} 个技能标签。`);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "创建后台解析任务失败");
+      setMessage(error instanceof Error ? error.message : "简历重新解析失败");
     } finally {
       setBusy(false);
     }
@@ -4517,7 +4538,7 @@ function CandidateDetailPage({ candidate, onBack, onDeleted, backLabel = "返回
           </button>
           <button className="secondary-button" onClick={retryParse} disabled={busy}>
             <RefreshCw size={17} />
-            {busy ? "入队中" : "后台重解析"}
+            {busy ? "解析中" : "重新解析"}
           </button>
           <button className="secondary-button" onClick={() => api.candidateResume(detail.id)}>
             <Download size={17} />

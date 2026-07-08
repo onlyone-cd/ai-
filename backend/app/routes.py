@@ -25,7 +25,7 @@ from .rbac import ROLES, role_permissions
 from .resume_service import ARCHIVE_EXTENSIONS, parse_and_save_archive, parse_and_save_resume, parse_and_save_text, reparse_candidate, rescan_attachment, resume_upload_dir
 from .responses import error, ok
 from .tag_library import label_map, load_labels
-from .task_service import enqueue_task, retry_task
+from .task_service import enqueue_task, retry_task, run_task
 
 api = Blueprint("api", __name__)
 
@@ -439,6 +439,29 @@ def retry_background_task(user, task_id):
     audit_log(user, "retry", "background_task", task.id, task.task_type)
     db.session.commit()
     return ok(task.to_dict(), "后台任务已重新排队")
+
+
+@api.post("/tasks/<int:task_id>/run")
+@login_required
+@roles_required("admin", "manager", "recruiter")
+def run_background_task_now(user, task_id):
+    task = db.session.get(BackgroundTask, task_id)
+    if not task:
+        return error("后台任务不存在", "NOT_FOUND", 404)
+    if user.role == "recruiter" and task.created_by != user.id:
+        return error("无权执行该后台任务", "FORBIDDEN", 403)
+    if task.status != "queued":
+        return error("只有排队中的任务可以立即执行", "TASK_NOT_RUNNABLE", 409, {"status": task.status})
+    try:
+        task = run_task(task)
+    except Exception as exc:
+        failed_task = db.session.get(BackgroundTask, task_id)
+        audit_log(user, "run_failed", "background_task", task_id, failed_task.task_type if failed_task else "", {"error": str(exc)})
+        db.session.commit()
+        return error("后台任务执行失败", "TASK_RUN_FAILED", 500, {"reason": str(exc), "task": failed_task.to_dict() if failed_task else None})
+    audit_log(user, "run", "background_task", task.id, task.task_type)
+    db.session.commit()
+    return ok(task.to_dict(), "后台任务已执行")
 
 
 NOTIFICATION_CHANNEL_TYPES = {"email", "webhook", "wecom", "sms", "console"}

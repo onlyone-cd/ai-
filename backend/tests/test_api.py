@@ -2029,6 +2029,20 @@ def test_resume_retry_parse_can_run_as_background_task(client, admin_headers):
     assert detail.get_json()["data"]["status"] == "succeeded"
 
 
+def test_queued_background_task_can_run_now(client, admin_headers):
+    candidate = client.get("/api/candidates/1", headers=admin_headers).get_json()["data"]
+    queued = client.post(f"/api/resume/{candidate['id']}/retry-parse?async=1", headers=admin_headers)
+    task = queued.get_json()["data"]["task"]
+
+    response = client.post(f"/api/tasks/{task['id']}/run", headers=admin_headers)
+
+    assert response.status_code == 200
+    data = response.get_json()["data"]
+    assert data["status"] == "succeeded"
+    assert data["result"]["candidate_id"] == candidate["id"]
+    assert data["result"]["tag_count"] > 0
+
+
 def test_failed_background_task_can_be_retried(client, admin_headers):
     task = BackgroundTask(task_type="resume_retry_parse", status="failed", payload={"candidate_id": 999999}, attempts=1, max_attempts=3, created_by=1)
     db.session.add(task)

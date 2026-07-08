@@ -619,6 +619,7 @@ export const api = {
     request<{ log: NotificationLog }>("/notifications/send-test", { method: "POST", body: JSON.stringify(payload) }),
   tasks: (status = "all") => request<{ items: BackgroundTask[]; status_counts: Record<string, number> }>(`/tasks?status=${status}`),
   retryTask: (id: number) => request<BackgroundTask>(`/tasks/${id}/retry`, { method: "POST" }),
+  runTask: (id: number) => request<BackgroundTask>(`/tasks/${id}/run`, { method: "POST" }),
   opsBackupStatus: () => request<OpsBackupStatus>("/ops/backup/status"),
   opsDataQuality: () => request<OpsDataQuality>("/ops/data-quality"),
   opsDeployGates: () => request<OpsDeployGates>("/ops/deploy-gates"),

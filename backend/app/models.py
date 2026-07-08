@@ -205,6 +205,7 @@ class Job(db.Model):
     owner = db.relationship("User")
 
     def to_dict(self):
+        job_scope = "internal" if str(self.job_code or "").startswith("INTERNAL-") else "recruiting"
         return {
             "id": self.id,
             "owner_hr_id": self.owner_hr_id,
@@ -215,6 +216,7 @@ class Job(db.Model):
             "job_code": self.job_code,
             "jd_text": self.jd_text,
             "jd_structured": self.jd_structured,
+            "job_scope": job_scope,
             "status": self.status,
             "created_at": self.created_at.isoformat(),
         }

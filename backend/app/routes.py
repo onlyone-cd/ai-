@@ -1158,7 +1158,7 @@ def recommend_employee_transfer(user, employee_id):
         return error("员工不存在", "NOT_FOUND", 404)
     EmployeeRecommendation.query.filter_by(employee_id=employee.id, recommendation_type="transfer").delete()
     items = []
-    for job in Job.query.filter_by(status="active").order_by(Job.created_at.desc()).all():
+    for job in apply_job_scope(Job.query.filter_by(status="active"), "internal").order_by(Job.created_at.desc()).all():
         if job.id == employee.current_job_id:
             continue
         reason = match_employee_to_job(employee, job)
@@ -1527,11 +1527,13 @@ def retry_parse_resume(user, candidate_id):
 @api.get("/jobs")
 @login_required
 def list_jobs(user):
-    jobs, meta = paginate_query(Job.query.order_by(Job.created_at.desc()))
+    scope = str(request.args.get("scope") or "recruiting").strip().lower()
+    query = apply_job_scope(Job.query, scope).order_by(Job.created_at.desc())
+    jobs, meta = paginate_query(query)
     for job in jobs:
         job.jd_structured = ensure_jd_structured(job)
     db.session.commit()
-    return ok({"items": [job.to_dict() for job in jobs], **meta})
+    return ok({"items": [job.to_dict() for job in jobs], "scope": scope, **meta})
 
 
 @api.get("/jobs/<int:job_id>")
@@ -1540,6 +1542,8 @@ def get_job(user, job_id):
     job = db.session.get(Job, job_id)
     if not job:
         return error("岗位不存在", "NOT_FOUND", 404)
+    if is_internal_job(job):
+        return error("内部岗位仅用于组织与内部人才分析，不进入招聘岗位匹配", "INTERNAL_JOB_NOT_RECRUITING", 409)
     job.jd_structured = ensure_jd_structured(job)
     db.session.commit()
     data = job.to_dict()
@@ -1668,6 +1672,8 @@ def match_preview(user, job_id):
     job = db.session.get(Job, job_id)
     if not job:
         return error("岗位不存在", "NOT_FOUND", 404)
+    if is_internal_job(job):
+        return error("内部岗位仅用于组织与内部人才分析，不进入招聘岗位匹配", "INTERNAL_JOB_NOT_RECRUITING", 409)
     job.jd_structured = ensure_jd_structured(job)
     db.session.commit()
     limit = request.args.get("limit", type=int)
@@ -1680,6 +1686,8 @@ def run_job_match(user, job_id):
     job = db.session.get(Job, job_id)
     if not job:
         return error("岗位不存在", "NOT_FOUND", 404)
+    if is_internal_job(job):
+        return error("内部岗位仅用于组织与内部人才分析，不进入招聘岗位匹配", "INTERNAL_JOB_NOT_RECRUITING", 409)
     job.jd_structured = ensure_jd_structured(job)
     db.session.commit()
     if job.status != "active":
@@ -1705,6 +1713,8 @@ def batch_pipeline(user, job_id):
     job = db.session.get(Job, job_id)
     if not job:
         return error("岗位不存在", "NOT_FOUND", 404)
+    if is_internal_job(job):
+        return error("内部岗位不能加入招聘流程，请在内部人才模块做岗位/薪资分析", "INTERNAL_JOB_NOT_RECRUITING", 409)
     payload = request.get_json(force=True)
     candidate_ids = payload.get("candidate_ids") or []
     if payload.get("candidate_id"):
@@ -2475,7 +2485,8 @@ def export_candidates(user):
 @roles_required("admin", "manager")
 def export_jobs(user):
     rows = []
-    for item in Job.query.order_by(Job.created_at.desc()).all():
+    scope = str(request.args.get("scope") or "recruiting").strip().lower()
+    for item in apply_job_scope(Job.query, scope).order_by(Job.created_at.desc()).all():
         structured = ensure_jd_structured(item)
         rows.append([item.id, item.title, item.city or "", item.department or "", item.job_code or "", item.status, structured.get("skill_tags_raw", ""), item.created_at.isoformat()])
     return csv_response("jobs.csv", ["ID", "岗位名称", "城市", "部门", "岗位编号", "状态", "技能权重", "创建时间"], rows, user=user, audit_target="jobs")
@@ -4441,6 +4452,18 @@ def apply_employee_search(query):
             func.lower(EmployeeProfile.department).like(like),
         )
     )
+
+
+def is_internal_job(job):
+    return str(job.job_code or "").startswith("INTERNAL-") or (job.jd_structured or {}).get("source") == "internal_employee_import"
+
+
+def apply_job_scope(query, scope):
+    if scope == "all":
+        return query
+    if scope == "internal":
+        return query.filter(Job.job_code.like("INTERNAL-%"))
+    return query.filter(or_(Job.job_code.is_(None), ~Job.job_code.like("INTERNAL-%")))
 
 
 def reset_internal_talent_data():

@@ -37,6 +37,7 @@ export type Job = {
     must_have?: string[];
     nice_to_have?: string[];
   };
+  job_scope?: "recruiting" | "internal" | string;
   status: string;
   match_count?: number;
   pipeline_count?: number;
@@ -630,7 +631,8 @@ export const api = {
   recommendEmployeeTransfer: (id: number) => request<{ items: EmployeeRecommendation[] }>(`/employees/${id}/recommend-transfer`, { method: "POST" }),
   recommendEmployeeReplacement: (id: number) => request<{ items: EmployeeRecommendation[] }>(`/employees/${id}/recommend-replacement`, { method: "POST" }),
   employeeReport: (id: number) => download(`/employees/${id}/report.txt`, `employee-${id}-report.txt`),
-  jobs: () => request<{ items: Job[] }>("/jobs"),
+  jobs: (params?: { scope?: "recruiting" | "internal" | "all"; limit?: number; offset?: number }) =>
+    request<{ items: Job[]; scope?: string } & Partial<PaginationMeta>>(`/jobs${queryString(params)}`),
   getJob: (id: number) => request<Job>(`/jobs/${id}`),
   createJob: (payload: Partial<Job> & { skill_tags_raw: string }) =>
     request<Job>("/jobs", { method: "POST", body: JSON.stringify(payload) }),

@@ -3259,7 +3259,7 @@ function InternalTalentPage() {
       api.organizationTree(),
       api.employees(unitId || undefined, { limit: nextLimit, offset: nextOffset, q: nextQuery.trim() || undefined }),
       api.candidates(),
-      api.jobs()
+      api.jobs({ scope: "all" })
     ]);
     setUnits(tree.items);
     setEmployees(employeeData.items);

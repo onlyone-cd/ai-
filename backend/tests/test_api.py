@@ -683,6 +683,19 @@ def test_employee_import_replaces_org_tree_and_tracks_demographics(client, admin
     assert employee["current_job"]["title"] == "产品经理"
     assert employee["current_job"]["job_code"].startswith("INTERNAL-")
 
+    internal_job_id = employee["current_job"]["id"]
+    recruiting_jobs = client.get("/api/jobs", headers=admin_headers).get_json()["data"]["items"]
+    assert all(not str(item.get("job_code") or "").startswith("INTERNAL-") for item in recruiting_jobs)
+    internal_jobs = client.get("/api/jobs?scope=internal", headers=admin_headers).get_json()["data"]["items"]
+    assert any(item["id"] == internal_job_id for item in internal_jobs)
+    match_preview = client.get(f"/api/jobs/{internal_job_id}/match-preview", headers=admin_headers)
+    assert match_preview.status_code == 409
+    assert match_preview.get_json()["code"] == "INTERNAL_JOB_NOT_RECRUITING"
+    run_match = client.post(f"/api/jobs/{internal_job_id}/match", headers=admin_headers)
+    assert run_match.status_code == 409
+    pipeline = client.post(f"/api/jobs/{internal_job_id}/batch-pipeline", headers=admin_headers, json={"candidate_id": 1})
+    assert pipeline.status_code == 409
+
     tree = client.get("/api/organization/tree", headers=admin_headers).get_json()["data"]["items"]
     root = tree[0]
     assert root["name"] == "总公司"

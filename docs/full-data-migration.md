@@ -13,7 +13,7 @@ The generated package contains sensitive business data. It is written under
 - Candidates, resume text, tags, matches, pipeline history
 - Jobs and JD structures
 - Interviews, feedback, offers
-- BOSS accounts and drafts
+- BOSS accounts, drafts, sync jobs and sync item logs
 - Organization units, employees, compensation, employee analyses and recommendations
 - Background tasks, LLM usage, audit logs
 - Uploaded files from the source upload directory

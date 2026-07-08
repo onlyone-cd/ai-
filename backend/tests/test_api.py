@@ -13,7 +13,7 @@ from app import create_app, db
 from app.config import Config
 from app.auth import verify_password
 from app.llm_client import chat_json
-from app.models import AuditLog, BackgroundTask, BossDraft, Candidate, CandidateTag, EmployeeProfile, InterviewAssignment, InterviewFeedback, Job, LLMUsage, Match, OfferRecord, OrganizationUnit, PipelineStage, User
+from app.models import AuditLog, BackgroundTask, BossDraft, BossSyncJob, Candidate, CandidateTag, EmployeeProfile, InterviewAssignment, InterviewFeedback, Job, LLMUsage, Match, OfferRecord, OrganizationUnit, PipelineStage, User
 from app.task_service import run_next_task
 
 
@@ -1774,6 +1774,47 @@ def test_boss_jobs_can_be_synced_and_recommend_boss_candidates(client, admin_hea
     items = recommendations.get_json()["data"]["items"]
     assert items[0]["candidate_id"] == imported_candidate["id"]
     assert all(item["candidate"]["source"] == "boss" for item in items)
+
+
+def test_boss_sync_jobs_are_logged_and_failed_items_can_retry(client, admin_headers):
+    response = client.post(
+        "/api/boss/candidates/batch-import",
+        headers=admin_headers,
+        json={
+            "items": [
+                {
+                    "external_id": "sync-ok",
+                    "raw_text": "Name: Sync Candidate\nPhone: 13911112222\n5 years Java backend development experience, familiar with Spring Boot, MySQL and Redis.",
+                },
+                {"external_id": "sync-bad", "name": "navigation", "raw_text": "job menu vip account tools"},
+            ],
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.get_json()["data"]
+    assert data["sync_job"]["sync_type"] == "candidate_batch"
+    assert data["sync_job"]["status"] == "partial"
+    assert data["sync_job"]["success_count"] == 1
+    assert data["sync_job"]["failed_count"] == 1
+    assert BossSyncJob.query.filter_by(sync_type="candidate_batch").count() >= 1
+
+    listed = client.get("/api/boss/sync/jobs?sync_type=candidate_batch", headers=admin_headers)
+    assert listed.status_code == 200
+    assert listed.get_json()["data"]["items"][0]["id"] == data["sync_job"]["id"]
+
+    detail = client.get(f"/api/boss/sync/jobs/{data['sync_job']['id']}", headers=admin_headers)
+    assert detail.status_code == 200
+    detail_data = detail.get_json()["data"]
+    assert len(detail_data["items"]) == 2
+    assert any(item["status"] == "failed" and item["external_id"] == "sync-bad" for item in detail_data["items"])
+
+    retry = client.post(f"/api/boss/sync/jobs/{data['sync_job']['id']}/retry", headers=admin_headers)
+    assert retry.status_code == 200
+    retry_data = retry.get_json()["data"]
+    assert retry_data["retried"] is True
+    assert retry_data["retry_result"]["sync_job"]["parent_sync_job_id"] == data["sync_job"]["id"]
+    assert retry_data["retry_result"]["sync_job"]["status"] == "failed"
 
 
 def test_resume_retry_parse_refreshes_tags(client, admin_headers):

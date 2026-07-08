@@ -97,6 +97,7 @@ def main():
     run_step(results, "interviews.list", lambda: assert_items(client.request("GET", "/api/interview/assignments")))
     run_step(results, "offers.list", lambda: assert_items(client.request("GET", "/api/offers")))
     run_step(results, "boss.status", lambda: client.request("GET", "/api/boss/status").get("mode", "ok"))
+    run_step(results, "boss.sync_jobs", lambda: client.request("GET", "/api/boss/sync/jobs?limit=5").get("total", 0))
     run_step(results, "bi.overview", lambda: client.request("GET", "/api/bi/overview?days=30")["total_candidates"])
     run_step(results, "agent.tools", lambda: assert_items(client.request("GET", "/api/agent/tools")))
     run_step(results, "exports.jobs", lambda: client.request("GET", "/api/exports/jobs.csv", expect_json=False)["bytes"])
@@ -113,6 +114,7 @@ def main():
             data = client.request("POST", "/api/boss/candidates/batch-import", {"items": [{"external_id": "smoke-api-py", "raw_text": text}]})
             item = data["items"][0]
             temp["candidate_id"] = item["id"]
+            temp["boss_sync_job_id"] = data.get("sync_job", {}).get("id")
             return item["id"]
 
         def create_job():
@@ -139,6 +141,7 @@ def main():
             return data["id"]
 
         run_step(results, "mutating.candidate_create", create_candidate)
+        run_step(results, "mutating.boss_sync_detail", lambda: client.request("GET", f"/api/boss/sync/jobs/{temp['boss_sync_job_id']}")["status"])
         run_step(results, "mutating.job_create", create_job)
         run_step(results, "mutating.notification_channel_create", create_notification_channel)
         run_step(

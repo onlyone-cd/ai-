@@ -19,7 +19,7 @@ from .auth import hash_password, issue_token, login_required, roles_required, va
 from .job_service import build_jd_structured, ensure_jd_structured, persist_matches, preview_matches
 from .llm_client import LLMError, chat_json, llm_available, llm_status
 from .matching import match_candidate
-from .models import AuditLog, BackgroundTask, BossAccount, BossDraft, Candidate, CandidateTag, EmployeeAnalysis, EmployeeCompensation, EmployeeProfile, EmployeeRecommendation, InterviewAssignment, InterviewFeedback, Job, LLMUsage, Match, NotificationChannel, NotificationEvent, NotificationLog, OfferRecord, OrganizationUnit, PipelineStage, UploadBatch, User, years_between
+from .models import AuditLog, BackgroundTask, BossAccount, BossDraft, BossSyncItem, BossSyncJob, Candidate, CandidateTag, EmployeeAnalysis, EmployeeCompensation, EmployeeProfile, EmployeeRecommendation, InterviewAssignment, InterviewFeedback, Job, LLMUsage, Match, NotificationChannel, NotificationEvent, NotificationLog, OfferRecord, OrganizationUnit, PipelineStage, UploadBatch, User, years_between
 from .rbac import ROLES, role_permissions
 from .resume_service import ARCHIVE_EXTENSIONS, parse_and_save_archive, parse_and_save_resume, parse_and_save_text, reparse_candidate, resume_upload_dir
 from .responses import error, ok
@@ -145,6 +145,8 @@ def system_data_integrity(user):
         "boss_account_owner": missing_fk_count(BossAccount, BossAccount.owner_hr_id, User),
         "boss_draft_candidate": missing_fk_count(BossDraft, BossDraft.candidate_id, Candidate),
         "boss_draft_job": missing_fk_count(BossDraft, BossDraft.job_id, Job),
+        "boss_sync_creator": missing_fk_count(BossSyncJob, BossSyncJob.created_by, User, nullable=True),
+        "boss_sync_item_job": missing_fk_count(BossSyncItem, BossSyncItem.sync_job_id, BossSyncJob),
         "audit_user": missing_fk_count(AuditLog, AuditLog.user_id, User),
         "task_creator": missing_fk_count(BackgroundTask, BackgroundTask.created_by, User, nullable=True),
         "notification_channel_creator": missing_fk_count(NotificationChannel, NotificationChannel.created_by, User, nullable=True),
@@ -2367,11 +2369,112 @@ def boss_jobs(user):
     return ok({"items": [job.to_dict() for job in jobs], **meta})
 
 
+def create_boss_sync_job(user, sync_type, source, payload, total_count, parent_sync_job_id=None):
+    sync_job = BossSyncJob(
+        sync_type=sync_type,
+        source=source,
+        status="running",
+        total_count=int(total_count or 0),
+        payload_json=payload or {},
+        result_json={},
+        parent_sync_job_id=parent_sync_job_id,
+        created_by=user.id if user else None,
+    )
+    db.session.add(sync_job)
+    db.session.flush()
+    return sync_job
+
+
+def boss_sync_item_summary(payload):
+    text = str(
+        payload.get("raw_text")
+        or payload.get("text")
+        or payload.get("jd_text")
+        or payload.get("summary")
+        or payload.get("title")
+        or payload.get("name")
+        or ""
+    )
+    return re.sub(r"\s+", " ", text).strip()[:500]
+
+
+def add_boss_sync_item(sync_job, item_type, payload, status, target_type=None, target_id=None, error_message=None, external_id=None):
+    item = BossSyncItem(
+        sync_job_id=sync_job.id,
+        item_type=item_type,
+        external_id=str(external_id or payload.get("external_id") or payload.get("candidate_id") or "")[:128] or None,
+        status=status,
+        target_type=target_type,
+        target_id=target_id,
+        error=error_message,
+        raw_summary=boss_sync_item_summary(payload),
+        raw_payload=payload or {},
+    )
+    db.session.add(item)
+    return item
+
+
+def finish_boss_sync_job(sync_job, success_count, failed_count, result=None, error_message=None):
+    sync_job.success_count = int(success_count or 0)
+    sync_job.failed_count = int(failed_count or 0)
+    if failed_count and success_count:
+        sync_job.status = "partial"
+    elif failed_count:
+        sync_job.status = "failed"
+    else:
+        sync_job.status = "succeeded"
+    sync_job.result_json = result or {}
+    sync_job.error = error_message
+    sync_job.finished_at = datetime.now(timezone.utc)
+    return sync_job
+
+
+def import_boss_job_items(user, items, source="api", parent_sync_job_id=None):
+    items = list(items or [])
+    sync_job = create_boss_sync_job(user, "job_batch", source, {"items": items}, len(items), parent_sync_job_id)
+    imported = []
+    errors = []
+    for item in items:
+        title = str(item.get("title") or "").strip()[:128]
+        external_id = str(item.get("external_id") or "").strip()
+        if not title:
+            err = {"title": "", "error": "Job title is required"}
+            errors.append(err)
+            add_boss_sync_item(sync_job, "job", item, "failed", error_message=err["error"], external_id=external_id)
+            continue
+        try:
+            text = str(item.get("jd_text") or item.get("summary") or title).strip()
+            city = str(item.get("city") or "").strip()[:64]
+            external_id = external_id or hashlib.sha1(f"{title}|{city}|{text}".encode("utf-8")).hexdigest()[:12]
+            job_code = f"BOSS-{re.sub(r'[^A-Za-z0-9_-]+', '-', external_id)[:48]}"
+            job = Job.query.filter_by(job_code=job_code).first()
+            if not job:
+                job = Job(owner_hr_id=user.id, title=title, job_code=job_code, jd_text=text, status="active")
+                db.session.add(job)
+            job.title = title
+            job.city = city or job.city
+            job.jd_text = text
+            job.jd_structured = build_jd_structured(text)
+            db.session.flush()
+            imported.append(job)
+            add_boss_sync_item(sync_job, "job", item, "succeeded", target_type="job", target_id=job.id, external_id=external_id)
+        except Exception as exc:
+            err = {"title": title, "error": str(exc)}
+            errors.append(err)
+            add_boss_sync_item(sync_job, "job", item, "failed", error_message=str(exc), external_id=external_id)
+    finish_boss_sync_job(sync_job, len(imported), len(errors), {"imported_count": len(imported), "error_count": len(errors)})
+    audit_log(user, "sync", "boss_jobs", sync_job.id, f"BOSS job batch #{sync_job.id}", {"success": len(imported), "failed": len(errors)})
+    db.session.commit()
+    return {"items": [job.to_dict() for job in imported], "errors": errors, "sync_job": sync_job.to_dict(detail=True)}
+
+
 @api.post("/boss/jobs/batch-import")
 @login_required
 @roles_required("admin", "manager", "recruiter")
 def boss_jobs_batch_import(user):
     payload = request.get_json(force=True)
+    result = import_boss_job_items(user, payload.get("items", []), source=str(payload.get("source") or "api")[:32])
+    return ok(result, "BOSS jobs synced")
     imported = []
     errors = []
     for item in payload.get("items", []):
@@ -2396,6 +2499,59 @@ def boss_jobs_batch_import(user):
     return ok({"items": [job.to_dict() for job in imported], "errors": errors}, "BOSS 岗位已同步")
 
 
+@api.get("/boss/sync/jobs")
+@login_required
+@roles_required("admin", "manager", "recruiter")
+def boss_sync_jobs(user):
+    query = BossSyncJob.query
+    sync_type = request.args.get("sync_type")
+    status = request.args.get("status")
+    source = request.args.get("source")
+    if sync_type:
+        query = query.filter_by(sync_type=sync_type)
+    if status:
+        query = query.filter_by(status=status)
+    if source:
+        query = query.filter_by(source=source)
+    jobs, meta = paginate_query(query.order_by(BossSyncJob.created_at.desc()), default_limit=20, max_limit=100)
+    return ok({"items": [job.to_dict() for job in jobs], **meta})
+
+
+@api.get("/boss/sync/jobs/<int:sync_job_id>")
+@login_required
+@roles_required("admin", "manager", "recruiter")
+def boss_sync_job_detail(user, sync_job_id):
+    sync_job = db.session.get(BossSyncJob, sync_job_id)
+    if not sync_job:
+        return error("BOSS sync job not found", "NOT_FOUND", 404)
+    return ok(sync_job.to_dict(detail=True))
+
+
+@api.post("/boss/sync/jobs/<int:sync_job_id>/retry")
+@login_required
+@roles_required("admin", "manager", "recruiter")
+def retry_boss_sync_job(user, sync_job_id):
+    sync_job = db.session.get(BossSyncJob, sync_job_id)
+    if not sync_job:
+        return error("BOSS sync job not found", "NOT_FOUND", 404)
+    failed_payloads = [item.raw_payload for item in sync_job.items if item.status == "failed" and item.raw_payload]
+    if sync_job.sync_type == "screen_resume" and not failed_payloads and sync_job.status == "failed":
+        failed_payloads = [sync_job.payload_json or {}]
+    if not failed_payloads:
+        return ok({"retried": False, "source_job": sync_job.to_dict(detail=True)}, "No failed BOSS sync items to retry")
+    if sync_job.sync_type == "job_batch":
+        result = import_boss_job_items(user, failed_payloads, source="retry", parent_sync_job_id=sync_job.id)
+    elif sync_job.sync_type == "candidate_batch":
+        result = import_boss_candidate_items(user, failed_payloads, source="retry", parent_sync_job_id=sync_job.id)
+    elif sync_job.sync_type == "screen_resume":
+        result, err = import_boss_screen_resume_payload(user, failed_payloads[0], source="retry", parent_sync_job_id=sync_job.id)
+        if err:
+            return error(err["message"], err["code"], err["status"])
+    else:
+        return error("Unsupported BOSS sync type", "VALIDATION_ERROR", 400)
+    return ok({"retried": True, "source_job": sync_job.to_dict(detail=True), "retry_result": result}, "BOSS sync retry completed")
+
+
 @api.get("/boss/jobs/<int:job_id>/recommendations")
 @login_required
 @roles_required("admin", "manager", "recruiter")
@@ -2415,11 +2571,52 @@ def boss_job_recommendations(user, job_id):
     return ok({"job": job.to_dict(), "items": items[:limit]})
 
 
+def import_boss_candidate_items(user, items, source="api", parent_sync_job_id=None):
+    items = list(items or [])
+    sync_job = create_boss_sync_job(user, "candidate_batch", source, {"items": items}, len(items), parent_sync_job_id)
+    imported = []
+    errors = []
+    for index, item in enumerate(items, start=1):
+        external_id = str(item.get("external_id") or item.get("candidate_id") or index).strip()
+        if item.get("candidate_id"):
+            candidate = db.session.get(Candidate, item["candidate_id"])
+            if candidate:
+                data = candidate.to_dict(detail=True)
+                imported.append(data)
+                add_boss_sync_item(sync_job, "candidate", item, "succeeded", target_type="candidate", target_id=candidate.id, external_id=external_id)
+            else:
+                err = {"name": item.get("name") or "candidate", "error": "Candidate not found"}
+                errors.append(err)
+                add_boss_sync_item(sync_job, "candidate", item, "failed", error_message=err["error"], external_id=external_id)
+            continue
+        raw_text = item.get("raw_text") or item.get("summary") or ""
+        if not looks_like_boss_resume_text(raw_text):
+            err = {"name": item.get("name") or "candidate", "error": "不是候选人简历内容，已跳过"}
+            errors.append(err)
+            add_boss_sync_item(sync_job, "candidate", item, "failed", error_message=err["error"], external_id=external_id)
+            continue
+        try:
+            _, candidate = parse_and_save_text(raw_text, user, source="boss", filename=f"boss-batch-{external_id}.txt")
+        except ValueError as exc:
+            err = {"name": item.get("name") or "candidate", "error": str(exc)}
+            errors.append(err)
+            add_boss_sync_item(sync_job, "candidate", item, "failed", error_message=str(exc), external_id=external_id)
+            continue
+        imported.append(candidate.to_dict(detail=True))
+        add_boss_sync_item(sync_job, "candidate", item, "succeeded", target_type="candidate", target_id=candidate.id, external_id=external_id)
+    finish_boss_sync_job(sync_job, len(imported), len(errors), {"imported_count": len(imported), "error_count": len(errors)})
+    audit_log(user, "sync", "boss_candidates", sync_job.id, f"BOSS candidate batch #{sync_job.id}", {"success": len(imported), "failed": len(errors)})
+    db.session.commit()
+    return {"items": imported, "errors": errors, "sync_job": sync_job.to_dict(detail=True)}
+
+
 @api.post("/boss/candidates/batch-import")
 @login_required
 @roles_required("admin", "manager", "recruiter")
 def boss_batch_import(user):
     payload = request.get_json(force=True)
+    result = import_boss_candidate_items(user, payload.get("items", []), source=str(payload.get("source") or "api")[:32])
+    return ok(result, "BOSS candidates imported")
     imported = []
     errors = []
     for item in payload.get("items", []):
@@ -2478,11 +2675,71 @@ def boss_ai_screen(user):
     return ok({"created": created, "skipped": skipped}, "BOSS AI 初筛已写入流程")
 
 
+def import_boss_screen_resume_payload(user, payload, source="api", parent_sync_job_id=None):
+    payload = payload or {}
+    sync_job = create_boss_sync_job(user, "screen_resume", source, payload, 1, parent_sync_job_id)
+    raw_text = payload.get("raw_text") or payload.get("text") or ""
+    if not looks_like_boss_resume_text(raw_text):
+        message = "不是候选人简历内容，已跳过"
+        add_boss_sync_item(sync_job, "candidate", payload, "failed", error_message=message)
+        finish_boss_sync_job(sync_job, 0, 1, {"error_code": "PARSE_FAILED"}, message)
+        audit_log(user, "sync", "boss_screen_resume", sync_job.id, f"BOSS screen resume #{sync_job.id}", {"success": 0, "failed": 1})
+        db.session.commit()
+        return {"sync_job": sync_job.to_dict(detail=True)}, {"message": message, "code": "PARSE_FAILED", "status": 400}
+
+    job = None
+    job_id = payload.get("job_id")
+    if job_id:
+        job = db.session.get(Job, job_id)
+        if not job:
+            message = "Job not found"
+            add_boss_sync_item(sync_job, "candidate", payload, "failed", error_message=message)
+            finish_boss_sync_job(sync_job, 0, 1, {"error_code": "NOT_FOUND"}, message)
+            audit_log(user, "sync", "boss_screen_resume", sync_job.id, f"BOSS screen resume #{sync_job.id}", {"success": 0, "failed": 1})
+            db.session.commit()
+            return {"sync_job": sync_job.to_dict(detail=True)}, {"message": message, "code": "NOT_FOUND", "status": 404}
+
+    try:
+        batch, candidate = parse_and_save_text(raw_text, user, source="boss", filename="boss-screen-resume.txt")
+    except ValueError as exc:
+        add_boss_sync_item(sync_job, "candidate", payload, "failed", error_message=str(exc))
+        finish_boss_sync_job(sync_job, 0, 1, {"error_code": "PARSE_FAILED"}, str(exc))
+        audit_log(user, "sync", "boss_screen_resume", sync_job.id, f"BOSS screen resume #{sync_job.id}", {"success": 0, "failed": 1})
+        db.session.commit()
+        return {"sync_job": sync_job.to_dict(detail=True)}, {"message": str(exc), "code": "PARSE_FAILED", "status": 400}
+
+    draft = None
+    if job:
+        draft = create_boss_draft(candidate, job)
+        db.session.add(draft)
+        db.session.flush()
+
+    add_boss_sync_item(sync_job, "candidate", payload, "succeeded", target_type="candidate", target_id=candidate.id, external_id=payload.get("external_id"))
+    finish_boss_sync_job(sync_job, 1, 0, {"candidate_id": candidate.id, "batch_id": batch.id, "draft_id": draft.id if draft else None})
+    audit_log(user, "sync", "boss_screen_resume", sync_job.id, f"BOSS screen resume #{sync_job.id}", {"success": 1, "failed": 0})
+    db.session.commit()
+    return (
+        {
+            "batch": batch.to_dict(),
+            "candidate": candidate.to_dict(detail=True),
+            "draft": draft.to_dict() if draft else None,
+            "chunk_count": int(payload.get("chunk_count") or 0),
+            "text_length": len(raw_text),
+            "sync_job": sync_job.to_dict(detail=True),
+        },
+        None,
+    )
+
+
 @api.post("/boss/screen-resume/import")
 @login_required
 @roles_required("admin", "manager", "recruiter")
 def boss_screen_resume_import(user):
     payload = request.get_json(force=True)
+    result, err = import_boss_screen_resume_payload(user, payload, source=str(payload.get("source") or "api")[:32])
+    if err:
+        return error(err["message"], err["code"], err["status"])
+    return ok(result, "BOSS screen resume imported")
     raw_text = payload.get("raw_text") or payload.get("text") or ""
     if not looks_like_boss_resume_text(raw_text):
         return error("不是候选人简历内容，已跳过", "PARSE_FAILED", 400)
@@ -3784,7 +4041,7 @@ def build_employee_compensation(employee_id, payload):
         bonus_k=bonus,
         currency=payload.get("currency") or "CNY",
         source=payload.get("salary_source") or "manual",
-        effective_date=parse_date(payload.get("salary_effective_date")) or date.today(),
+        effective_date=parse_date(payload.get("salary_effective_date") or payload.get("effective_date") or payload.get("hire_date")) or date.today(),
     )
 
 

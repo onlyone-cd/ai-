@@ -303,6 +303,37 @@ export type NotificationLog = {
   created_at?: string | null;
 };
 
+export type BossSyncItem = {
+  id: number;
+  sync_job_id: number;
+  item_type: string;
+  external_id?: string | null;
+  status: string;
+  target_type?: string | null;
+  target_id?: number | null;
+  error?: string | null;
+  raw_summary?: string | null;
+  created_at?: string | null;
+};
+
+export type BossSyncJob = {
+  id: number;
+  sync_type: "candidate_batch" | "job_batch" | "screen_resume" | string;
+  source: string;
+  status: "running" | "succeeded" | "partial" | "failed" | string;
+  total_count: number;
+  success_count: number;
+  failed_count: number;
+  result: Record<string, unknown>;
+  error?: string | null;
+  parent_sync_job_id?: number | null;
+  creator_name?: string;
+  created_at?: string | null;
+  finished_at?: string | null;
+  items?: BossSyncItem[];
+  payload?: Record<string, unknown>;
+};
+
 export type OfferRecord = {
   id: number;
   candidate_id: number;
@@ -609,10 +640,15 @@ export const api = {
     request<{ account: { id: number; account: string; verified: boolean } }>(`/boss/accounts/${id}/verify`, { method: "POST" }),
   bossJobs: () => request<{ items: Job[] }>("/boss/jobs"),
   bossJobImport: (items: { external_id?: string; title: string; city?: string; jd_text?: string; summary?: string }[]) =>
-    request<{ items: Job[]; errors: { title: string; error: string }[] }>("/boss/jobs/batch-import", { method: "POST", body: JSON.stringify({ items }) }),
+    request<{ items: Job[]; errors: { title: string; error: string }[]; sync_job?: BossSyncJob }>("/boss/jobs/batch-import", { method: "POST", body: JSON.stringify({ items }) }),
+  bossSyncJobs: (params?: { sync_type?: string; status?: string; source?: string; limit?: number; offset?: number }) =>
+    request<{ items: BossSyncJob[] } & PaginationMeta>(`/boss/sync/jobs${queryString(params)}`),
+  bossSyncJob: (id: number) => request<BossSyncJob>(`/boss/sync/jobs/${id}`),
+  retryBossSyncJob: (id: number) =>
+    request<{ retried: boolean; source_job: BossSyncJob; retry_result?: { items?: Candidate[] | Job[]; errors?: { error: string }[]; sync_job?: BossSyncJob } }>(`/boss/sync/jobs/${id}/retry`, { method: "POST" }),
   bossJobRecommendations: (jobId: number, limit = 8) => request<{ job: Job; items: MatchResult[] }>(`/boss/jobs/${jobId}/recommendations?limit=${limit}`),
   bossInbox: () => request<{ items: BossInboxItem[] }>("/boss/candidates/inbox"),
-  bossImport: (items: BossInboxItem[]) => request<{ items: Candidate[]; errors: { name: string; error: string }[] }>("/boss/candidates/batch-import", { method: "POST", body: JSON.stringify({ items }) }),
+  bossImport: (items: BossInboxItem[]) => request<{ items: Candidate[]; errors: { name: string; error: string }[]; sync_job?: BossSyncJob }>("/boss/candidates/batch-import", { method: "POST", body: JSON.stringify({ items }) }),
   bossAiScreen: (payload: { job_id: number; candidate_ids?: number[]; limit?: number }) =>
     request<{ created: PipelineItem[]; skipped: { candidate_id: number; stage: string }[] }>("/boss/candidates/ai-screen", { method: "POST", body: JSON.stringify(payload) }),
   agentTools: () => request<{ items: { name: string; description: string }[]; readonly: boolean }>("/agent/tools"),

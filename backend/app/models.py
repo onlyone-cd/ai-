@@ -651,6 +651,89 @@ class BossAccount(db.Model):
         }
 
 
+class BossSyncJob(db.Model):
+    __table_args__ = (
+        db.Index("ix_boss_sync_job_status_created", "status", "created_at"),
+        db.Index("ix_boss_sync_job_type_created", "sync_type", "created_at"),
+        db.Index("ix_boss_sync_job_parent", "parent_sync_job_id"),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    sync_type = db.Column(db.String(40), nullable=False)
+    source = db.Column(db.String(32), nullable=False, default="api")
+    status = db.Column(db.String(24), nullable=False, default="running")
+    total_count = db.Column(db.Integer, nullable=False, default=0)
+    success_count = db.Column(db.Integer, nullable=False, default=0)
+    failed_count = db.Column(db.Integer, nullable=False, default=0)
+    payload_json = db.Column(db.JSON, nullable=False, default=dict)
+    result_json = db.Column(db.JSON, nullable=False, default=dict)
+    error = db.Column(db.Text, nullable=True)
+    parent_sync_job_id = db.Column(db.Integer, db.ForeignKey("boss_sync_job.id"), nullable=True)
+    created_by = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
+    created_at = db.Column(db.DateTime(timezone=True), default=utcnow)
+    finished_at = db.Column(db.DateTime(timezone=True), nullable=True)
+
+    creator = db.relationship("User")
+    parent = db.relationship("BossSyncJob", remote_side=[id])
+    items = db.relationship("BossSyncItem", cascade="all, delete-orphan", backref="sync_job", order_by="BossSyncItem.id.asc()")
+
+    def to_dict(self, detail=False):
+        data = {
+            "id": self.id,
+            "sync_type": self.sync_type,
+            "source": self.source,
+            "status": self.status,
+            "total_count": self.total_count,
+            "success_count": self.success_count,
+            "failed_count": self.failed_count,
+            "result": self.result_json or {},
+            "error": self.error,
+            "parent_sync_job_id": self.parent_sync_job_id,
+            "created_by": self.created_by,
+            "creator_name": self.creator.name if self.creator else "",
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "finished_at": self.finished_at.isoformat() if self.finished_at else None,
+        }
+        if detail:
+            data["items"] = [item.to_dict() for item in self.items]
+            data["payload"] = self.payload_json or {}
+        return data
+
+
+class BossSyncItem(db.Model):
+    __table_args__ = (
+        db.Index("ix_boss_sync_item_job_status", "sync_job_id", "status"),
+        db.Index("ix_boss_sync_item_external", "external_id"),
+        db.Index("ix_boss_sync_item_target", "target_type", "target_id"),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    sync_job_id = db.Column(db.Integer, db.ForeignKey("boss_sync_job.id"), nullable=False)
+    item_type = db.Column(db.String(32), nullable=False)
+    external_id = db.Column(db.String(128), nullable=True)
+    status = db.Column(db.String(24), nullable=False, default="pending")
+    target_type = db.Column(db.String(32), nullable=True)
+    target_id = db.Column(db.Integer, nullable=True)
+    error = db.Column(db.Text, nullable=True)
+    raw_summary = db.Column(db.String(512), nullable=True)
+    raw_payload = db.Column(db.JSON, nullable=False, default=dict)
+    created_at = db.Column(db.DateTime(timezone=True), default=utcnow)
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "sync_job_id": self.sync_job_id,
+            "item_type": self.item_type,
+            "external_id": self.external_id,
+            "status": self.status,
+            "target_type": self.target_type,
+            "target_id": self.target_id,
+            "error": self.error,
+            "raw_summary": self.raw_summary,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
 class BackgroundTask(db.Model):
     __table_args__ = (
         db.Index("ix_background_task_status_created", "status", "created_at"),

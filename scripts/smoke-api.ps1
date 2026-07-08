@@ -195,6 +195,7 @@ Test-Step "boss_bi_agent_tasks_exports" {
   Invoke-Api "GET" "/api/boss/status" | Out-Null
   Invoke-Api "GET" "/api/boss/candidates/inbox" | Out-Null
   Invoke-Api "GET" "/api/boss/jobs" | Out-Null
+  Invoke-Api "GET" "/api/boss/sync/jobs?limit=5" | Out-Null
   Invoke-Api "GET" "/api/boss/jobs/$script:TempJobId/recommendations" | Out-Null
   Invoke-Api "POST" "/api/boss/candidates/ai-screen" @{ job_id = $script:TempJobId; candidate_ids = @($script:TempCandidateId) } | Out-Null
   Invoke-Api "GET" "/api/bi/overview?days=30" | Out-Null

@@ -26,7 +26,7 @@ def parse_and_save_resume(file: FileStorage, owner):
 
     batch_id = uuid.uuid4().hex[:12]
     upload_dir = resume_upload_dir()
-    safe_name = secure_filename(file.filename or f"resume{extension}") or f"resume{extension}"
+    safe_name = safe_resume_filename(file.filename or f"resume{extension}", extension)
     stored_path = upload_dir / f"{batch_id}_{safe_name}"
     file.save(stored_path)
     return parse_stored_resume(stored_path, file.filename or safe_name, owner, batch_id=batch_id)
@@ -67,7 +67,7 @@ def parse_and_save_archive(file: FileStorage, owner):
                     errors.append({"filename": filename, "error": "文件过大"})
                     continue
                 batch_id = uuid.uuid4().hex[:12]
-                safe_name = secure_filename(filename) or f"resume{extension}"
+                safe_name = safe_resume_filename(filename, extension)
                 stored_path = upload_dir / f"{batch_id}_{safe_name}"
                 stored_path.write_bytes(archive.read(info))
                 try:
@@ -98,7 +98,7 @@ def resume_upload_dir():
 
 
 def parse_stored_resume(stored_path: Path, filename: str, owner, batch_id=None):
-    extension = stored_path.suffix.lower()
+    extension = resume_extension(stored_path, filename)
     batch_id = batch_id or uuid.uuid4().hex[:12]
     batch = UploadBatch(id=batch_id, owner_hr_id=owner.id, source="upload", filename=filename)
     db.session.add(batch)
@@ -145,6 +145,7 @@ def parse_and_save_text(raw_text: str, owner, source="boss", filename="boss-scre
 
 def create_resume_attachment(batch, stored_path: Path, filename: str, owner):
     scan = scan_stored_file(stored_path, filename)
+    extension = resume_extension(stored_path, filename)
     attachment = ResumeAttachment(
         upload_batch_id=batch.id,
         owner_hr_id=owner.id,
@@ -153,7 +154,7 @@ def create_resume_attachment(batch, stored_path: Path, filename: str, owner):
         stored_filename=stored_path.name,
         storage_path=str(stored_path),
         content_type=mimetypes.guess_type(filename or stored_path.name)[0],
-        extension=stored_path.suffix.lower(),
+        extension=extension,
         size_bytes=stored_path.stat().st_size if stored_path.exists() else 0,
         sha256=file_sha256(stored_path) if stored_path.exists() else "",
         scan_status=scan["status"],
@@ -179,7 +180,7 @@ def rescan_attachment(attachment):
 
 def scan_stored_file(stored_path: Path, filename: str):
     flags = []
-    extension = stored_path.suffix.lower()
+    extension = resume_extension(stored_path, filename)
     size = stored_path.stat().st_size if stored_path.exists() else 0
     max_size = current_app.config.get("MAX_CONTENT_LENGTH", 16 * 1024 * 1024)
     if not stored_path.exists():
@@ -210,6 +211,18 @@ def file_sha256(path: Path):
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def safe_resume_filename(filename: str, extension: str):
+    safe_name = secure_filename(filename or f"resume{extension}") or f"resume{extension}"
+    if Path(safe_name).suffix.lower() != extension:
+        stem = Path(safe_name).stem or "resume"
+        safe_name = f"{stem}{extension}" if stem != extension.lstrip(".") else f"resume{extension}"
+    return safe_name
+
+
+def resume_extension(stored_path: Path, filename: str):
+    return stored_path.suffix.lower() or Path(filename or "").suffix.lower()
 
 
 def upsert_candidate(candidate, tags):

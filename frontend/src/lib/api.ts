@@ -454,7 +454,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     });
     const body = await response.json();
     if (!response.ok) {
-      const text = body.error || "请求失败";
+      const text = errorMessage(body, "请求失败");
       notify("error", text);
       throw new Error(text);
     }
@@ -477,7 +477,7 @@ async function upload<T>(path: string, formData: FormData): Promise<T> {
     });
     const body = await response.json();
     if (!response.ok) {
-      const text = body.error || "请求失败";
+      const text = errorMessage(body, "请求失败");
       notify("error", text);
       throw new Error(text);
     }
@@ -487,6 +487,17 @@ async function upload<T>(path: string, formData: FormData): Promise<T> {
     if (error instanceof TypeError) notify("error", "网络连接失败");
     throw error;
   }
+}
+
+function errorMessage(body: { error?: string; details?: { errors?: { filename?: string; error?: string }[] } }, fallback: string) {
+  const base = body.error || fallback;
+  const errors = body.details?.errors || [];
+  if (!errors.length) return base;
+  const detail = errors
+    .slice(0, 3)
+    .map((item) => `${item.filename || "文件"}：${item.error || "未知错误"}`)
+    .join("；");
+  return `${base}：${detail}`;
 }
 
 async function download(path: string, filename: string) {

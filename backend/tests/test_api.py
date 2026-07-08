@@ -2062,6 +2062,30 @@ def test_resume_upload_accepts_multiple_files_and_zip(client, admin_headers):
     assert {item["name_masked"] for item in data["candidates"]} >= {"王开发", "赵会计"}
 
 
+def test_resume_upload_keeps_extension_for_non_ascii_filename(client, admin_headers):
+    content = (
+        "Name: Unicode Filename Candidate\n"
+        "Phone: 13812349999\n"
+        "Email: unicode-filename@example.com\n"
+        "Target: Java Engineer\n"
+        "Experience: 4 years Java, Spring Boot, MySQL and Redis.\n"
+    )
+    response = client.post(
+        "/api/resume/upload",
+        headers=admin_headers,
+        data={"file": (BytesIO(content.encode("utf-8")), "\u4e2a\u4eba\u7b80\u5386.txt")},
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 200
+    candidate = response.get_json()["data"]["candidate"]
+    attachment = candidate["attachments"][0]
+    assert attachment["original_filename"] == "\u4e2a\u4eba\u7b80\u5386.txt"
+    assert attachment["extension"] == ".txt"
+    assert attachment["stored_filename"].endswith(".txt")
+    assert attachment["scan_status"] == "clean"
+
+
 def test_resume_upload_rejects_too_many_files(app, client, admin_headers):
     app.config["MAX_UPLOAD_FILES"] = 1
 

@@ -19,9 +19,9 @@ from .auth import hash_password, issue_token, login_required, roles_required, va
 from .job_service import build_jd_structured, ensure_jd_structured, persist_matches, preview_matches
 from .llm_client import LLMError, chat_json, llm_available, llm_status
 from .matching import match_candidate
-from .models import AuditLog, BackgroundTask, BossAccount, BossDraft, BossSyncItem, BossSyncJob, Candidate, CandidateTag, EmployeeAnalysis, EmployeeCompensation, EmployeeProfile, EmployeeRecommendation, InterviewAssignment, InterviewFeedback, InterviewSpeechLog, Job, LLMUsage, Match, NotificationChannel, NotificationEvent, NotificationLog, OfferRecord, OrganizationUnit, PipelineStage, UploadBatch, User, years_between
+from .models import AuditLog, BackgroundTask, BossAccount, BossDraft, BossSyncItem, BossSyncJob, Candidate, CandidateTag, EmployeeAnalysis, EmployeeCompensation, EmployeeProfile, EmployeeRecommendation, InterviewAssignment, InterviewFeedback, InterviewSpeechLog, Job, LLMUsage, Match, NotificationChannel, NotificationEvent, NotificationLog, OfferRecord, OrganizationUnit, PipelineStage, ResumeAttachment, UploadBatch, User, years_between
 from .rbac import ROLES, role_permissions
-from .resume_service import ARCHIVE_EXTENSIONS, parse_and_save_archive, parse_and_save_resume, parse_and_save_text, reparse_candidate, resume_upload_dir
+from .resume_service import ARCHIVE_EXTENSIONS, parse_and_save_archive, parse_and_save_resume, parse_and_save_text, reparse_candidate, rescan_attachment, resume_upload_dir
 from .responses import error, ok
 from .tag_library import label_map, load_labels
 from .task_service import enqueue_task, retry_task
@@ -154,6 +154,9 @@ def system_data_integrity(user):
         "notification_event_channel": missing_fk_count(NotificationEvent, NotificationEvent.channel_id, NotificationChannel, nullable=True),
         "notification_log_channel": missing_fk_count(NotificationLog, NotificationLog.channel_id, NotificationChannel, nullable=True),
         "notification_log_creator": missing_fk_count(NotificationLog, NotificationLog.created_by, User, nullable=True),
+        "resume_attachment_batch": missing_fk_count(ResumeAttachment, ResumeAttachment.upload_batch_id, UploadBatch),
+        "resume_attachment_candidate": missing_fk_count(ResumeAttachment, ResumeAttachment.candidate_id, Candidate, nullable=True),
+        "resume_attachment_owner": missing_fk_count(ResumeAttachment, ResumeAttachment.owner_hr_id, User),
     }
     orphan_total = sum(orphan_checks.values())
     add_check("orphan_relations", "error", orphan_total, f"发现 {orphan_total} 条引用异常数据，需要修复后再上线")
@@ -194,10 +197,33 @@ def system_data_integrity(user):
                 break
     add_check("missing_upload_files", "warning", len(missing_uploads), f"{len(missing_uploads)} 个上传批次找不到原始附件")
 
+    missing_attachment_records = [
+        {"batch_id": batch.id, "filename": batch.filename}
+        for batch in UploadBatch.query.filter_by(source="upload", status="ok")
+        .outerjoin(ResumeAttachment, ResumeAttachment.upload_batch_id == UploadBatch.id)
+        .filter(ResumeAttachment.id.is_(None))
+        .order_by(UploadBatch.created_at.desc())
+        .limit(20)
+        .all()
+    ]
+    blocked_attachments = ResumeAttachment.query.filter_by(scan_status="blocked").count()
+    warning_attachments = ResumeAttachment.query.filter_by(scan_status="warning").count()
+    attachment_scan_issues = [
+        attachment.to_dict()
+        for attachment in ResumeAttachment.query.filter(ResumeAttachment.scan_status.in_(["blocked", "warning"]))
+        .order_by(ResumeAttachment.created_at.desc())
+        .limit(20)
+        .all()
+    ]
+    add_check("missing_resume_attachments", "warning", len(missing_attachment_records), f"{len(missing_attachment_records)} upload batches have no attachment metadata")
+    add_check("blocked_resume_attachments", "error", blocked_attachments, f"{blocked_attachments} resume attachments are blocked by security scan")
+    add_check("warning_resume_attachments", "warning", warning_attachments, f"{warning_attachments} resume attachments have scan warnings")
+
     table_counts = {
         "users": User.query.count(),
         "candidates": Candidate.query.count(),
         "candidate_tags": CandidateTag.query.count(),
+        "resume_attachments": ResumeAttachment.query.count(),
         "jobs": Job.query.count(),
         "matches": Match.query.count(),
         "pipeline_stages": PipelineStage.query.count(),
@@ -231,6 +257,8 @@ def system_data_integrity(user):
                     "email": duplicate_employee_email,
                 },
                 "missing_uploads": missing_uploads,
+                "missing_attachment_records": missing_attachment_records,
+                "attachment_scan_issues": attachment_scan_issues,
             },
         }
     )
@@ -1252,6 +1280,62 @@ def get_candidate(user, candidate_id):
     audit_log(user, "view", "candidate", candidate.id, candidate.name_masked, {"scope": "detail"})
     db.session.commit()
     return ok(candidate.to_dict(detail=True))
+
+
+@api.get("/resume/attachments")
+@login_required
+@roles_required("admin", "manager", "recruiter")
+def list_resume_attachments(user):
+    query = ResumeAttachment.query.order_by(ResumeAttachment.created_at.desc())
+    candidate_id = request.args.get("candidate_id", type=int)
+    scan_status = str(request.args.get("scan_status") or "").strip()
+    source = str(request.args.get("source") or "").strip()
+    if candidate_id:
+        query = query.filter_by(candidate_id=candidate_id)
+    if scan_status:
+        query = query.filter_by(scan_status=scan_status)
+    if source:
+        query = query.filter_by(source=source)
+    attachments, meta = paginate_query(query)
+    return ok({"items": [attachment.to_dict() for attachment in attachments], **meta})
+
+
+@api.get("/candidates/<int:candidate_id>/attachments")
+@login_required
+@roles_required("admin", "manager", "recruiter")
+def list_candidate_attachments(user, candidate_id):
+    candidate = db.session.get(Candidate, candidate_id)
+    if not candidate:
+        return error("候选人不存在", "NOT_FOUND", 404)
+    attachments, meta = paginate_query(ResumeAttachment.query.filter_by(candidate_id=candidate.id).order_by(ResumeAttachment.created_at.desc()))
+    audit_log(user, "view", "resume_attachment", candidate.id, candidate.name_masked, {"scope": "candidate_attachments"})
+    db.session.commit()
+    return ok({"items": [attachment.to_dict() for attachment in attachments], **meta})
+
+
+@api.get("/resume/attachments/<int:attachment_id>")
+@login_required
+@roles_required("admin", "manager", "recruiter")
+def get_resume_attachment(user, attachment_id):
+    attachment = db.session.get(ResumeAttachment, attachment_id)
+    if not attachment:
+        return error("简历附件不存在", "NOT_FOUND", 404)
+    audit_log(user, "view", "resume_attachment", attachment.id, attachment.original_filename)
+    db.session.commit()
+    return ok(attachment.to_dict())
+
+
+@api.post("/resume/attachments/<int:attachment_id>/scan")
+@login_required
+@roles_required("admin", "manager")
+def scan_resume_attachment(user, attachment_id):
+    attachment = db.session.get(ResumeAttachment, attachment_id)
+    if not attachment:
+        return error("简历附件不存在", "NOT_FOUND", 404)
+    attachment = rescan_attachment(attachment)
+    audit_log(user, "scan", "resume_attachment", attachment.id, attachment.original_filename, {"status": attachment.scan_status})
+    db.session.commit()
+    return ok(attachment.to_dict(), "简历附件安全扫描已更新")
 
 
 @api.get("/candidates/<int:candidate_id>/resume.txt")

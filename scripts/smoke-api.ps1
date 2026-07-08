@@ -83,6 +83,7 @@ Education: Bachelor, Computer Science
   $script:TempCandidateId = $created.data.items[0].id
   Invoke-Api "GET" "/api/candidates?limit=5" | Out-Null
   Invoke-Api "GET" "/api/candidates/$script:TempCandidateId" | Out-Null
+  Invoke-Api "GET" "/api/resume/attachments?limit=5" | Out-Null
   Invoke-Api "GET" "/api/tags" | Out-Null
   "candidate=$script:TempCandidateId"
 }

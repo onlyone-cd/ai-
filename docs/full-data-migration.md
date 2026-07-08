@@ -10,7 +10,7 @@ The generated package contains sensitive business data. It is written under
 ## What It Migrates
 
 - Users and RBAC data
-- Candidates, resume text, tags, matches, pipeline history
+- Candidates, resume text, resume attachment metadata, tags, matches, pipeline history
 - Jobs and JD structures
 - Interviews, feedback, interview speech logs, offers
 - BOSS accounts, drafts, sync jobs and sync item logs

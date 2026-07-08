@@ -13,7 +13,7 @@ from app import create_app, db
 from app.config import Config
 from app.auth import verify_password
 from app.llm_client import chat_json
-from app.models import AuditLog, BackgroundTask, BossDraft, BossSyncJob, Candidate, CandidateTag, EmployeeProfile, InterviewAssignment, InterviewFeedback, InterviewSpeechLog, Job, LLMUsage, Match, NotificationLog, OfferRecord, OrganizationUnit, PipelineStage, User
+from app.models import AuditLog, BackgroundTask, BossDraft, BossSyncJob, Candidate, CandidateTag, EmployeeProfile, InterviewAssignment, InterviewFeedback, InterviewSpeechLog, Job, LLMUsage, Match, NotificationLog, OfferRecord, OrganizationUnit, PipelineStage, ResumeAttachment, User
 from app.task_service import run_next_task
 
 
@@ -2015,6 +2015,25 @@ def test_resume_upload_parses_candidate_and_tags(client, admin_headers):
     assert candidate["resume_json"]["phone"] == "13812345678"
     assert candidate["title"] == "总账会计"
     assert candidate["experience_analysis"]["level"] == "5-10"
+    assert candidate["attachments"][0]["scan_status"] == "clean"
+
+    attachment_id = candidate["attachments"][0]["id"]
+    attachments = client.get("/api/resume/attachments?limit=5", headers=admin_headers)
+    assert attachments.status_code == 200
+    assert any(item["id"] == attachment_id for item in attachments.get_json()["data"]["items"])
+
+    candidate_attachments = client.get(f"/api/candidates/{candidate['id']}/attachments", headers=admin_headers)
+    assert candidate_attachments.status_code == 200
+    assert candidate_attachments.get_json()["data"]["items"][0]["sha256"]
+
+    detail = client.get(f"/api/resume/attachments/{attachment_id}", headers=admin_headers)
+    assert detail.status_code == 200
+    assert detail.get_json()["data"]["original_filename"] == "resume.txt"
+
+    rescan = client.post(f"/api/resume/attachments/{attachment_id}/scan", headers=admin_headers)
+    assert rescan.status_code == 200
+    assert rescan.get_json()["data"]["scan_status"] == "clean"
+    assert ResumeAttachment.query.filter_by(candidate_id=candidate["id"]).count() == 1
     assert {tag["tag"] for tag in candidate["tags"]} >= {"总账会计", "纳税申报", "财务报表", "Excel"}
 
 

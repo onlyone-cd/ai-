@@ -1,3 +1,5 @@
+import hashlib
+import mimetypes
 import re
 import uuid
 import zipfile
@@ -11,7 +13,7 @@ from werkzeug.utils import secure_filename
 from . import db
 from .deepseek_resume_parser import parse_resume_with_deepseek
 from .experience_analysis import analyze_experience
-from .models import Candidate, CandidateTag, UploadBatch
+from .models import Candidate, CandidateTag, ResumeAttachment, UploadBatch, utcnow
 from .tag_library import dedupe_tags, rule_based_tags
 
 ALLOWED_EXTENSIONS = {".txt", ".md", ".docx", ".pdf"}
@@ -101,13 +103,17 @@ def parse_stored_resume(stored_path: Path, filename: str, owner, batch_id=None):
     batch = UploadBatch(id=batch_id, owner_hr_id=owner.id, source="upload", filename=filename)
     db.session.add(batch)
     db.session.flush()
+    attachment = create_resume_attachment(batch, stored_path, filename, owner)
 
     try:
+        if attachment.scan_status == "blocked":
+            raise ValueError(attachment.scan_summary or "upload file blocked by security scan")
         raw_text = extract_text(stored_path, extension)
         if not raw_text.strip():
             raise ValueError("未能从简历中提取到文本")
         llm_result = parse_resume_with_deepseek(raw_text)
         candidate = upsert_candidate(build_candidate(raw_text, batch_id, owner.id, llm_result=llm_result), infer_tags(raw_text, llm_result=llm_result))
+        attachment.candidate_id = candidate.id
         batch.success_count = 1
         batch.status = "ok"
         db.session.commit()
@@ -135,6 +141,75 @@ def parse_and_save_text(raw_text: str, owner, source="boss", filename="boss-scre
     batch.status = "ok"
     db.session.commit()
     return batch, candidate
+
+
+def create_resume_attachment(batch, stored_path: Path, filename: str, owner):
+    scan = scan_stored_file(stored_path, filename)
+    attachment = ResumeAttachment(
+        upload_batch_id=batch.id,
+        owner_hr_id=owner.id,
+        source=batch.source,
+        original_filename=filename or stored_path.name,
+        stored_filename=stored_path.name,
+        storage_path=str(stored_path),
+        content_type=mimetypes.guess_type(filename or stored_path.name)[0],
+        extension=stored_path.suffix.lower(),
+        size_bytes=stored_path.stat().st_size if stored_path.exists() else 0,
+        sha256=file_sha256(stored_path) if stored_path.exists() else "",
+        scan_status=scan["status"],
+        scan_summary=scan["summary"],
+        scan_flags=scan["flags"],
+        scanned_at=scan["scanned_at"],
+    )
+    db.session.add(attachment)
+    return attachment
+
+
+def rescan_attachment(attachment):
+    path = Path(attachment.storage_path)
+    scan = scan_stored_file(path, attachment.original_filename)
+    attachment.size_bytes = path.stat().st_size if path.exists() else 0
+    attachment.sha256 = file_sha256(path) if path.exists() else attachment.sha256
+    attachment.scan_status = scan["status"]
+    attachment.scan_summary = scan["summary"]
+    attachment.scan_flags = scan["flags"]
+    attachment.scanned_at = scan["scanned_at"]
+    return attachment
+
+
+def scan_stored_file(stored_path: Path, filename: str):
+    flags = []
+    extension = stored_path.suffix.lower()
+    size = stored_path.stat().st_size if stored_path.exists() else 0
+    max_size = current_app.config.get("MAX_CONTENT_LENGTH", 16 * 1024 * 1024)
+    if not stored_path.exists():
+        flags.append({"level": "error", "code": "missing_file", "message": "原始附件不存在"})
+    if extension not in ALLOWED_EXTENSIONS:
+        flags.append({"level": "error", "code": "extension_not_allowed", "message": "文件类型不在简历白名单内"})
+    if size <= 0:
+        flags.append({"level": "error", "code": "empty_file", "message": "文件为空"})
+    if size > max_size:
+        flags.append({"level": "error", "code": "file_too_large", "message": "文件超过单文件大小限制"})
+    lower_name = (filename or stored_path.name).lower()
+    suspicious_suffixes = (".exe", ".bat", ".cmd", ".ps1", ".js", ".vbs", ".scr", ".dll")
+    if any(lower_name.endswith(suffix) for suffix in suspicious_suffixes):
+        flags.append({"level": "error", "code": "executable_suffix", "message": "疑似可执行文件"})
+    head = stored_path.read_bytes()[:4096] if stored_path.exists() else b""
+    if head.startswith(b"MZ"):
+        flags.append({"level": "error", "code": "executable_signature", "message": "检测到 Windows 可执行文件头"})
+    if extension in {".txt", ".md"} and b"\x00" in head:
+        flags.append({"level": "warning", "code": "binary_text", "message": "文本文件中包含二进制字符"})
+    status = "blocked" if any(item["level"] == "error" for item in flags) else "warning" if flags else "clean"
+    summary = "未发现风险" if status == "clean" else "；".join(item["message"] for item in flags[:3])
+    return {"status": status, "summary": summary, "flags": flags, "scanned_at": utcnow()}
+
+
+def file_sha256(path: Path):
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def upsert_candidate(candidate, tags):

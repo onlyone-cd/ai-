@@ -209,6 +209,10 @@ deploy/                     Nginx 示例配置
 - `GET /api/candidates`
 - `POST /api/resume/upload`
 - `POST /api/resume/<id>/retry-parse`
+- `GET /api/resume/attachments`
+- `GET /api/candidates/<id>/attachments`
+- `GET /api/resume/attachments/<id>`
+- `POST /api/resume/attachments/<id>/scan`
 - `GET /api/jobs`
 - `POST /api/jobs/ai-generate`
 - `POST /api/jobs/<id>/match`

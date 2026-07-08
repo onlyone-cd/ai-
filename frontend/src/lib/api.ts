@@ -19,6 +19,7 @@ export type Candidate = {
   resume_json?: Record<string, unknown>;
   parse_status?: string;
   parse_error?: string;
+  attachments?: ResumeAttachment[];
 };
 export type Job = {
   id: number;
@@ -282,7 +283,29 @@ export type DataIntegrity = {
     orphan_relations: Record<string, number>;
     duplicates: Record<string, { value: string; count: number }[]>;
     missing_uploads: { batch_id: string; filename: string }[];
+    missing_attachment_records?: { batch_id: string; filename: string }[];
+    attachment_scan_issues?: ResumeAttachment[];
   };
+};
+
+export type ResumeAttachment = {
+  id: number;
+  upload_batch_id: string;
+  candidate_id?: number | null;
+  owner_hr_id: number;
+  owner_name?: string;
+  source: string;
+  original_filename: string;
+  stored_filename: string;
+  content_type?: string | null;
+  extension: string;
+  size_bytes: number;
+  sha256: string;
+  scan_status: "clean" | "warning" | "blocked" | string;
+  scan_summary: string;
+  scan_flags: { level: string; code: string; message: string }[];
+  created_at?: string | null;
+  scanned_at?: string | null;
 };
 
 export type NotificationChannel = {
@@ -533,6 +556,12 @@ export const api = {
   deleteCandidate: (id: number) => request<{ deleted: number }>(`/candidates/${id}`, { method: "DELETE" }),
   retryParseResume: (id: number) => request<{ candidate: Candidate }>(`/resume/${id}/retry-parse`, { method: "POST" }),
   retryParseResumeAsync: (id: number) => request<{ task: BackgroundTask }>(`/resume/${id}/retry-parse?async=1`, { method: "POST" }),
+  resumeAttachments: (params?: { candidate_id?: number; scan_status?: string; source?: string; limit?: number; offset?: number }) =>
+    request<{ items: ResumeAttachment[] } & PaginationMeta>(`/resume/attachments${queryString(params)}`),
+  candidateAttachments: (id: number, params?: { limit?: number; offset?: number }) =>
+    request<{ items: ResumeAttachment[] } & PaginationMeta>(`/candidates/${id}/attachments${queryString(params)}`),
+  getResumeAttachment: (id: number) => request<ResumeAttachment>(`/resume/attachments/${id}`),
+  scanResumeAttachment: (id: number) => request<ResumeAttachment>(`/resume/attachments/${id}/scan`, { method: "POST" }),
   uploadResume: (files: File | File[]) => {
     const formData = new FormData();
     for (const file of Array.isArray(files) ? files : [files]) {

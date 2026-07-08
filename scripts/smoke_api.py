@@ -90,6 +90,7 @@ def main():
     run_step(results, "system.llm_usage", lambda: client.request("GET", "/api/system/llm/usage?days=7")["summary"]["total_calls"])
     run_step(results, "notifications.channels", lambda: assert_items(client.request("GET", "/api/notifications/channels")))
     run_step(results, "candidates.list", lambda: assert_items(client.request("GET", "/api/candidates?limit=5")))
+    run_step(results, "resume.attachments", lambda: client.request("GET", "/api/resume/attachments?limit=5").get("total", 0))
     run_step(results, "jobs.list", lambda: assert_items(client.request("GET", "/api/jobs?limit=5")))
     run_step(results, "organization.tree", lambda: assert_items(client.request("GET", "/api/organization/tree")))
     run_step(results, "employees.list", lambda: assert_items(client.request("GET", "/api/employees?limit=5")))

@@ -53,6 +53,7 @@ class Candidate(db.Model):
 
     owner = db.relationship("User")
     tags = db.relationship("CandidateTag", cascade="all, delete-orphan", backref="candidate")
+    attachments = db.relationship("ResumeAttachment", cascade="all, delete-orphan", backref="candidate")
 
     def to_dict(self, detail=False):
         data = {
@@ -75,6 +76,7 @@ class Candidate(db.Model):
         if detail:
             data["resume_json"] = self.resume_json
             data["raw_text"] = self.raw_text
+            data["attachments"] = [attachment.to_dict() for attachment in self.attachments]
         return data
 
 
@@ -110,6 +112,58 @@ class UploadBatch(db.Model):
             "failed_count": self.failed_count,
             "error": self.error,
             "created_at": self.created_at.isoformat(),
+        }
+
+
+class ResumeAttachment(db.Model):
+    __table_args__ = (
+        db.Index("ix_resume_attachment_batch", "upload_batch_id"),
+        db.Index("ix_resume_attachment_candidate", "candidate_id"),
+        db.Index("ix_resume_attachment_owner_created", "owner_hr_id", "created_at"),
+        db.Index("ix_resume_attachment_scan_status", "scan_status"),
+        db.Index("ix_resume_attachment_sha256", "sha256"),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    upload_batch_id = db.Column(db.String(64), db.ForeignKey("upload_batch.id"), nullable=False)
+    candidate_id = db.Column(db.Integer, db.ForeignKey("candidate.id"), nullable=True)
+    owner_hr_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
+    source = db.Column(db.String(32), nullable=False, default="upload")
+    original_filename = db.Column(db.String(255), nullable=False)
+    stored_filename = db.Column(db.String(255), nullable=False)
+    storage_path = db.Column(db.String(512), nullable=False)
+    content_type = db.Column(db.String(128), nullable=True)
+    extension = db.Column(db.String(24), nullable=False)
+    size_bytes = db.Column(db.Integer, nullable=False, default=0)
+    sha256 = db.Column(db.String(64), nullable=False)
+    scan_status = db.Column(db.String(24), nullable=False, default="clean")
+    scan_summary = db.Column(db.String(255), nullable=False, default="")
+    scan_flags = db.Column(db.JSON, nullable=False, default=list)
+    created_at = db.Column(db.DateTime(timezone=True), default=utcnow)
+    scanned_at = db.Column(db.DateTime(timezone=True), nullable=True)
+
+    owner = db.relationship("User")
+    upload_batch = db.relationship("UploadBatch")
+
+    def to_dict(self):
+        return {
+            "id": self.id,
+            "upload_batch_id": self.upload_batch_id,
+            "candidate_id": self.candidate_id,
+            "owner_hr_id": self.owner_hr_id,
+            "owner_name": self.owner.name if self.owner else "",
+            "source": self.source,
+            "original_filename": self.original_filename,
+            "stored_filename": self.stored_filename,
+            "content_type": self.content_type,
+            "extension": self.extension,
+            "size_bytes": self.size_bytes,
+            "sha256": self.sha256,
+            "scan_status": self.scan_status,
+            "scan_summary": self.scan_summary,
+            "scan_flags": self.scan_flags or [],
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "scanned_at": self.scanned_at.isoformat() if self.scanned_at else None,
         }
 
 

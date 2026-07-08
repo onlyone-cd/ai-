@@ -1079,8 +1079,42 @@ def test_accounting_job_matches_accounting_candidate_first(client, admin_headers
     matches = response.get_json()["data"]["items"]
     assert matches[0]["candidate"]["title"] == "总账会计"
     assert matches[0]["score"] >= 90
-    assert all(item["score"] >= 50 for item in matches)
-    assert all(item["candidate"]["title"] != "Python 后端工程师" for item in matches)
+    assert len(matches) == Candidate.query.count()
+    assert any(item["candidate"]["title"] == "Python 后端工程师" for item in matches)
+    assert all("rule_score" in item["reason"] for item in matches)
+
+
+def test_job_match_combines_rule_score_and_ai_review(client, admin_headers, app, monkeypatch):
+    jobs = client.get("/api/jobs", headers=admin_headers).get_json()["data"]["items"]
+    accounting_job = next(job for job in jobs if job["title"] == "财务会计主管")
+
+    app.config["LLM_ENABLED"] = True
+    app.config["DEEPSEEK_API_KEY"] = "test-key"
+
+    def fake_chat_json(messages, **kwargs):
+        assert "完整简历" in messages[-1]["content"]
+        return {
+            "score": 80,
+            "recommendation": "推荐",
+            "summary": "AI 已阅读 JD 和完整简历后给出综合判断。",
+            "strengths": ["岗位经验接近"],
+            "risks": ["需要复核业务深度"],
+            "interview_focus": ["项目职责"],
+            "evidence": ["简历中有相关经历"],
+        }
+
+    monkeypatch.setattr("app.job_service.chat_json", fake_chat_json)
+
+    response = client.post(f"/api/jobs/{accounting_job['id']}/match", headers=admin_headers)
+
+    assert response.status_code == 200
+    first = response.get_json()["data"]["items"][0]
+    reason = first["reason"]
+    assert reason["ai_score"] == 80
+    assert reason["ai_review"]["source"] == "deepseek"
+    assert reason["ai_review"]["recommendation"] == "推荐"
+    assert reason["score_formula"] == "final_score=round(rule_score*45% + ai_score*55%); no pre-filter before AI review"
+    assert first["score"] == round(reason["rule_score"] * 0.45 + 80 * 0.55)
 
 
 def test_job_creation_structures_jd_without_manual_skill_tags(client, admin_headers):
@@ -1180,7 +1214,8 @@ def test_match_preview_does_not_persist_matches(client, admin_headers):
     assert response.status_code == 200
     items = response.get_json()["data"]["items"]
     assert len(items) <= 2
-    assert all(item["score"] >= 50 for item in items)
+    assert all("rule_score" in item["reason"] for item in items)
+    assert all(item["reason"]["final_score"] == item["reason"]["rule_score"] for item in items)
     assert after == before
 
 

@@ -540,7 +540,7 @@ function CandidatesPage() {
         .includes(keyword)
     ) : candidates;
     return matched
-      .filter((candidate) => !matchResults.length || (scoreByCandidate.get(candidate.id)?.score || 0) >= 50)
+      .filter((candidate) => !matchResults.length || scoreByCandidate.has(candidate.id))
       .sort((a, b) => {
         const scoreA = matchResults.length ? (scoreByCandidate.get(a.id)?.score || 0) : resumeScore(a.tags);
         const scoreB = matchResults.length ? (scoreByCandidate.get(b.id)?.score || 0) : resumeScore(b.tags);
@@ -555,11 +555,10 @@ function CandidatesPage() {
       notify("error", "请先选择一个岗位");
       return;
     }
-    const data = await api.matchPreview(selectedJobId, 20);
-    const items = data.items.filter((item) => item.score >= 50);
-    setMatchResults(items);
-    setMatchMessage(`已按「${data.job.title}」完成匹配预览，候选人已按匹配分排序。`);
-    notify("success", `已匹配 ${items.length} 位候选人`);
+    const data = await api.matchJob(selectedJobId);
+    setMatchResults(data.items);
+    setMatchMessage(`已按「${data.job.title}」完成 AI 综合匹配，候选人已按综合分排序。`);
+    notify("success", `AI 综合匹配已完成，返回 ${data.items.length} 位候选人`);
   }
 
   async function addCandidateToPipeline(candidate: Candidate) {
@@ -779,7 +778,7 @@ function JobsPage() {
       const data = await api.matchJob(jobId);
       setMatches(data.items);
       setSelectedJob(data.job);
-      notify("success", `岗位匹配已完成，返回 ${data.items.filter((item) => item.score >= 50).length} 位候选人`);
+      notify("success", `AI 综合匹配已完成，返回 ${data.items.length} 位候选人`);
       load();
     } catch (err) {
       setError(err instanceof Error ? err.message : "匹配失败");
@@ -837,7 +836,7 @@ function JobsPage() {
         .includes(keyword)
     );
   }, [jobs, query]);
-  const visibleMatches = useMemo(() => (matches.length ? matches : preview).filter((item) => item.score >= 50), [matches, preview]);
+  const visibleMatches = useMemo(() => (matches.length ? matches : preview), [matches, preview]);
   const pagedJobs = useClientPagination(visibleJobs, 20);
   const pagedMatches = useClientPagination(visibleMatches, 20);
 
@@ -940,7 +939,7 @@ function JobsPage() {
         <div className="toolbar">
           <div>
             <h2 className="font-semibold">匹配结果</h2>
-            <p className="text-xs text-steel">公式：75% 覆盖率 + 25% 熟练度，预览不写库，执行匹配会保存结果</p>
+            <p className="text-xs text-steel">预览先按标签规则排序；执行匹配会调用 AI 阅读完整 JD 与简历，并按规则分 45% + AI 分 55% 生成综合分，不做 50 分初筛。</p>
           </div>
           <div className="flex flex-wrap gap-2">
             <button className="secondary-button" onClick={() => addToPipeline(visibleMatches.slice(0, 5).map((item) => item.candidate_id))} disabled={!jobId || !visibleMatches.length}>
@@ -956,7 +955,7 @@ function JobsPage() {
         {error && <div className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>}
         {pipelineMessage && <div className="rounded-md bg-blue-50 px-3 py-2 text-sm text-blue-700">{pipelineMessage}</div>}
         {visibleMatches.length === 0 ? (
-          <EmptyState icon={<Database size={22} />} text="暂无 50 分以上候选人" />
+          <EmptyState icon={<Database size={22} />} text="暂无候选人，请先上传简历或调整岗位" />
         ) : (
           <div className="data-panel">
             <div className="data-list">
@@ -967,7 +966,25 @@ function JobsPage() {
                   <div className="flex flex-wrap items-center gap-2">
                     <h3 className="font-semibold">{match.candidate.name_masked}</h3>
                     <span className="badge">{match.candidate.title}</span>
+                    <span className="badge muted">规则 {match.reason.rule_score ?? match.score}/100</span>
+                    {typeof match.reason.ai_score === "number" && <span className="badge">AI {match.reason.ai_score}/100</span>}
+                    {match.reason.ai_review?.recommendation && <span className="badge good">{match.reason.ai_review.recommendation}</span>}
                   </div>
+                  {match.reason.ai_review && (
+                    <div className="mt-2 rounded-md border border-line bg-slate-50 px-3 py-2 text-xs text-steel">
+                      <p className="font-medium text-ink">
+                        {match.reason.ai_review.source === "deepseek" ? "AI 综合判断" : "规则匹配"}
+                        {match.reason.ai_review.summary ? `：${match.reason.ai_review.summary}` : ""}
+                      </p>
+                      {(match.reason.ai_review.strengths?.length || match.reason.ai_review.risks?.length || match.reason.ai_review.interview_focus?.length) ? (
+                        <div className="mt-2 grid gap-2 md:grid-cols-3">
+                          <p><span className="font-medium text-ink">优势</span>：{match.reason.ai_review.strengths?.slice(0, 3).join("、") || "暂无"}</p>
+                          <p><span className="font-medium text-ink">风险</span>：{match.reason.ai_review.risks?.slice(0, 3).join("、") || "暂无"}</p>
+                          <p><span className="font-medium text-ink">面试重点</span>：{match.reason.ai_review.interview_focus?.slice(0, 3).join("、") || "暂无"}</p>
+                        </div>
+                      ) : null}
+                    </div>
+                  )}
                   <div className="mt-3">
                     <div className="flex flex-wrap gap-2">
                       <button className="secondary-button" onClick={() => setSelectedCandidate(match.candidate)}>
@@ -2121,7 +2138,7 @@ function BossPage() {
             <h2 className="font-semibold">推荐候选人</h2>
             <p className="mt-1 text-sm text-steel">只从 BOSS 已导入的沟通过候选人里匹配当前 BOSS 岗位{selectedJob ? `：${selectedJob.title}` : ""}。</p>
             <div className="data-list mt-4">
-              {recommendations.length === 0 ? <EmptyState icon={<Users size={22} />} text="当前岗位暂无 50 分以上推荐候选人" /> : pagedRecommendations.items.map((item) => (
+              {recommendations.length === 0 ? <EmptyState icon={<Users size={22} />} text="当前岗位暂无推荐候选人" /> : pagedRecommendations.items.map((item) => (
                 <div className={`data-row text-left ${candidateId === item.candidate_id ? "active" : ""}`} key={item.candidate_id}>
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">

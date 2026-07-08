@@ -1,5 +1,7 @@
 import re
 
+from . import db
+from .llm_client import LLMError, chat_json, llm_available
 from .matching import match_candidate, parse_skill_tags
 from .models import Candidate, Match
 
@@ -122,8 +124,9 @@ def preview_matches(job, limit=None):
             candidate_years=(candidate.resume_json or {}).get("experience_analysis", {}).get("years"),
             candidate_context=" ".join([candidate.title or "", candidate.raw_text or ""]),
         )
-        if reason["score"] < 50:
-            continue
+        reason["rule_score"] = reason["score"]
+        reason["final_score"] = reason["score"]
+        reason["score_formula"] = "preview=rule_score; persisted_match=rule_score*45%+ai_score*55% when AI review succeeds"
         results.append(
             {
                 "job_id": job.id,
@@ -140,7 +143,7 @@ def preview_matches(job, limit=None):
 def persist_matches(db, job):
     results = []
     Match.query.filter_by(job_id=job.id).delete()
-    for item in preview_matches(job):
+    for item in ai_review_matches(job, preview_matches(job)):
         match = Match(job_id=job.id, candidate_id=item["candidate_id"], score=item["score"], reason=item["reason"])
         db.session.add(match)
         db.session.flush()
@@ -148,3 +151,109 @@ def persist_matches(db, job):
     db.session.commit()
     results.sort(key=lambda item: item["score"], reverse=True)
     return results
+
+
+def ai_review_matches(job, items):
+    if not llm_available():
+        for item in items:
+            item["reason"]["ai_review"] = {"source": "disabled", "summary": "AI 未启用，当前为规则匹配分。"}
+        return items
+
+    reviewed = []
+    for item in items:
+        candidate = db_candidate(item["candidate_id"])
+        if not candidate:
+            reviewed.append(item)
+            continue
+        reviewed.append(apply_ai_review(job, candidate, item))
+    return reviewed
+
+
+def db_candidate(candidate_id):
+    return db.session.get(Candidate, candidate_id)
+
+
+def apply_ai_review(job, candidate, item):
+    reason = item["reason"]
+    rule_score = int(item["score"])
+    try:
+        review = request_ai_match_review(job, candidate, reason)
+        ai_score = clamp_score(review.get("score"), rule_score)
+        final_score = round(rule_score * 0.45 + ai_score * 0.55)
+        review["source"] = "deepseek"
+        reason["ai_review"] = normalize_ai_review(review)
+        reason["ai_score"] = ai_score
+        reason["final_score"] = final_score
+        reason["rule_score"] = rule_score
+        reason["score_formula"] = "final_score=round(rule_score*45% + ai_score*55%); no pre-filter before AI review"
+        item["score"] = final_score
+    except LLMError as exc:
+        reason["ai_review"] = {"source": "failed", "summary": "AI 复核失败，已保留规则匹配分。", "error": str(exc)[:300]}
+        reason["ai_score"] = None
+        reason["final_score"] = rule_score
+        reason["rule_score"] = rule_score
+    return item
+
+
+def request_ai_match_review(job, candidate, rule_reason):
+    structured = ensure_jd_structured(job)
+    candidate_tags = [tag.to_dict() for tag in candidate.tags]
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "你是资深招聘匹配评估官。请同时阅读岗位 JD、候选人完整简历、规则标签命中结果，"
+                "判断候选人是否适合该岗位。不能只按关键词，必须结合项目经历、业务场景、职责深度、年限和风险。"
+                "输出 JSON：{\"score\":0-100,\"recommendation\":\"强烈推荐/推荐/可考虑/不推荐\","
+                "\"summary\":\"\",\"strengths\":[\"\"],\"risks\":[\"\"],\"interview_focus\":[\"\"],\"evidence\":[\"\"]}。"
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"岗位名称：{job.title}\n"
+                f"城市：{job.city or ''}\n"
+                f"部门：{job.department or ''}\n"
+                f"岗位 JD：\n{truncate_text(job.jd_text, 5000)}\n\n"
+                f"JD 结构化要求：{structured}\n\n"
+                f"候选人：{candidate.name_masked} / {candidate.title} / {candidate.city}\n"
+                f"候选人标签：{candidate_tags}\n"
+                f"规则匹配结果：{rule_reason}\n\n"
+                f"候选人完整简历：\n{truncate_text(candidate.raw_text or '', 8000)}"
+            ),
+        },
+    ]
+    return chat_json(messages, temperature=0.1, timeout=45, source="job_match", tool_name="ai_match_review")
+
+
+def normalize_ai_review(review):
+    return {
+        "source": review.get("source") or "deepseek",
+        "score": clamp_score(review.get("score"), 0),
+        "recommendation": str(review.get("recommendation") or ""),
+        "summary": str(review.get("summary") or ""),
+        "strengths": list_of_text(review.get("strengths"))[:5],
+        "risks": list_of_text(review.get("risks"))[:5],
+        "interview_focus": list_of_text(review.get("interview_focus"))[:5],
+        "evidence": list_of_text(review.get("evidence"))[:5],
+    }
+
+
+def list_of_text(value):
+    if isinstance(value, list):
+        return [str(item) for item in value if str(item).strip()]
+    if value:
+        return [str(value)]
+    return []
+
+
+def clamp_score(value, fallback):
+    try:
+        return max(0, min(100, int(round(float(value)))))
+    except (TypeError, ValueError):
+        return max(0, min(100, int(fallback or 0)))
+
+
+def truncate_text(text, limit):
+    value = str(text or "")
+    return value if len(value) <= limit else value[:limit] + "\n...[内容已截断]"

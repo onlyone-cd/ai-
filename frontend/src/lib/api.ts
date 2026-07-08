@@ -152,6 +152,21 @@ export type MatchResult = {
     missing_tags: string[];
     match_rate: number;
     capability_rate: number;
+    rule_score?: number;
+    ai_score?: number | null;
+    final_score?: number;
+    score_formula?: string;
+    ai_review?: {
+      source: string;
+      score?: number;
+      recommendation?: string;
+      summary?: string;
+      strengths?: string[];
+      risks?: string[];
+      interview_focus?: string[];
+      evidence?: string[];
+      error?: string;
+    };
   };
 };
 

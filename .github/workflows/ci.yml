@@ -63,3 +63,54 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Build
         run: pnpm run build
+
+  e2e:
+    name: E2E smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [backend, frontend]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+          cache-dependency-path: backend/requirements.txt
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.7.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "pnpm"
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - name: Install backend dependencies
+        run: python -m pip install --upgrade pip && pip install -r backend/requirements.txt
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+      - name: Install Playwright browser
+        working-directory: frontend
+        run: pnpm exec playwright install --with-deps chromium
+      - name: Build frontend
+        working-directory: frontend
+        run: pnpm run build
+      - name: Start app
+        env:
+          LLM_ENABLED: "false"
+        run: |
+          cd backend
+          python run.py > ../e2e-server.log 2>&1 &
+      - name: Wait for app
+        run: |
+          for i in {1..40}; do
+            if curl -fsS http://127.0.0.1:5001/healthz; then exit 0; fi
+            sleep 2
+          done
+          cat e2e-server.log || true
+          exit 1
+      - name: Run E2E smoke
+        working-directory: frontend
+        env:
+          E2E_BASE_URL: "http://127.0.0.1:5001"
+        run: pnpm run test:e2e

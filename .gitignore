@@ -11,6 +11,8 @@ backend/instance/
 backend/uploads/
 backend/*.log
 backups/
+frontend/test-results/
+frontend/playwright-report/
 *.sql
 *.tar
 

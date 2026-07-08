@@ -133,7 +133,7 @@ function App() {
         </div>
         <AntMenu
           className="border-0 bg-transparent p-3"
-          items={navItems}
+          items={navItems.map((item) => ({ ...item, label: <span data-testid={`nav-${item.key}`}>{item.label}</span> }))}
           mode="inline"
           selectedKeys={[view]}
           theme="dark"
@@ -164,7 +164,7 @@ function App() {
           </div>
         </AntLayout.Header>
 
-        <AntLayout.Content className="app-content p-4 lg:p-8">
+        <AntLayout.Content className="app-content p-4 lg:p-8" data-testid="app-content">
           <MobileTabs view={view} setView={setView} isAdmin={user.role === "admin"} canUseTasks={user.role !== "interviewer"} />
           {view === "candidates" && <CandidatesPage />}
           {view === "organization" && <InternalTalentPage />}
@@ -205,7 +205,7 @@ function Login({ onLogin }: { onLogin: (user: User) => void }) {
 
   return (
     <div className="grid min-h-screen place-items-center bg-slate-50 p-4">
-      <form onSubmit={submit} className="w-full max-w-sm rounded-lg border border-line bg-white p-6 shadow-panel">
+      <form onSubmit={submit} className="w-full max-w-sm rounded-lg border border-line bg-white p-6 shadow-panel" data-testid="login-form">
         <div className="mb-6 flex items-center gap-3">
           <div className="grid h-10 w-10 place-items-center rounded-md bg-mint text-white">
             <Sparkles size={19} />
@@ -216,11 +216,11 @@ function Login({ onLogin }: { onLogin: (user: User) => void }) {
           </div>
         </div>
         <label className="field-label">用户名</label>
-        <input className="input" value={username} onChange={(event) => setUsername(event.target.value)} />
+        <input className="input" data-testid="login-username" value={username} onChange={(event) => setUsername(event.target.value)} />
         <label className="field-label mt-4">密码</label>
-        <input className="input" type="password" value={password} onChange={(event) => setPassword(event.target.value)} />
+        <input className="input" data-testid="login-password" type="password" value={password} onChange={(event) => setPassword(event.target.value)} />
         {error && <div className="mt-3 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{error}</div>}
-        <button className="primary-button mt-5 w-full" type="submit">
+        <button className="primary-button mt-5 w-full" data-testid="login-submit" type="submit">
           <Check size={17} />
           登录
         </button>
@@ -599,7 +599,7 @@ function CandidatesPage() {
   }
 
   return (
-    <section className="talent-page">
+    <section className="talent-page" data-testid="page-candidates">
       <aside className="talent-filter">
         <div className="talent-filter-title">
           <BriefcaseBusiness size={16} />
@@ -659,7 +659,7 @@ function CandidatesPage() {
             <Sparkles size={17} />
             岗位匹配
           </button>
-          <button className="secondary-button" onClick={() => setUploadOpen(true)}>
+          <button className="secondary-button" data-testid="resume-upload-open" onClick={() => setUploadOpen(true)}>
             <Upload size={17} />
             上传简历
           </button>
@@ -858,7 +858,7 @@ function JobsPage() {
   }
 
   return (
-    <section className="grid gap-5 xl:grid-cols-[380px_1fr]">
+    <section className="grid gap-5 xl:grid-cols-[380px_1fr]" data-testid="page-jobs">
       <div className="data-panel xl:sticky xl:top-4 xl:self-start">
         <div className="data-panel-head">
           <div>
@@ -870,12 +870,12 @@ function JobsPage() {
           <Search className="pointer-events-none absolute left-3 top-2.5 text-steel" size={17} />
           <input className="input pl-9" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索岗位、技能、城市" />
         </div>
-        <button className="primary-button w-full" onClick={() => { setFormOpen(!formOpen); notify("success", formOpen ? "已收起新建岗位" : "已打开新建岗位"); }}>
+        <button className="primary-button w-full" data-testid="job-create-toggle" onClick={() => { setFormOpen(!formOpen); notify("success", formOpen ? "已收起新建岗位" : "已打开新建岗位"); }}>
           <Plus size={17} />
           新建岗位
         </button>
         {formOpen && <JobForm onCreated={(job) => { setJobs([job, ...jobs]); setJobId(job.id); setFormOpen(false); }} />}
-        <div className="data-list">
+        <div className="data-list" data-testid="job-list">
           {pagedJobs.items.map((job) => (
             <button key={job.id} onClick={() => { setJobId(job.id); notify("success", `已选择岗位：${job.title}`); }} className={`data-row w-full text-left ${jobId === job.id ? "active" : ""}`}>
               <div className="min-w-0">
@@ -1033,7 +1033,7 @@ function JobForm({ onCreated }: { onCreated: (job: Job) => void }) {
     }
   }
   return (
-    <form onSubmit={submit} className="rounded-lg border border-line bg-white p-4 shadow-panel">
+    <form onSubmit={submit} className="rounded-lg border border-line bg-white p-4 shadow-panel" data-testid="job-form">
       <label className="field-label">岗位名称</label>
       <input className="input" value={payload.title} onChange={(event) => setPayload({ ...payload, title: event.target.value })} placeholder="例如：Java 后端工程师" />
       <div className="mt-3 grid grid-cols-2 gap-3">
@@ -2448,7 +2448,7 @@ function AgentPage() {
   const quickQuestions = latest?.suggestions || ["现在人才库有多少人？软件开发和会计分别多少？", "创建岗位 数据分析师 城市上海 部门数据部 JD 要求 SQL、Python、报表分析，3 年以上经验", "推荐财务会计主管候选人", "现在面试和 Offer 状态怎么样？"];
 
   return (
-    <section className="agent-chat-page">
+    <section className="agent-chat-page" data-testid="page-agent">
       <header className="agent-page-head">
         <div>
           <h1>Agent</h1>
@@ -2492,12 +2492,14 @@ function AgentPage() {
 
       <form
         className="agent-composer"
+        data-testid="agent-composer"
         onSubmit={(event) => {
           event.preventDefault();
           send();
         }}
       >
         <textarea
+          data-testid="agent-input"
           value={message}
           onChange={(event) => setMessage(event.target.value)}
           onKeyDown={(event) => {
@@ -4251,7 +4253,7 @@ function UploadResumeModal({ onClose, onUploaded }: { onClose: () => void; onUpl
 
   return (
     <div className="fixed inset-0 z-20 grid place-items-center bg-black/20 p-4" onClick={onClose}>
-      <form className="upload-panel" onSubmit={submit} onClick={(event) => event.stopPropagation()}>
+      <form className="upload-panel" data-testid="resume-upload-modal" onSubmit={submit} onClick={(event) => event.stopPropagation()}>
         <div className="upload-head">
           <div>
             <h2>简历上传</h2>
@@ -4279,8 +4281,8 @@ function UploadResumeModal({ onClose, onUploaded }: { onClose: () => void; onUpl
         )}
         {message && <div className="mt-4 rounded-md bg-blue-50 px-3 py-2 text-sm text-blue-700">{message}</div>}
         <div className="mt-5 flex justify-end gap-3">
-          <button className="secondary-button" type="button" onClick={onClose}>关闭</button>
-          <button className="primary-button" type="submit" disabled={!files.length || busy}>
+          <button className="secondary-button" data-testid="resume-upload-close" type="button" onClick={onClose}>关闭</button>
+          <button className="primary-button" data-testid="resume-upload-submit" type="submit" disabled={!files.length || busy}>
             <Upload size={17} />
             {busy ? "解析中" : "上传并解析"}
           </button>

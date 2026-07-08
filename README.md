@@ -133,6 +133,13 @@ cd frontend
 pnpm run build
 ```
 
+端到端冒烟测试（需先启动 `http://localhost:5001`）：
+
+```powershell
+cd frontend
+pnpm run test:e2e
+```
+
 密钥扫描：
 
 ```powershell

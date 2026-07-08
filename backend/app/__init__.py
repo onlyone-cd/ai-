@@ -199,4 +199,5 @@ def production_config_checks(app):
         "warning",
     )
     add("upload_folder", bool(app.config.get("UPLOAD_FOLDER")), "必须配置 UPLOAD_FOLDER")
+    add("backup_folder", bool(app.config.get("BACKUP_FOLDER")), "必须配置 BACKUP_FOLDER")
     return checks

@@ -236,6 +236,19 @@ def test_ops_data_quality_excludes_internal_jobs_from_recruiting_skill_issue(cli
     assert "内部架构师" not in sample_names
 
 
+def test_ops_deploy_gates_reports_release_blockers_without_secrets(client, admin_headers):
+    response = client.get("/api/ops/deploy-gates", headers=admin_headers)
+
+    assert response.status_code == 200
+    data = response.get_json()["data"]
+    assert {"ready", "summary", "gates"} <= set(data)
+    assert data["summary"]["total"] >= 10
+    assert any(item["key"] == "environment" for item in data["gates"])
+    assert any(item["key"] == "backup_dir" for item in data["gates"])
+    assert "DEEPSEEK_API_KEY" not in json.dumps(data)
+    assert "test-secret" not in json.dumps(data)
+
+
 def test_notification_center_channel_event_and_logs(client, admin_headers):
     created = client.post(
         "/api/notifications/channels",

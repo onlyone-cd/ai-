@@ -12,6 +12,7 @@ gunicorn -w ${WEB_CONCURRENCY:-2} -b 0.0.0.0:${PORT:-5001} run:app
 ```
 
 The first check validates production safety settings and database connectivity. The second check fails startup if the database Alembic revision is not at the latest migration head.
+The preflight payload also includes deployment gate counts for environment, secrets, CORS, database, migration head, upload/backup directories, LLM budget, and speech strategy. In `ENVIRONMENT=production`, any failed error-level gate exits with code `2`.
 
 Run manually before switching traffic:
 
@@ -39,3 +40,5 @@ The check fails when:
 - automatic schema creation is enabled in production
 - the database is unreachable
 - `--require-migration-head` is passed and Alembic is not at the latest head
+- upload or backup directories are not configured or writable
+- LLM is enabled without a production model key

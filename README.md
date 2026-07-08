@@ -212,6 +212,7 @@ deploy/                     Nginx 示例配置
 - `GET /api/system/readiness`
 - `GET /api/system/data-integrity`
 - `GET /api/ops/data-quality`
+- `GET /api/ops/deploy-gates`
 - `GET /api/ops/backup/status`
 - `POST /api/ops/backup/export`
 - `GET /api/system/llm/status`

@@ -22,11 +22,13 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg://hireinsight:${POSTGRES_PASSWORD}@postgres:5432/hireinsight
       UPLOAD_FOLDER: /data/uploads
+      BACKUP_FOLDER: /data/backups
     depends_on:
       postgres:
         condition: service_healthy
     volumes:
       - uploads:/data/uploads
+      - backups:/data/backups
     ports:
       - "5001:5001"
 
@@ -38,11 +40,13 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg://hireinsight:${POSTGRES_PASSWORD}@postgres:5432/hireinsight
       UPLOAD_FOLDER: /data/uploads
+      BACKUP_FOLDER: /data/backups
     depends_on:
       postgres:
         condition: service_healthy
     volumes:
       - uploads:/data/uploads
+      - backups:/data/backups
     command: >
       sh -c "python /app/scripts/preflight_production.py &&
       flask --app run db upgrade &&
@@ -52,3 +56,4 @@ services:
 volumes:
   postgres-data:
   uploads:
+  backups:

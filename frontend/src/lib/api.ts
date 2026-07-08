@@ -339,6 +339,22 @@ export type OpsDataQuality = {
   issues: OpsDataQualityIssue[];
 };
 
+export type OpsDeployGate = {
+  key: string;
+  category: string;
+  title: string;
+  ok: boolean;
+  severity: "error" | "warning" | "info";
+  detail: string;
+  action: string;
+};
+
+export type OpsDeployGates = {
+  ready: boolean;
+  summary: { errors: number; warnings: number; total: number };
+  gates: OpsDeployGate[];
+};
+
 export type ResumeAttachment = {
   id: number;
   upload_batch_id: string;
@@ -605,6 +621,7 @@ export const api = {
   retryTask: (id: number) => request<BackgroundTask>(`/tasks/${id}/retry`, { method: "POST" }),
   opsBackupStatus: () => request<OpsBackupStatus>("/ops/backup/status"),
   opsDataQuality: () => request<OpsDataQuality>("/ops/data-quality"),
+  opsDeployGates: () => request<OpsDeployGates>("/ops/deploy-gates"),
   createBackupExport: () => request<{ task: BackgroundTask }>("/ops/backup/export", { method: "POST" }),
   interviewers: () => request<{ items: User[] }>("/users/interviewers"),
   createUser: (payload: { username: string; name: string; role: string; password: string }) =>

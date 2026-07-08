@@ -1,4 +1,5 @@
 import json
+import os
 import zipfile
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -177,6 +178,56 @@ def table_counts():
         except Exception:
             counts[table.name] = 0
     return counts
+
+
+def build_deploy_gate_report(migration=None):
+    migration = migration or migration_status()
+    upload = resume_upload_dir()
+    backup = backup_dir()
+    gates = []
+
+    def add(key, category, title, ok, severity, detail, action):
+        gates.append(
+            {
+                "key": key,
+                "category": category,
+                "title": title,
+                "ok": bool(ok),
+                "severity": severity,
+                "detail": detail,
+                "action": action,
+            }
+        )
+
+    environment = str(current_app.config.get("ENVIRONMENT") or "")
+    database_uri = str(current_app.config.get("SQLALCHEMY_DATABASE_URI") or "")
+    llm_enabled = bool(current_app.config.get("LLM_ENABLED"))
+    asr_enabled = bool(current_app.config.get("SPEECH_ASR_ENABLED", True))
+    tts_enabled = bool(current_app.config.get("SPEECH_TTS_ENABLED", True))
+
+    add("environment", "基础配置", "生产环境标识", environment.lower() == "production", "error", f"当前 ENVIRONMENT={environment or '-'}", "正式上线前设置 ENVIRONMENT=production。")
+    add("jwt_secret", "安全配置", "JWT 密钥已替换", current_app.config.get("JWT_SECRET") not in {"demo-secret", "test-secret"} and len(str(current_app.config.get("JWT_SECRET") or "")) >= 32, "error", "JWT_SECRET 不能使用演示密钥，且建议不少于 32 位。", "生成新的随机密钥并写入生产 .env。")
+    add("cors_origins", "安全配置", "CORS 域名已收敛", current_app.config.get("CORS_ORIGINS") != ["*"], "error", f"CORS_ORIGINS={','.join(current_app.config.get('CORS_ORIGINS') or [])}", "配置为正式域名，不要使用 *。")
+    add("database", "数据库", "生产数据库类型", not database_uri.startswith("sqlite"), "error", db.engine.dialect.name, "生产环境使用 PostgreSQL，并完成迁移。")
+    add("migration_head", "数据库", "数据库迁移已到最新版本", bool(migration.get("at_head")), "error", f"current={','.join(migration.get('current') or []) or '-'}; head={','.join(migration.get('heads') or []) or '-'}", "执行 flask --app run db upgrade 后重新预检。")
+    add("seed_demo_data", "数据安全", "关闭演示数据种子", not current_app.config.get("SEED_DEMO_DATA"), "error", f"SEED_DEMO_DATA={current_app.config.get('SEED_DEMO_DATA')}", "生产 .env 设置 SEED_DEMO_DATA=false。")
+    add("auto_create_db", "数据库", "关闭自动建表", not current_app.config.get("AUTO_CREATE_DB"), "error", f"AUTO_CREATE_DB={current_app.config.get('AUTO_CREATE_DB')}", "生产 .env 设置 AUTO_CREATE_DB=false，并通过 Alembic 管理结构。")
+    add("upload_dir", "文件存储", "上传目录可用", bool(current_app.config.get("UPLOAD_FOLDER")) and upload.exists() and os.access(upload, os.W_OK), "error", str(upload), "挂载持久化 uploads 卷，并确保应用容器有写权限。")
+    add("backup_dir", "文件存储", "备份目录可用", bool(current_app.config.get("BACKUP_FOLDER")) and backup.exists() and os.access(backup, os.W_OK), "error", str(backup), "配置 BACKUP_FOLDER 并挂载持久化 backups 卷。")
+    add("rate_limit", "安全配置", "接口限流开启", current_app.config.get("RATE_LIMIT_ENABLED", True), "error", f"RATE_LIMIT_ENABLED={current_app.config.get('RATE_LIMIT_ENABLED')}", "生产环境保持 RATE_LIMIT_ENABLED=true。")
+    add("security_headers", "安全配置", "安全响应头开启", current_app.config.get("SECURITY_HEADERS_ENABLED", True), "error", f"SECURITY_HEADERS_ENABLED={current_app.config.get('SECURITY_HEADERS_ENABLED')}", "生产环境保持 SECURITY_HEADERS_ENABLED=true。")
+    add("llm_key", "AI 能力", "大模型密钥可用", (not llm_enabled) or bool(current_app.config.get("DEEPSEEK_API_KEY")), "error", "启用大模型时必须配置生产 DeepSeek Key。", "配置 DeepSeek Key，并确认旧 Key 已轮换。")
+    add("llm_budget", "AI 能力", "AI 调用预算阈值", (not llm_enabled) or current_app.config.get("LLM_DAILY_CALL_LIMIT", 0) > 0 or current_app.config.get("LLM_DAILY_COST_LIMIT_USD", 0) > 0, "warning", f"daily_calls={current_app.config.get('LLM_DAILY_CALL_LIMIT')}; daily_cost={current_app.config.get('LLM_DAILY_COST_LIMIT_USD')}", "设置 LLM_DAILY_CALL_LIMIT 或 LLM_DAILY_COST_LIMIT_USD。")
+    add("speech_asr", "AI 面试", "语音识别策略明确", (not asr_enabled) or bool(current_app.config.get("SPEECH_ASR_API_URL")) or current_app.config.get("SPEECH_PROVIDER") == "browser", "warning", f"provider={current_app.config.get('SPEECH_PROVIDER')}; asr_api={'configured' if current_app.config.get('SPEECH_ASR_API_URL') else 'browser-only'}", "正式全自动面试建议接入服务端 ASR；仅网页浏览器识别时需在候选人须知中说明。")
+    add("speech_tts", "AI 面试", "语音合成策略明确", (not tts_enabled) or bool(current_app.config.get("SPEECH_TTS_API_URL")) or current_app.config.get("SPEECH_PROVIDER") == "browser", "warning", f"provider={current_app.config.get('SPEECH_PROVIDER')}; tts_api={'configured' if current_app.config.get('SPEECH_TTS_API_URL') else 'browser-only'}", "正式真人播报建议接入服务端 TTS；浏览器播报作为兜底。")
+
+    errors = sum(1 for gate in gates if not gate["ok"] and gate["severity"] == "error")
+    warnings = sum(1 for gate in gates if not gate["ok"] and gate["severity"] == "warning")
+    return {
+        "ready": errors == 0,
+        "summary": {"errors": errors, "warnings": warnings, "total": len(gates)},
+        "gates": gates,
+    }
 
 
 def build_data_quality_report():

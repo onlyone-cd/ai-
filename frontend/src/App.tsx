@@ -34,7 +34,7 @@ import {
   Users,
   X
 } from "lucide-react";
-import { api, AgentResponse, AiInterviewPlan, AuditLog, BackgroundTask, BiOverview, BossInboxItem, Candidate, clearToken, DataIntegrity, EmployeeAnalysis, EmployeeProfile, EmployeeRecommendation, InterviewAssignment, InterviewFeedback, InterviewMessage, InterviewSpeechStatus, Job, LLMUsageSummary, MatchResult, notify, OfferRecord, OpsBackupStatus, OpsDataQuality, OrganizationUnit, PipelineItem, PublicInterviewRoom, setToken, SkillTag, SystemReadiness, User } from "./lib/api";
+import { api, AgentResponse, AiInterviewPlan, AuditLog, BackgroundTask, BiOverview, BossInboxItem, Candidate, clearToken, DataIntegrity, EmployeeAnalysis, EmployeeProfile, EmployeeRecommendation, InterviewAssignment, InterviewFeedback, InterviewMessage, InterviewSpeechStatus, Job, LLMUsageSummary, MatchResult, notify, OfferRecord, OpsBackupStatus, OpsDataQuality, OpsDeployGates, OrganizationUnit, PipelineItem, PublicInterviewRoom, setToken, SkillTag, SystemReadiness, User } from "./lib/api";
 
 const stageLabels: Record<string, string> = {
   pending: "待处理",
@@ -2537,6 +2537,7 @@ function TasksPage({ setView }: { setView: (view: View) => void }) {
   const [busyId, setBusyId] = useState<number | null>(null);
   const [opsStatus, setOpsStatus] = useState<OpsBackupStatus | null>(null);
   const [dataQuality, setDataQuality] = useState<OpsDataQuality | null>(null);
+  const [deployGates, setDeployGates] = useState<OpsDeployGates | null>(null);
   const [opsBusy, setOpsBusy] = useState(false);
 
   async function load(nextStatus = status) {
@@ -2546,9 +2547,10 @@ function TasksPage({ setView }: { setView: (view: View) => void }) {
   }
 
   async function loadOps() {
-    const [statusData, qualityData] = await Promise.all([api.opsBackupStatus(), api.opsDataQuality()]);
+    const [statusData, qualityData, gateData] = await Promise.all([api.opsBackupStatus(), api.opsDataQuality(), api.opsDeployGates()]);
     setOpsStatus(statusData);
     setDataQuality(qualityData);
+    setDeployGates(gateData);
   }
 
   useEffect(() => {
@@ -2623,6 +2625,37 @@ function TasksPage({ setView }: { setView: (view: View) => void }) {
               <KpiMini label="预检" value={opsStatus.readiness.ready ? "可上线" : "需处理"} hint={`${opsStatus.readiness.summary.errors} 错误 / ${opsStatus.readiness.summary.warnings} 警告`} />
               <KpiMini label="迁移版本" value={opsStatus.migration.at_head ? "最新" : "未对齐"} hint={opsStatus.migration.current.join(", ") || "未记录"} />
               <KpiMini label="数据行数" value={totalRows} hint="全表合计，仅用于备份校验" />
+            </div>
+            <div className="design-card">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h3 className="font-semibold">上线部署门禁</h3>
+                  <p className="text-xs text-steel">生产环境启动前必须通过的配置、迁移、目录和 AI 能力检查。</p>
+                </div>
+                {deployGates && (
+                  <div className="flex flex-wrap gap-2">
+                    <span className={`badge ${deployGates.ready ? "success" : "danger"}`}>{deployGates.ready ? "门禁通过" : "门禁未通过"}</span>
+                    <span className="badge muted">{deployGates.summary.errors} 阻断 · {deployGates.summary.warnings} 警告</span>
+                  </div>
+                )}
+              </div>
+              {!deployGates ? (
+                <div className="mt-4"><AntSpin tip="正在读取部署门禁" /></div>
+              ) : (
+                <div className="mt-4 grid gap-2 md:grid-cols-2">
+                  {deployGates.gates.map((gate) => (
+                    <div className={`rounded-md border p-3 ${gate.ok ? "border-line bg-white" : gate.severity === "error" ? "border-red-200 bg-red-50" : "border-orange-200 bg-orange-50"}`} key={gate.key}>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className={`badge ${gate.ok ? "success" : gate.severity === "error" ? "danger" : "muted"}`}>{gate.ok ? "通过" : gate.severity === "error" ? "阻断" : "警告"}</span>
+                        <strong>{gate.title}</strong>
+                        <span className="badge muted">{gate.category}</span>
+                      </div>
+                      <p className="mt-2 text-xs text-steel">{gate.detail}</p>
+                      {!gate.ok && <p className="mt-1 text-xs text-ink">处理：{gate.action}</p>}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
             <div className="design-card">
               <div className="flex flex-wrap items-start justify-between gap-3">

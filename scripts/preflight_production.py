@@ -51,14 +51,23 @@ def main():
         with context:
             check_database_connection()
             status = migration_status()
+            from app.ops_service import build_deploy_gate_report
+
+            deploy_gates = build_deploy_gate_report(status)
             payload = {
                 "ok": True,
                 "environment": app.config.get("ENVIRONMENT"),
                 "database": app.config.get("SQLALCHEMY_DATABASE_URI", "").split("@")[-1],
                 "migration": status,
+                "deploy_gates": deploy_gates["summary"],
             }
             if args.require_migration_head and not status["at_head"]:
                 payload["ok"] = False
+                print(json.dumps(payload, ensure_ascii=False, indent=2))
+                return 2
+            if str(app.config.get("ENVIRONMENT") or "").lower() == "production" and deploy_gates["summary"]["errors"] > 0:
+                payload["ok"] = False
+                payload["failed_gates"] = [gate for gate in deploy_gates["gates"] if not gate["ok"] and gate["severity"] == "error"]
                 print(json.dumps(payload, ensure_ascii=False, indent=2))
                 return 2
             print(json.dumps(payload, ensure_ascii=False, indent=2))

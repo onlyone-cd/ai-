@@ -34,7 +34,7 @@ import {
   Users,
   X
 } from "lucide-react";
-import { api, AgentResponse, AiInterviewPlan, AuditLog, BackgroundTask, BiOverview, BossInboxItem, Candidate, clearToken, DataIntegrity, EmployeeAnalysis, EmployeeProfile, EmployeeRecommendation, InterviewAssignment, InterviewFeedback, InterviewMessage, InterviewSpeechStatus, Job, LLMUsageSummary, MatchResult, notify, OfferRecord, OpsBackupStatus, OpsDataQuality, OpsDeployGates, OrganizationUnit, PipelineItem, PublicInterviewRoom, setToken, SkillTag, SystemReadiness, User } from "./lib/api";
+import { api, AgentResponse, AiInterviewPlan, AuditLog, BackgroundTask, BiOverview, BossInboxItem, Candidate, clearToken, DataIntegrity, EmployeeAnalysis, EmployeeProfile, EmployeeRecommendation, InterviewAssignment, InterviewFeedback, InterviewMessage, InterviewSpeechStatus, Job, LLMUsageSummary, MatchResult, notify, OfferRecord, OpsBackupStatus, OpsDataQuality, OpsDeployGates, OrganizationUnit, PipelineItem, PublicInterviewRoom, setToken, SkillTag, User } from "./lib/api";
 
 const stageLabels: Record<string, string> = {
   pending: "待处理",
@@ -2191,13 +2191,11 @@ function BossPage() {
 function BiPage() {
   const [data, setData] = useState<BiOverview | null>(null);
   const [llmUsage, setLlmUsage] = useState<LLMUsageSummary | null>(null);
-  const [readiness, setReadiness] = useState<SystemReadiness | null>(null);
   const [dataIntegrity, setDataIntegrity] = useState<DataIntegrity | null>(null);
   const [periodDays, setPeriodDays] = useState(30);
   useEffect(() => {
     api.bi(periodDays).then(setData);
     api.llmUsage(periodDays).then(setLlmUsage).catch(() => setLlmUsage(null));
-    api.readiness().then(setReadiness).catch(() => setReadiness(null));
     api.dataIntegrity().then(setDataIntegrity).catch(() => setDataIntegrity(null));
   }, [periodDays]);
   if (!data) return <EmptyState icon={<BarChart3 size={22} />} text="正在加载 BI 数据" />;
@@ -2222,27 +2220,6 @@ function BiPage() {
           ))}
         </div>
       </div>
-
-      {readiness && (
-        <div className="design-card">
-          <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <h2 className="font-semibold">上线检查</h2>
-              <p className="text-xs text-steel">{readiness.environment} · {readiness.database} · {readiness.ready ? "关键项已通过" : `${readiness.summary.errors} 项需要处理`}</p>
-            </div>
-            <span className={`badge ${readiness.ready ? "" : "muted"}`}>{readiness.ready ? "可上线" : "待处理"}</span>
-          </div>
-          <div className="grid gap-2 md:grid-cols-2">
-            {readiness.checks.filter((item) => !item.ok).slice(0, 6).map((item) => (
-              <div className="rounded-md border border-line px-3 py-2 text-sm" key={item.key}>
-                <span className={item.severity === "error" ? "text-red-700" : "text-amber-700"}>{item.severity === "error" ? "阻塞" : "提醒"}</span>
-                <span className="ml-2 text-ink">{item.message}</span>
-              </div>
-            ))}
-            {readiness.checks.every((item) => item.ok) && <p className="text-sm text-steel">当前检查项全部通过。</p>}
-          </div>
-        </div>
-      )}
 
       {dataIntegrity && (
         <div className="design-card">

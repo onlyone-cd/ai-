@@ -1,5 +1,6 @@
 from . import db
 from .models import BackgroundTask, Candidate, CandidateTag, utcnow
+from .ops_service import create_backup_package
 from .resume_service import reparse_candidate
 
 
@@ -67,6 +68,8 @@ def run_task(task):
 def execute_task(task):
     if task.task_type == "resume_retry_parse":
         return run_resume_retry_parse(task)
+    if task.task_type == "backup_export":
+        return create_backup_package()
     raise ValueError(f"未知后台任务类型：{task.task_type}")
 
 

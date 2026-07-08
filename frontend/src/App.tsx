@@ -34,7 +34,7 @@ import {
   Users,
   X
 } from "lucide-react";
-import { api, AgentResponse, AiInterviewPlan, AuditLog, BackgroundTask, BiOverview, BossInboxItem, Candidate, clearToken, DataIntegrity, EmployeeAnalysis, EmployeeProfile, EmployeeRecommendation, InterviewAssignment, InterviewFeedback, InterviewMessage, InterviewSpeechStatus, Job, LLMUsageSummary, MatchResult, notify, OfferRecord, OrganizationUnit, PipelineItem, PublicInterviewRoom, setToken, SkillTag, SystemReadiness, User } from "./lib/api";
+import { api, AgentResponse, AiInterviewPlan, AuditLog, BackgroundTask, BiOverview, BossInboxItem, Candidate, clearToken, DataIntegrity, EmployeeAnalysis, EmployeeProfile, EmployeeRecommendation, InterviewAssignment, InterviewFeedback, InterviewMessage, InterviewSpeechStatus, Job, LLMUsageSummary, MatchResult, notify, OfferRecord, OpsBackupStatus, OrganizationUnit, PipelineItem, PublicInterviewRoom, setToken, SkillTag, SystemReadiness, User } from "./lib/api";
 
 const stageLabels: Record<string, string> = {
   pending: "待处理",
@@ -2535,6 +2535,8 @@ function TasksPage() {
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [status, setStatus] = useState("all");
   const [busyId, setBusyId] = useState<number | null>(null);
+  const [opsStatus, setOpsStatus] = useState<OpsBackupStatus | null>(null);
+  const [opsBusy, setOpsBusy] = useState(false);
 
   async function load(nextStatus = status) {
     const data = await api.tasks(nextStatus);
@@ -2542,8 +2544,14 @@ function TasksPage() {
     setCounts(data.status_counts || {});
   }
 
+  async function loadOps() {
+    const data = await api.opsBackupStatus();
+    setOpsStatus(data);
+  }
+
   useEffect(() => {
     load(status);
+    loadOps();
   }, [status]);
 
   async function retry(task: BackgroundTask) {
@@ -2556,8 +2564,19 @@ function TasksPage() {
     }
   }
 
+  async function createBackup() {
+    setOpsBusy(true);
+    try {
+      await api.createBackupExport();
+      await Promise.all([load(), loadOps()]);
+    } finally {
+      setOpsBusy(false);
+    }
+  }
+
   const statuses = ["all", "queued", "running", "succeeded", "failed"];
   const pagedTasks = useClientPagination(tasks, 20);
+  const totalRows = opsStatus ? Object.values(opsStatus.counts || {}).reduce((sum, value) => sum + Number(value || 0), 0) : 0;
 
   return (
     <section className="space-y-4">
@@ -2575,6 +2594,69 @@ function TasksPage() {
             刷新
           </button>
         </div>
+      </div>
+
+      <div className="data-panel">
+        <div className="data-panel-head">
+          <div>
+            <h2>上线运维</h2>
+            <p>备份、迁移、环境预检只做安全操作；生产覆盖迁移保留为人工确认命令。</p>
+          </div>
+          <button className="primary-button" disabled={opsBusy} onClick={createBackup}>
+            <Download size={17} />
+            {opsBusy ? "创建中" : "创建本地备份包"}
+          </button>
+        </div>
+        {!opsStatus ? (
+          <div className="p-4"><AntSpin tip="正在读取运维状态" /></div>
+        ) : (
+          <div className="space-y-4">
+            <div className="grid gap-3 md:grid-cols-4">
+              <KpiMini label="环境" value={opsStatus.environment} hint={opsStatus.database} />
+              <KpiMini label="预检" value={opsStatus.readiness.ready ? "可上线" : "需处理"} hint={`${opsStatus.readiness.summary.errors} 错误 / ${opsStatus.readiness.summary.warnings} 警告`} />
+              <KpiMini label="迁移版本" value={opsStatus.migration.at_head ? "最新" : "未对齐"} hint={opsStatus.migration.current.join(", ") || "未记录"} />
+              <KpiMini label="数据行数" value={totalRows} hint="全表合计，仅用于备份校验" />
+            </div>
+            <div className="grid gap-4 lg:grid-cols-[1fr_1.2fr]">
+              <div className="design-card">
+                <h3 className="font-semibold">存储位置</h3>
+                <div className="mt-3 grid gap-2 text-sm">
+                  <StatusLine label="上传目录" value={opsStatus.storage.upload_dir_exists ? opsStatus.storage.upload_dir : "目录不存在"} />
+                  <StatusLine label="备份目录" value={opsStatus.storage.backup_dir_exists ? opsStatus.storage.backup_dir : "目录不存在"} />
+                  <StatusLine label="迁移 Head" value={opsStatus.migration.heads.join(", ") || "-"} />
+                </div>
+              </div>
+              <div className="design-card">
+                <h3 className="font-semibold">生产迁移命令</h3>
+                <div className="mt-3 grid gap-2">
+                  <code className="block overflow-auto rounded-md bg-slate-950 p-3 text-xs text-white">{opsStatus.commands.production_preflight}</code>
+                  <code className="block overflow-auto rounded-md bg-slate-950 p-3 text-xs text-white">{opsStatus.commands.test_to_prod_migrate}</code>
+                  <p className="text-xs text-orange-700">{opsStatus.commands.restore_warning}</p>
+                </div>
+              </div>
+            </div>
+            <div className="design-card">
+              <h3 className="font-semibold">最近备份包</h3>
+              <div className="mt-3 grid gap-2">
+                {opsStatus.recent_packages.length === 0 && <EmptyState icon={<Database size={22} />} text="暂无备份包" />}
+                {opsStatus.recent_packages.map((item) => (
+                  <div className="data-row" key={item.path}>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <FileText size={16} className="text-mint" />
+                        <h3 className="truncate font-semibold">{item.filename}</h3>
+                        <span className="badge muted">{formatBytes(item.size_bytes)}</span>
+                        {item.format && <span className="badge success">{item.format}</span>}
+                      </div>
+                      <p className="mt-1 text-xs text-steel">{formatDateTime(item.modified_at)} · {item.path}</p>
+                    </div>
+                    <span className="badge">{item.uploads?.files || 0} 附件</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       <div className="data-panel">
@@ -4755,6 +4837,14 @@ function formatDateTime(value?: string) {
   return date.toLocaleString("zh-CN", { hour12: false });
 }
 
+function formatBytes(value?: number) {
+  const bytes = Number(value || 0);
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
+}
+
 function defaultDateTimeLocal() {
   const date = new Date();
   date.setDate(date.getDate() + 1);
@@ -4840,6 +4930,7 @@ function titleFor(view: View) {
 }
 
 function auditActionLabel(action: string) {
+  if (action === "view") return "查看";
   return {
     create: "创建",
     update: "更新",
@@ -4866,6 +4957,7 @@ function taskStatusLabel(status: string) {
 }
 
 function taskTypeLabel(type: string) {
+  if (type === "backup_export") return "全量备份导出";
   return {
     resume_retry_parse: "简历重新解析"
   }[type] || type;

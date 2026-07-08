@@ -289,6 +289,39 @@ export type DataIntegrity = {
   };
 };
 
+export type OpsBackupPackage = {
+  filename: string;
+  path: string;
+  kind: string;
+  size_bytes: number;
+  modified_at: string;
+  created_at?: string;
+  format?: string;
+  tables?: Record<string, number>;
+  uploads?: { files?: number; bytes?: number };
+  warning?: string;
+};
+
+export type OpsBackupStatus = {
+  environment: string;
+  database: string;
+  readiness: {
+    ready: boolean;
+    summary: { errors: number; warnings: number; total: number };
+    checks: SystemReadiness["checks"];
+  };
+  migration: { current: string[]; heads: string[]; at_head: boolean; available: boolean; error?: string };
+  storage: {
+    upload_dir: string;
+    upload_dir_exists: boolean;
+    backup_dir: string;
+    backup_dir_exists: boolean;
+  };
+  counts: Record<string, number>;
+  recent_packages: OpsBackupPackage[];
+  commands: Record<string, string>;
+};
+
 export type ResumeAttachment = {
   id: number;
   upload_batch_id: string;
@@ -553,6 +586,8 @@ export const api = {
     request<{ log: NotificationLog }>("/notifications/send-test", { method: "POST", body: JSON.stringify(payload) }),
   tasks: (status = "all") => request<{ items: BackgroundTask[]; status_counts: Record<string, number> }>(`/tasks?status=${status}`),
   retryTask: (id: number) => request<BackgroundTask>(`/tasks/${id}/retry`, { method: "POST" }),
+  opsBackupStatus: () => request<OpsBackupStatus>("/ops/backup/status"),
+  createBackupExport: () => request<{ task: BackgroundTask }>("/ops/backup/export", { method: "POST" }),
   interviewers: () => request<{ items: User[] }>("/users/interviewers"),
   createUser: (payload: { username: string; name: string; role: string; password: string }) =>
     request<User>("/users", { method: "POST", body: JSON.stringify(payload) }),

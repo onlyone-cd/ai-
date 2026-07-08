@@ -20,6 +20,7 @@ from .job_service import build_jd_structured, ensure_jd_structured, persist_matc
 from .llm_client import LLMError, chat_json, llm_available, llm_status
 from .matching import match_candidate
 from .models import AuditLog, BackgroundTask, BossAccount, BossDraft, BossSyncItem, BossSyncJob, Candidate, CandidateTag, EmployeeAnalysis, EmployeeCompensation, EmployeeProfile, EmployeeRecommendation, InterviewAssignment, InterviewFeedback, InterviewSpeechLog, Job, LLMUsage, Match, NotificationChannel, NotificationEvent, NotificationLog, OfferRecord, OrganizationUnit, PipelineStage, ResumeAttachment, UploadBatch, User, years_between
+from .ops_service import list_backup_packages, migration_status, storage_status, table_counts
 from .rbac import ROLES, role_permissions
 from .resume_service import ARCHIVE_EXTENSIONS, parse_and_save_archive, parse_and_save_resume, parse_and_save_text, reparse_candidate, rescan_attachment, resume_upload_dir
 from .responses import error, ok
@@ -262,6 +263,48 @@ def system_data_integrity(user):
             },
         }
     )
+
+
+@api.get("/ops/backup/status")
+@login_required
+@roles_required("admin", "manager")
+def ops_backup_status(user):
+    config_checks = production_config_checks(current_app)
+    error_count = sum(1 for item in config_checks if not item["ok"] and item["severity"] == "error")
+    warning_count = sum(1 for item in config_checks if not item["ok"] and item["severity"] == "warning")
+    storage = storage_status()
+    payload = {
+        "environment": current_app.config["ENVIRONMENT"],
+        "database": db.engine.dialect.name,
+        "readiness": {
+            "ready": error_count == 0,
+            "summary": {"errors": error_count, "warnings": warning_count, "total": len(config_checks)},
+            "checks": config_checks,
+        },
+        "migration": migration_status(),
+        "storage": storage,
+        "counts": table_counts(),
+        "recent_packages": list_backup_packages(),
+        "commands": {
+            "local_export": "python scripts/full_data_migration.py export",
+            "production_preflight": "python scripts/preflight_production.py --require-migration-head",
+            "test_to_prod_migrate": "python scripts/full_data_migration.py migrate --target-compose-file docker-compose.production.yml --target-env-file .env --apply --confirm-overwrite MIGRATE_ALL_DATA",
+            "restore_warning": "生产恢复会覆盖数据库和附件，请先人工确认备份包、停机窗口与回滚方案。",
+        },
+    }
+    audit_log(user, "view", "ops_backup", None, "backup_status")
+    db.session.commit()
+    return ok(payload)
+
+
+@api.post("/ops/backup/export")
+@login_required
+@roles_required("admin")
+def ops_backup_export(user):
+    task = enqueue_task("backup_export", {"requested_from": "ops_dashboard"}, created_by=user.id, max_attempts=1)
+    audit_log(user, "enqueue", "background_task", task.id, "backup_export")
+    db.session.commit()
+    return ok({"task": task.to_dict()}, "本地备份任务已加入后台队列")
 
 
 @api.get("/system/llm/usage")

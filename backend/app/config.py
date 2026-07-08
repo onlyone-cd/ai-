@@ -12,6 +12,7 @@ class Config:
     CORS_ORIGINS = os.getenv("CORS_ORIGINS", "*").split(",")
     SEED_DEMO_DATA = os.getenv("SEED_DEMO_DATA", "true").lower() == "true"
     UPLOAD_FOLDER = os.getenv("UPLOAD_FOLDER", "uploads")
+    BACKUP_FOLDER = os.getenv("BACKUP_FOLDER", "backups")
     MAX_CONTENT_LENGTH = int(os.getenv("MAX_CONTENT_LENGTH", str(16 * 1024 * 1024)))
     LLM_ENABLED = os.getenv("LLM_ENABLED", "true").lower() == "true"
     LLM_PROVIDER = os.getenv("LLM_PROVIDER", "deepseek")

@@ -177,6 +177,37 @@ def test_system_data_integrity_reports_counts_and_checks(client, admin_headers):
     assert "DEEPSEEK_API_KEY" not in json.dumps(data)
 
 
+def test_ops_backup_status_reports_safe_operational_state(client, admin_headers):
+    response = client.get("/api/ops/backup/status", headers=admin_headers)
+
+    assert response.status_code == 200
+    data = response.get_json()["data"]
+    assert {"environment", "database", "readiness", "migration", "storage", "recent_packages", "commands"} <= set(data)
+    assert "backup_dir" in data["storage"]
+    assert "DEEPSEEK_API_KEY" not in json.dumps(data)
+    assert "test-secret" not in json.dumps(data)
+
+
+def test_ops_backup_export_runs_as_background_task(app, client, admin_headers, tmp_path):
+    app.config["BACKUP_FOLDER"] = str(tmp_path)
+
+    response = client.post("/api/ops/backup/export", headers=admin_headers)
+
+    assert response.status_code == 200
+    task = response.get_json()["data"]["task"]
+    assert task["task_type"] == "backup_export"
+    assert task["status"] == "queued"
+
+    completed = run_next_task()
+    assert completed.id == task["id"]
+    assert completed.status == "succeeded"
+    package_path = completed.result["package"]
+    assert package_path.endswith(".zip")
+    with zipfile.ZipFile(package_path, "r") as archive:
+        assert "manifest.json" in archive.namelist()
+        assert "data.json" in archive.namelist()
+
+
 def test_notification_center_channel_event_and_logs(client, admin_headers):
     created = client.post(
         "/api/notifications/channels",

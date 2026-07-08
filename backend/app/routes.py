@@ -351,6 +351,42 @@ def retry_background_task(user, task_id):
 NOTIFICATION_CHANNEL_TYPES = {"email", "webhook", "wecom", "sms", "console"}
 DEFAULT_NOTIFICATION_EVENTS = [
     {
+        "event_type": "candidate_imported",
+        "name": "候选人入库通知",
+        "template_subject": "候选人入库：{candidate_name}",
+        "template_body": "已导入 {success_count} 位候选人，来源 {source}，失败 {failed_count} 位。",
+    },
+    {
+        "event_type": "job_matched",
+        "name": "岗位匹配完成通知",
+        "template_subject": "岗位匹配完成：{job_title}",
+        "template_body": "岗位 {job_title} 已完成匹配，产生 {match_count} 位候选人，最高分 {top_score}/100。",
+    },
+    {
+        "event_type": "pipeline_updated",
+        "name": "招聘流程推进通知",
+        "template_subject": "流程推进：{candidate_name} - {job_title}",
+        "template_body": "{candidate_name} 在 {job_title} 的流程已推进到 {stage_label}。",
+    },
+    {
+        "event_type": "interview_completed",
+        "name": "面试结果通知",
+        "template_subject": "面试完成：{candidate_name} - {job_title}",
+        "template_body": "{candidate_name} 的 {round_label} 已完成，结论 {decision}，评分 {rating}/5。",
+    },
+    {
+        "event_type": "offer_created",
+        "name": "Offer 创建通知",
+        "template_subject": "Offer 已创建：{candidate_name}",
+        "template_body": "{candidate_name} 的 {job_title} Offer 已创建，当前状态 {status}。",
+    },
+    {
+        "event_type": "boss_sync_completed",
+        "name": "BOSS 同步完成通知",
+        "template_subject": "BOSS 同步完成：{sync_type}",
+        "template_body": "BOSS {sync_type} 同步完成，状态 {status}，成功 {success_count} 条，失败 {failed_count} 条。",
+    },
+    {
         "event_type": "interview_scheduled",
         "name": "面试安排通知",
         "template_subject": "面试安排：{candidate_name} - {job_title}",
@@ -1354,6 +1390,17 @@ def upload_resume(user):
     message = f"已解析 {len(candidates)} 份简历"
     if errors:
         message += f"，失败 {len(errors)} 份"
+    emit_notification_event(
+        user,
+        "candidate_imported",
+        {
+            "candidate_name": candidates[0].name_masked if candidates else "",
+            "source": "upload",
+            "success_count": len(candidates),
+            "failed_count": len(errors),
+        },
+    )
+    db.session.commit()
     return ok(
         {
             "batch": batches[0].to_dict() if batches else None,
@@ -1552,6 +1599,16 @@ def run_job_match(user, job_id):
     if job.status != "active":
         return error("关闭岗位不能执行匹配，请先恢复岗位", "JOB_CLOSED", 409)
     results = persist_matches(db, job)
+    emit_notification_event(
+        user,
+        "job_matched",
+        {
+            "job_title": job.title,
+            "match_count": len(results),
+            "top_score": results[0]["score"] if results else 0,
+        },
+    )
+    db.session.commit()
     return ok({"job": job.to_dict(), "items": results}, "岗位匹配已完成")
 
 
@@ -1596,6 +1653,17 @@ def batch_pipeline(user, job_id):
         db.session.add(item)
         db.session.flush()
         created.append(item.to_dict())
+    for item in created:
+        emit_notification_event(
+            user,
+            "pipeline_updated",
+            {
+                "candidate_name": (item.get("candidate") or {}).get("name_masked", ""),
+                "job_title": (item.get("job") or {}).get("title", ""),
+                "stage": item.get("stage"),
+                "stage_label": stageLabels_backend(item.get("stage")),
+            },
+        )
     db.session.commit()
     return ok({"created": created, "skipped": skipped, "missing": missing}, "候选人流程已更新")
 
@@ -1642,6 +1710,19 @@ def move_pipeline(user):
         note=payload.get("note", "阶段推进"),
     )
     db.session.add(item)
+    db.session.flush()
+    candidate = db.session.get(Candidate, item.candidate_id)
+    job = db.session.get(Job, item.job_id)
+    emit_notification_event(
+        user,
+        "pipeline_updated",
+        {
+            "candidate_name": candidate.name_masked if candidate else "",
+            "job_title": job.title if job else "",
+            "stage": stage,
+            "stage_label": stageLabels_backend(stage),
+        },
+    )
     db.session.commit()
     return ok(item.to_dict(), "流程已推进")
 
@@ -1782,6 +1863,19 @@ def create_interview_assignment(user):
         )
     )
     audit_log(user, "create", "interview", assignment.id, candidate.name_masked, {"round": round_name, "interviewer": interviewer.name})
+    emit_notification_event(
+        user,
+        "interview_scheduled",
+        {
+            "candidate_name": candidate.name_masked,
+            "job_title": job.title,
+            "interviewer_name": interviewer.name,
+            "round": round_name,
+            "round_label": stageLabels_backend(round_name),
+            "scheduled_at": assignment.scheduled_at.isoformat() if assignment.scheduled_at else "",
+            "location": assignment.location or "",
+        },
+    )
     db.session.commit()
     return ok(assignment.to_dict(), "面试已安排")
 
@@ -1897,6 +1991,18 @@ def submit_interview_feedback(user):
         )
     )
     audit_log(user, "feedback", "interview", assignment.id, assignment.candidate.name_masked, {"decision": decision, "rating": rating})
+    emit_notification_event(
+        user,
+        "interview_completed",
+        {
+            "candidate_name": assignment.candidate.name_masked if assignment.candidate else "",
+            "job_title": assignment.job.title if assignment.job else "",
+            "round": assignment.round,
+            "round_label": stageLabels_backend(assignment.round),
+            "decision": decision,
+            "rating": rating,
+        },
+    )
     db.session.commit()
     return ok(feedback.to_dict(), "面试反馈已提交")
 
@@ -2011,6 +2117,16 @@ def create_offer(user):
     db.session.flush()
     push_offer_pipeline(offer, user.id, f"Offer 已创建：{offer_status_label(status)}")
     audit_log(user, "create", "offer", offer.id, offer.candidate.name_masked, {"status": status})
+    emit_notification_event(
+        user,
+        "offer_created",
+        {
+            "candidate_name": offer.candidate.name_masked if offer.candidate else "",
+            "job_title": offer.job.title if offer.job else "",
+            "status": offer_status_label(offer.status),
+            "city": offer.city or "",
+        },
+    )
     db.session.commit()
     return ok(offer.to_dict(), "Offer 已创建")
 
@@ -2044,6 +2160,17 @@ def update_offer(user, offer_id):
         return validation_error
     if offer.status != previous_status:
         push_offer_pipeline(offer, user.id, f"Offer 状态更新：{offer_status_label(offer.status)}")
+    if offer.status != previous_status:
+        emit_notification_event(
+            user,
+            "offer_status_changed",
+            {
+                "candidate_name": offer.candidate.name_masked if offer.candidate else "",
+                "job_title": offer.job.title if offer.job else "",
+                "previous_status": offer_status_label(previous_status),
+                "status": offer_status_label(offer.status),
+            },
+        )
     audit_log(user, "update", "offer", offer.id, offer.candidate.name_masked, {"status": offer.status})
     db.session.commit()
     return ok(offer.to_dict(), "Offer 已更新")
@@ -2429,6 +2556,19 @@ def finish_boss_sync_job(sync_job, success_count, failed_count, result=None, err
     return sync_job
 
 
+def emit_boss_sync_notification(user, sync_job):
+    return emit_notification_event(
+        user,
+        "boss_sync_completed",
+        {
+            "sync_type": sync_job.sync_type,
+            "status": sync_job.status,
+            "success_count": sync_job.success_count,
+            "failed_count": sync_job.failed_count,
+        },
+    )
+
+
 def import_boss_job_items(user, items, source="api", parent_sync_job_id=None):
     items = list(items or [])
     sync_job = create_boss_sync_job(user, "job_batch", source, {"items": items}, len(items), parent_sync_job_id)
@@ -2463,6 +2603,7 @@ def import_boss_job_items(user, items, source="api", parent_sync_job_id=None):
             errors.append(err)
             add_boss_sync_item(sync_job, "job", item, "failed", error_message=str(exc), external_id=external_id)
     finish_boss_sync_job(sync_job, len(imported), len(errors), {"imported_count": len(imported), "error_count": len(errors)})
+    emit_boss_sync_notification(user, sync_job)
     audit_log(user, "sync", "boss_jobs", sync_job.id, f"BOSS job batch #{sync_job.id}", {"success": len(imported), "failed": len(errors)})
     db.session.commit()
     return {"items": [job.to_dict() for job in imported], "errors": errors, "sync_job": sync_job.to_dict(detail=True)}
@@ -2605,6 +2746,18 @@ def import_boss_candidate_items(user, items, source="api", parent_sync_job_id=No
         imported.append(candidate.to_dict(detail=True))
         add_boss_sync_item(sync_job, "candidate", item, "succeeded", target_type="candidate", target_id=candidate.id, external_id=external_id)
     finish_boss_sync_job(sync_job, len(imported), len(errors), {"imported_count": len(imported), "error_count": len(errors)})
+    if imported:
+        emit_notification_event(
+            user,
+            "candidate_imported",
+            {
+                "candidate_name": imported[0].get("name_masked", ""),
+                "source": "boss",
+                "success_count": len(imported),
+                "failed_count": len(errors),
+            },
+        )
+    emit_boss_sync_notification(user, sync_job)
     audit_log(user, "sync", "boss_candidates", sync_job.id, f"BOSS candidate batch #{sync_job.id}", {"success": len(imported), "failed": len(errors)})
     db.session.commit()
     return {"items": imported, "errors": errors, "sync_job": sync_job.to_dict(detail=True)}
@@ -2683,6 +2836,7 @@ def import_boss_screen_resume_payload(user, payload, source="api", parent_sync_j
         message = "不是候选人简历内容，已跳过"
         add_boss_sync_item(sync_job, "candidate", payload, "failed", error_message=message)
         finish_boss_sync_job(sync_job, 0, 1, {"error_code": "PARSE_FAILED"}, message)
+        emit_boss_sync_notification(user, sync_job)
         audit_log(user, "sync", "boss_screen_resume", sync_job.id, f"BOSS screen resume #{sync_job.id}", {"success": 0, "failed": 1})
         db.session.commit()
         return {"sync_job": sync_job.to_dict(detail=True)}, {"message": message, "code": "PARSE_FAILED", "status": 400}
@@ -2695,6 +2849,7 @@ def import_boss_screen_resume_payload(user, payload, source="api", parent_sync_j
             message = "Job not found"
             add_boss_sync_item(sync_job, "candidate", payload, "failed", error_message=message)
             finish_boss_sync_job(sync_job, 0, 1, {"error_code": "NOT_FOUND"}, message)
+            emit_boss_sync_notification(user, sync_job)
             audit_log(user, "sync", "boss_screen_resume", sync_job.id, f"BOSS screen resume #{sync_job.id}", {"success": 0, "failed": 1})
             db.session.commit()
             return {"sync_job": sync_job.to_dict(detail=True)}, {"message": message, "code": "NOT_FOUND", "status": 404}
@@ -2704,6 +2859,7 @@ def import_boss_screen_resume_payload(user, payload, source="api", parent_sync_j
     except ValueError as exc:
         add_boss_sync_item(sync_job, "candidate", payload, "failed", error_message=str(exc))
         finish_boss_sync_job(sync_job, 0, 1, {"error_code": "PARSE_FAILED"}, str(exc))
+        emit_boss_sync_notification(user, sync_job)
         audit_log(user, "sync", "boss_screen_resume", sync_job.id, f"BOSS screen resume #{sync_job.id}", {"success": 0, "failed": 1})
         db.session.commit()
         return {"sync_job": sync_job.to_dict(detail=True)}, {"message": str(exc), "code": "PARSE_FAILED", "status": 400}
@@ -2716,6 +2872,17 @@ def import_boss_screen_resume_payload(user, payload, source="api", parent_sync_j
 
     add_boss_sync_item(sync_job, "candidate", payload, "succeeded", target_type="candidate", target_id=candidate.id, external_id=payload.get("external_id"))
     finish_boss_sync_job(sync_job, 1, 0, {"candidate_id": candidate.id, "batch_id": batch.id, "draft_id": draft.id if draft else None})
+    emit_notification_event(
+        user,
+        "candidate_imported",
+        {
+            "candidate_name": candidate.name_masked,
+            "source": "boss",
+            "success_count": 1,
+            "failed_count": 0,
+        },
+    )
+    emit_boss_sync_notification(user, sync_job)
     audit_log(user, "sync", "boss_screen_resume", sync_job.id, f"BOSS screen resume #{sync_job.id}", {"success": 1, "failed": 0})
     db.session.commit()
     return (
@@ -3822,6 +3989,18 @@ def save_public_interview_feedback(assignment, payload):
     feedback.comment = "\n".join(transcript_lines)
     assignment.status = "completed"
     db.session.add(PipelineStage(candidate_id=assignment.candidate_id, job_id=assignment.job_id, stage=assignment.round, updated_by=assignment.interviewer_id, note=f"AI 网页面试已完成，评分 {rating}/5"))
+    emit_notification_event(
+        assignment.interviewer,
+        "interview_completed",
+        {
+            "candidate_name": assignment.candidate.name_masked if assignment.candidate else "",
+            "job_title": assignment.job.title if assignment.job else "",
+            "round": assignment.round,
+            "round_label": stageLabels_backend(assignment.round),
+            "decision": "hold",
+            "rating": rating,
+        },
+    )
     db.session.commit()
     return feedback
 
@@ -4804,7 +4983,7 @@ def offer_status_label(status):
     }.get(status, status)
 
 
-def ensure_default_notification_events():
+def ensure_default_notification_events(commit=True):
     changed = False
     for payload in DEFAULT_NOTIFICATION_EVENTS:
         event = NotificationEvent.query.filter_by(event_type=payload["event_type"]).first()
@@ -4821,7 +5000,56 @@ def ensure_default_notification_events():
         )
         changed = True
     if changed:
-        db.session.commit()
+        if commit:
+            db.session.commit()
+        else:
+            db.session.flush()
+
+
+class SafeFormatDict(dict):
+    def __missing__(self, key):
+        return "{" + key + "}"
+
+
+def render_notification_template(template, context):
+    values = SafeFormatDict({key: "" if value is None else value for key, value in (context or {}).items()})
+    try:
+        return str(template or "").format_map(values)
+    except (KeyError, ValueError):
+        return str(template or "")
+
+
+def emit_notification_event(user, event_type, context=None, recipient=None, channel_id=None):
+    ensure_default_notification_events(commit=False)
+    context = context or {}
+    event = NotificationEvent.query.filter_by(event_type=event_type).first()
+    if not event:
+        return None
+    channel = resolve_notification_channel(channel_id or event.channel_id)
+    if not channel and not channel_id and event.channel_id:
+        channel = resolve_notification_channel()
+    recipient = str(recipient or context.get("recipient") or context.get("candidate_email") or "").strip()
+    if channel and not recipient:
+        recipient = str((channel.config_json or {}).get("default_recipient") or "").strip()
+    subject = render_notification_template(event.template_subject or event.name, context)
+    content = render_notification_template(event.template_body, context)
+    status = "sent" if event.enabled and channel else "skipped"
+    error_message = None
+    if not event.enabled:
+        error_message = "Notification event disabled"
+    elif not channel:
+        error_message = "No enabled notification channel"
+    return create_notification_log(
+        user=user,
+        channel=channel,
+        event_type=event_type,
+        recipient=recipient,
+        subject=subject,
+        content=content,
+        status=status,
+        response={"mode": "dry_run", "event_id": event.id, "context": context},
+        error=error_message,
+    )
 
 
 def apply_notification_event_payload(event, payload):

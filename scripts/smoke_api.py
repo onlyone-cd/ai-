@@ -159,6 +159,7 @@ def main():
             "mutating.pipeline",
             lambda: len(client.request("POST", f"/api/jobs/{temp['job_id']}/batch-pipeline", {"candidate_id": temp["candidate_id"], "stage": "pending"})["created"]),
         )
+        run_step(results, "mutating.business_notification_logs", lambda: client.request("GET", "/api/notifications/logs?event_type=candidate_imported")["total"])
 
     cleanup_errors: list[str] = []
     if args.mutating:

@@ -13,7 +13,7 @@ from app import create_app, db
 from app.config import Config
 from app.auth import verify_password
 from app.llm_client import chat_json
-from app.models import AuditLog, BackgroundTask, BossDraft, BossSyncJob, Candidate, CandidateTag, EmployeeProfile, InterviewAssignment, InterviewFeedback, Job, LLMUsage, Match, OfferRecord, OrganizationUnit, PipelineStage, User
+from app.models import AuditLog, BackgroundTask, BossDraft, BossSyncJob, Candidate, CandidateTag, EmployeeProfile, InterviewAssignment, InterviewFeedback, Job, LLMUsage, Match, NotificationLog, OfferRecord, OrganizationUnit, PipelineStage, User
 from app.task_service import run_next_task
 
 
@@ -213,6 +213,65 @@ def test_notification_center_channel_event_and_logs(client, admin_headers):
     updated = client.patch(f"/api/notifications/channels/{channel['id']}", headers=admin_headers, json={"enabled": False})
     assert updated.status_code == 200
     assert updated.get_json()["data"]["enabled"] is False
+
+
+def test_business_actions_emit_notification_logs(client, admin_headers):
+    channel_response = client.post(
+        "/api/notifications/channels",
+        headers=admin_headers,
+        json={"name": "Business Console", "channel_type": "console", "config": {"default_recipient": "hr@example.com"}},
+    )
+    assert channel_response.status_code == 200
+
+    imported = client.post(
+        "/api/boss/candidates/batch-import",
+        headers=admin_headers,
+        json={
+            "items": [
+                {
+                    "external_id": "notify-java",
+                    "raw_text": "Name: Notify Candidate\nPhone: 13922223333 notify@example.com\n4 years Java backend development experience, familiar with Spring Boot, MySQL and Redis.",
+                }
+            ]
+        },
+    )
+    assert imported.status_code == 200
+    candidate_id = imported.get_json()["data"]["items"][0]["id"]
+
+    assert client.post("/api/jobs/1/match", headers=admin_headers).status_code == 200
+    assert client.post("/api/jobs/1/batch-pipeline", headers=admin_headers, json={"candidate_id": candidate_id, "stage": "pending"}).status_code == 200
+
+    assignment_response = client.post(
+        "/api/interview/assignments",
+        headers=admin_headers,
+        json={"candidate_id": candidate_id, "job_id": 1, "interviewer_id": 2, "round": "interview_first", "scheduled_at": "2026-07-03T10:00:00"},
+    )
+    assert assignment_response.status_code == 200
+    assignment = assignment_response.get_json()["data"]
+    feedback = client.post(
+        "/api/interview/feedback",
+        headers=admin_headers,
+        json={"assignment_id": assignment["id"], "rating": 4, "decision": "pass", "strengths": "ok"},
+    )
+    assert feedback.status_code == 200
+
+    offer_response = client.post("/api/offers", headers=admin_headers, json={"candidate_id": candidate_id, "job_id": 1, "status": "draft"})
+    assert offer_response.status_code == 200
+    offer = offer_response.get_json()["data"]
+    assert client.patch(f"/api/offers/{offer['id']}", headers=admin_headers, json={"status": "sent"}).status_code == 200
+
+    event_types = {item.event_type for item in NotificationLog.query.all()}
+    assert {
+        "candidate_imported",
+        "boss_sync_completed",
+        "job_matched",
+        "pipeline_updated",
+        "interview_scheduled",
+        "interview_completed",
+        "offer_created",
+        "offer_status_changed",
+    } <= event_types
+    assert NotificationLog.query.filter_by(status="sent").count() >= 8
 
 
 def test_llm_chat_json_retries_transient_failure(app, monkeypatch):

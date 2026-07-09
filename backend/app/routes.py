@@ -16,7 +16,7 @@ from sqlalchemy.exc import IntegrityError
 
 from . import db, production_config_checks
 from .auth import hash_password, issue_token, login_required, roles_required, validate_password_strength, verify_password
-from .job_service import build_jd_structured, ensure_jd_structured, persist_matches, preview_matches
+from .job_service import ai_review_matches, build_jd_structured, ensure_jd_structured, persist_matches, preview_matches
 from .llm_client import LLMError, chat_json, llm_available, llm_status
 from .matching import match_candidate
 from .models import AuditLog, BackgroundTask, BossAccount, BossDraft, BossSyncItem, BossSyncJob, Candidate, CandidateTag, EmployeeAnalysis, EmployeeCompensation, EmployeeProfile, EmployeeRecommendation, InterviewAssignment, InterviewFeedback, InterviewSpeechLog, Job, LLMUsage, Match, NotificationChannel, NotificationEvent, NotificationLog, OfferRecord, OrganizationUnit, PipelineStage, ResumeAttachment, UploadBatch, User, years_between
@@ -3623,7 +3623,9 @@ def run_agent_tool(user, message, pending_action=None):
         results = []
         for job in jobs:
             job.jd_structured = ensure_jd_structured(job)
-            matches = preview_matches(job, limit=5)
+            matches = ai_review_matches(job, preview_matches(job, limit=8))
+            matches.sort(key=lambda item: item["score"], reverse=True)
+            matches = matches[:5]
             results.append({"job": job.to_dict(), "items": matches})
         db.session.commit()
         first = results[0]
@@ -4056,7 +4058,7 @@ def format_job_list(jobs):
 
 
 def format_match_results(results):
-    lines = ["已从人才库按岗位匹配最佳候选人（预览不写入匹配结果）："]
+    lines = ["已从人才库按岗位匹配最佳候选人（规则初排 + AI 复核，预览不写入匹配结果）："]
     for result in results:
         job = result["job"]
         best = result["items"][0] if result["items"] else None
@@ -4064,9 +4066,15 @@ def format_match_results(results):
             lines.append(f"- {job['title']}：暂无候选人。")
             continue
         candidate = best["candidate"]
+        reason = best.get("reason", {})
+        ai_review = reason.get("ai_review") or {}
         hits = "、".join(hit["candidate_tag"] for hit in best["reason"].get("hits", [])[:5]) or "暂无命中标签"
         missing = "、".join(best["reason"].get("missing_tags", [])[:3]) or "无明显缺失"
-        lines.append(f"- {job['title']}：最佳候选人 {candidate['name_masked']}，匹配分 {best['score']}。命中：{hits}；缺失：{missing}。")
+        if ai_review.get("source") == "deepseek":
+            ai_summary = ai_review.get("summary") or "AI 已阅读 JD 和完整简历后给出综合判断"
+            lines.append(f"- {job['title']}：最佳候选人 {candidate['name_masked']}，综合匹配分 {best['score']}（AI {reason.get('ai_score', best['score'])}/100，规则 {reason.get('rule_score', best['score'])}/100）。AI判断：{ai_summary}。命中：{hits}；缺失：{missing}。")
+        else:
+            lines.append(f"- {job['title']}：最佳候选人 {candidate['name_masked']}，规则匹配分 {best['score']}。命中：{hits}；缺失：{missing}。")
     return "\n".join(lines)
 
 

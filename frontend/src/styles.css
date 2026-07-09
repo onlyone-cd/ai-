@@ -59,7 +59,10 @@ textarea {
   }
 
   .ant-menu-dark .ant-menu-item {
-    @apply my-1 rounded-md text-slate-300;
+    @apply my-0.5 rounded-md text-slate-300;
+    height: 42px !important;
+    line-height: 42px !important;
+    padding-left: 22px !important;
   }
 
   .ant-menu-dark .ant-menu-item-selected {
@@ -725,7 +728,7 @@ textarea {
   }
 
   .talent-page {
-    @apply mx-auto grid max-w-[1360px] gap-0 overflow-hidden rounded-lg border border-line bg-white shadow-panel xl:grid-cols-[288px_minmax(0,1fr)];
+    @apply mx-auto grid w-full max-w-none gap-0 overflow-hidden rounded-lg border border-line bg-white shadow-panel xl:grid-cols-[240px_minmax(0,1fr)];
     box-shadow: 0 14px 40px rgba(15, 23, 42, 0.08);
   }
 
@@ -739,7 +742,7 @@ textarea {
   }
 
   .talent-filter {
-    @apply space-y-5 border-b border-line p-5 xl:border-b-0 xl:border-r;
+    @apply space-y-4 border-b border-line p-4 xl:border-b-0 xl:border-r;
     background: linear-gradient(180deg, #ffffff 0%, #f7faff 100%);
   }
 
@@ -768,7 +771,7 @@ textarea {
   }
 
   .talent-experience-grid button {
-    @apply rounded-md border border-line bg-white px-3 py-2 text-xs font-medium text-steel transition hover:border-mint hover:text-mint;
+    @apply rounded-md border border-line bg-white px-2 py-2 text-xs font-medium text-steel transition hover:border-mint hover:text-mint;
   }
 
   .talent-experience-grid button.active {
@@ -780,15 +783,15 @@ textarea {
   }
 
   .talent-toolbar {
-    @apply flex flex-col gap-3 border-b border-line p-4 md:flex-row md:items-center;
+    @apply flex flex-col gap-3 border-b border-line p-3 md:flex-row md:items-center;
   }
 
   .talent-title-row {
-    @apply flex flex-col gap-3 p-6 md:flex-row md:items-end md:justify-between;
+    @apply flex flex-col gap-3 px-4 py-4 md:flex-row md:items-end md:justify-between;
   }
 
   .talent-title-row h1 {
-    @apply text-3xl font-bold text-ink;
+    @apply text-2xl font-bold text-ink;
   }
 
   .talent-title-row p,
@@ -797,7 +800,7 @@ textarea {
   }
 
   .talent-summary-grid {
-    @apply grid gap-4 px-6 pb-4 sm:grid-cols-2 xl:grid-cols-4;
+    @apply grid gap-3 px-4 pb-3 sm:grid-cols-2 xl:grid-cols-4;
   }
 
   .talent-match-panel {
@@ -809,12 +812,12 @@ textarea {
   }
 
   .talent-list-card {
-    @apply mx-4 mb-5 overflow-hidden rounded-lg border border-line bg-white md:mx-6;
+    @apply mx-4 mb-4 overflow-hidden rounded-lg border border-line bg-white;
   }
 
   .talent-list-head,
   .talent-row {
-    @apply grid gap-3 border-b border-line px-4 py-3 xl:grid-cols-[minmax(220px,1.1fr)_minmax(300px,1.45fr)_minmax(180px,0.8fr)_120px];
+    @apply grid gap-3 border-b border-line px-4 py-3 xl:grid-cols-[minmax(210px,0.95fr)_minmax(330px,1.5fr)_minmax(160px,0.65fr)_104px];
   }
 
   .talent-list-head {
@@ -855,7 +858,7 @@ textarea {
 
   .talent-actions .secondary-button,
   .talent-actions .primary-button {
-    @apply min-h-9 justify-center px-3 py-2 text-sm;
+    @apply min-h-9 justify-center px-2.5 py-2 text-sm;
   }
 
   @media (max-width: 1279px) {

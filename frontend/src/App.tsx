@@ -121,10 +121,10 @@ function App() {
 
   return (
     <AntLayout className="min-h-screen bg-slate-50 text-ink">
-      <AntLayout.Sider width={256} className="fixed inset-y-0 left-0 z-10 hidden border-r border-slate-800 bg-slate-950 lg:block">
-        <div className="flex h-16 items-center gap-3 border-b border-white/10 px-5">
-          <div className="grid h-9 w-9 place-items-center rounded-md bg-white text-mint">
-            <Sparkles size={18} />
+      <AntLayout.Sider width={216} className="fixed inset-y-0 left-0 z-10 hidden border-r border-slate-800 bg-slate-950 lg:block">
+        <div className="flex h-14 items-center gap-2.5 border-b border-white/10 px-4">
+          <div className="grid h-8 w-8 place-items-center rounded-md bg-white text-mint">
+            <Sparkles size={17} />
           </div>
           <div>
             <div className="text-sm font-semibold text-white">HireInsight</div>
@@ -132,7 +132,7 @@ function App() {
           </div>
         </div>
         <AntMenu
-          className="border-0 bg-transparent p-3"
+          className="border-0 bg-transparent p-2"
           items={navItems.map((item) => ({ ...item, label: <span data-testid={`nav-${item.key}`}>{item.label}</span> }))}
           mode="inline"
           selectedKeys={[view]}
@@ -141,8 +141,8 @@ function App() {
         />
       </AntLayout.Sider>
 
-      <AntLayout className="min-h-screen bg-slate-50 lg:pl-64">
-        <AntLayout.Header className="sticky top-0 z-10 flex h-16 items-center justify-between border-b border-line bg-white/90 px-4 leading-normal backdrop-blur lg:px-8">
+      <AntLayout className="min-h-screen bg-slate-50 lg:pl-[216px]">
+        <AntLayout.Header className="sticky top-0 z-10 flex h-14 items-center justify-between border-b border-line bg-white/90 px-4 leading-normal backdrop-blur lg:px-5">
           <div>
             <h1 className="text-base font-semibold">{titleFor(view)}</h1>
             <p className="text-xs text-steel">规则口径：标签证据、匹配公式、经验档位、BOSS 半自动</p>
@@ -164,7 +164,7 @@ function App() {
           </div>
         </AntLayout.Header>
 
-        <AntLayout.Content className="app-content p-4 lg:p-8" data-testid="app-content">
+        <AntLayout.Content className="app-content p-3 lg:p-5" data-testid="app-content">
           <MobileTabs view={view} setView={setView} isAdmin={user.role === "admin"} canUseTasks={user.role !== "interviewer"} />
           {view === "candidates" && <CandidatesPage />}
           {view === "organization" && <InternalTalentPage />}

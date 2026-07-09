@@ -10,6 +10,7 @@ body {
   margin: 0;
   color: #111827;
   background: #f5f7fb;
+  font-size: 13px;
   font-family: Inter, "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
 }
@@ -42,7 +43,7 @@ textarea {
   }
 
   .app-content > section:not(.talent-page):not(.resume-page):not(.agent-chat-page):not(.design-page) {
-    @apply mx-auto max-w-[1280px];
+    @apply mx-auto max-w-[1360px];
   }
 
   .ant-layout,
@@ -60,10 +61,10 @@ textarea {
 
   .ant-menu-dark .ant-menu-item {
     @apply my-0.5 rounded-md text-slate-300;
-    height: 38px !important;
-    line-height: 38px !important;
-    padding-left: 18px !important;
-    font-size: 13px !important;
+    height: 34px !important;
+    line-height: 34px !important;
+    padding-left: 14px !important;
+    font-size: 12px !important;
   }
 
   .ant-menu-dark .ant-menu-item-selected {
@@ -161,13 +162,13 @@ textarea {
   }
 
   .input {
-    @apply w-full rounded-md border border-line bg-white px-3 py-2 text-sm outline-none transition placeholder:text-slate-400 hover:border-mint focus:border-mint focus:ring-2 focus:ring-mint/15;
-    min-height: 36px;
+    @apply w-full rounded-md border border-line bg-white px-2.5 py-1.5 text-sm outline-none transition placeholder:text-slate-400 hover:border-mint focus:border-mint focus:ring-2 focus:ring-mint/15;
+    min-height: 32px;
   }
 
   .select {
-    @apply rounded-md border border-line bg-white px-3 py-2 text-sm outline-none transition hover:border-mint focus:border-mint focus:ring-2 focus:ring-mint/15;
-    min-height: 36px;
+    @apply rounded-md border border-line bg-white px-2.5 py-1.5 text-sm outline-none transition hover:border-mint focus:border-mint focus:ring-2 focus:ring-mint/15;
+    min-height: 32px;
   }
 
   .field-label {
@@ -200,18 +201,18 @@ textarea {
   }
 
   .primary-button {
-    @apply inline-flex items-center justify-center gap-2 rounded-md bg-mint px-3 py-2 text-sm font-semibold text-white shadow-sm transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-50;
+    @apply inline-flex items-center justify-center gap-2 rounded-md bg-mint px-2.5 py-1.5 text-sm font-semibold text-white shadow-sm transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-50;
     box-shadow: 0 6px 14px rgba(22, 119, 255, 0.24);
-    min-height: 36px;
+    min-height: 32px;
   }
 
   .secondary-button {
-    @apply inline-flex items-center justify-center gap-2 rounded-md border border-line bg-white px-3 py-2 text-sm font-semibold text-ink shadow-sm transition hover:border-mint hover:text-mint;
-    min-height: 36px;
+    @apply inline-flex items-center justify-center gap-2 rounded-md border border-line bg-white px-2.5 py-1.5 text-sm font-semibold text-ink shadow-sm transition hover:border-mint hover:text-mint;
+    min-height: 32px;
   }
 
   .icon-button {
-    @apply grid h-8 w-8 place-items-center rounded-md border border-line bg-white text-steel shadow-sm transition hover:border-slate-300 hover:bg-slate-50 hover:text-ink;
+    @apply grid h-7 w-7 place-items-center rounded-md border border-line bg-white text-steel shadow-sm transition hover:border-slate-300 hover:bg-slate-50 hover:text-ink;
   }
 
   .modal-backdrop {
@@ -274,12 +275,12 @@ textarea {
   }
 
   .toolbar {
-    @apply flex flex-col gap-3 rounded-lg border border-line bg-white p-3 shadow-panel sm:flex-row sm:items-center sm:justify-between;
+    @apply flex flex-col gap-2 rounded-lg border border-line bg-white p-2.5 shadow-panel sm:flex-row sm:items-center sm:justify-between;
     box-shadow: 0 10px 30px rgba(15, 23, 42, 0.07);
   }
 
   .row-card {
-    @apply flex items-center justify-between gap-4 rounded-lg border border-line bg-white p-3 shadow-panel transition hover:border-mint hover:shadow-md;
+    @apply flex items-center justify-between gap-3 rounded-lg border border-line bg-white p-2.5 shadow-panel transition hover:border-mint hover:shadow-md;
     box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
   }
 
@@ -306,7 +307,7 @@ textarea {
   }
 
   .badge {
-    @apply rounded-md bg-blue-50 px-2 py-1 text-xs font-semibold text-blue-700;
+    @apply rounded-md bg-blue-50 px-1.5 py-0.5 text-xs font-semibold text-blue-700;
   }
 
   .badge.muted {
@@ -322,7 +323,7 @@ textarea {
   }
 
   .chip {
-    @apply rounded-md border border-blue-100 bg-blue-50/60 px-2 py-1 text-xs text-blue-700;
+    @apply rounded-md border border-blue-100 bg-blue-50/60 px-1.5 py-0.5 text-xs text-blue-700;
   }
 
   .chip.muted {
@@ -330,7 +331,7 @@ textarea {
   }
 
   .data-panel {
-    @apply rounded-lg border border-line bg-white p-3 shadow-panel;
+    @apply rounded-lg border border-line bg-white p-2.5 shadow-panel;
     box-shadow: 0 10px 30px rgba(15, 23, 42, 0.06);
   }
 
@@ -348,12 +349,12 @@ textarea {
 
   .data-list {
     @apply mt-3 grid gap-2 overflow-auto pr-1;
-    max-height: min(62vh, 620px);
+    max-height: min(58vh, 560px);
   }
 
   .data-row {
-    @apply flex items-center justify-between gap-3 rounded-md border border-line bg-white px-3 py-2.5 text-left transition hover:border-mint hover:bg-blue-50/20;
-    min-height: 64px;
+    @apply flex items-center justify-between gap-2.5 rounded-md border border-line bg-white px-2.5 py-2 text-left transition hover:border-mint hover:bg-blue-50/20;
+    min-height: 54px;
   }
 
   .data-row.active {
@@ -734,25 +735,33 @@ textarea {
   }
 
   .pipeline-board {
-    @apply grid grid-flow-col gap-3 overflow-x-auto pb-3;
-    grid-auto-columns: minmax(260px, 280px);
+    @apply grid grid-flow-col gap-2.5 overflow-x-auto pb-2;
+    grid-auto-columns: minmax(230px, 250px);
     align-items: start;
     overscroll-behavior-x: contain;
   }
 
   .pipeline-column {
-    @apply rounded-lg border border-line bg-white p-2.5 shadow-panel;
+    @apply rounded-lg border border-line bg-white p-2 shadow-panel;
     min-width: 0;
-    min-height: 18rem;
+    min-height: 16rem;
   }
 
   .pipeline-column-list {
     @apply space-y-2 overflow-y-auto pr-1;
-    max-height: min(58vh, 520px);
+    max-height: min(52vh, 460px);
   }
 
   .pipeline-card {
-    @apply rounded-md border border-line bg-white p-2.5 text-sm transition hover:border-mint hover:bg-blue-50/20;
+    @apply rounded-md border border-line bg-white p-2 text-sm transition hover:border-mint hover:bg-blue-50/20;
+  }
+
+  .pipeline-source-summary {
+    @apply hidden items-center gap-1 rounded-md border border-line bg-slate-50 px-2 py-1 text-xs text-steel xl:flex;
+  }
+
+  .pipeline-source-summary span {
+    @apply rounded bg-white px-1.5 py-0.5;
   }
 
   .pipeline-card .chip,
@@ -780,7 +789,7 @@ textarea {
 
   @media (max-width: 640px) {
     .pipeline-board {
-      grid-auto-columns: minmax(240px, 82vw);
+      grid-auto-columns: minmax(230px, 82vw);
     }
   }
 
@@ -960,24 +969,24 @@ textarea {
   }
 
   .talent-title-row {
-    @apply flex flex-col gap-3 px-4 py-4 md:flex-row md:items-end md:justify-between;
+    @apply flex flex-col gap-2 px-3 py-3 md:flex-row md:items-end md:justify-between;
   }
 
   .talent-title-row h1 {
-    @apply text-2xl font-bold text-ink;
+    @apply text-xl font-bold text-ink;
   }
 
   .talent-title-row p,
   .talent-title-row span {
-    @apply mt-2 text-sm text-steel;
+    @apply mt-1 text-xs text-steel;
   }
 
   .talent-summary-grid {
-    @apply grid gap-3 px-4 pb-3 sm:grid-cols-2 xl:grid-cols-4;
+    @apply grid gap-2 px-3 pb-2 sm:grid-cols-2 xl:grid-cols-4;
   }
 
   .talent-match-panel {
-    @apply mx-6 mb-4 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900;
+    @apply mx-3 mb-3 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-900;
   }
 
   .talent-match-panel p {
@@ -985,12 +994,12 @@ textarea {
   }
 
   .talent-list-card {
-    @apply mx-4 mb-4 overflow-hidden rounded-lg border border-line bg-white;
+    @apply mx-3 mb-3 overflow-hidden rounded-lg border border-line bg-white;
   }
 
   .talent-list-head,
   .talent-row {
-    @apply grid gap-3 border-b border-line px-4 py-3 xl:grid-cols-[minmax(210px,0.95fr)_minmax(330px,1.5fr)_minmax(160px,0.65fr)_104px];
+    @apply grid gap-2.5 border-b border-line px-3 py-2.5 xl:grid-cols-[minmax(190px,0.9fr)_minmax(300px,1.5fr)_minmax(150px,0.65fr)_96px];
   }
 
   .talent-list-head {
@@ -999,11 +1008,11 @@ textarea {
 
   .talent-row {
     @apply items-center bg-white;
-    min-height: 112px;
+    min-height: 88px;
   }
 
   .talent-person {
-    @apply flex gap-3;
+    @apply flex gap-2.5;
   }
 
   .talent-person h3 {
@@ -1016,8 +1025,8 @@ textarea {
   }
 
   .tag-list-compact {
-    @apply mt-2 flex flex-wrap gap-1.5;
-    max-height: 56px;
+    @apply mt-1.5 flex flex-wrap gap-1;
+    max-height: 44px;
     overflow: hidden;
   }
 
@@ -1031,7 +1040,7 @@ textarea {
 
   .talent-actions .secondary-button,
   .talent-actions .primary-button {
-    @apply min-h-9 justify-center px-2.5 py-2 text-sm;
+    @apply min-h-8 justify-center px-2 py-1.5 text-xs;
   }
 
   @media (max-width: 1279px) {

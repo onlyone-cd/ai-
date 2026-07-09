@@ -780,7 +780,7 @@ export const api = {
   batchPipeline: (jobId: number, payload: { candidate_ids?: number[]; candidate_id?: number; stage?: string; note?: string }) =>
     request<{ created: PipelineItem[]; skipped: { candidate_id: number; stage: string }[]; missing: number[] }>(`/jobs/${jobId}/batch-pipeline`, { method: "POST", body: JSON.stringify(payload) }),
   pipeline: (jobId?: number | null) =>
-    request<{ scope?: string; job_id?: number | null; total?: number; stages: string[]; stage_counts?: Record<string, number>; job_counts?: Record<string, number>; columns: Record<string, PipelineItem[]> }>(
+    request<{ scope?: string; job_id?: number | null; total?: number; stages: string[]; stage_counts?: Record<string, number>; job_counts?: Record<string, number>; source_counts?: Record<string, number>; columns: Record<string, PipelineItem[]> }>(
       jobId ? `/pipeline/${jobId}/board` : "/pipeline/board"
     ),
   pipelineHistory: (jobId: number, candidateId: number) => request<{ items: PipelineItem[] }>(`/pipeline/${jobId}/history/${candidateId}`),

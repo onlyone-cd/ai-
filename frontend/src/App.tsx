@@ -121,8 +121,8 @@ function App() {
 
   return (
     <AntLayout className="min-h-screen bg-slate-50 text-ink">
-      <AntLayout.Sider width={192} className="fixed inset-y-0 left-0 z-10 hidden border-r border-slate-800 bg-slate-950 lg:block">
-        <div className="flex h-14 items-center gap-2.5 border-b border-white/10 px-4">
+        <AntLayout.Sider width={176} className="fixed inset-y-0 left-0 z-10 hidden border-r border-slate-800 bg-slate-950 lg:block">
+        <div className="flex h-12 items-center gap-2 border-b border-white/10 px-3">
           <div className="grid h-8 w-8 place-items-center rounded-md bg-white text-mint">
             <Sparkles size={17} />
           </div>
@@ -141,8 +141,8 @@ function App() {
         />
       </AntLayout.Sider>
 
-      <AntLayout className="min-h-screen bg-slate-50 lg:pl-[192px]">
-        <AntLayout.Header className="sticky top-0 z-10 flex h-14 items-center justify-between border-b border-line bg-white/90 px-4 leading-normal backdrop-blur lg:px-5">
+      <AntLayout className="min-h-screen bg-slate-50 lg:pl-[176px]">
+        <AntLayout.Header className="sticky top-0 z-10 flex h-12 items-center justify-between border-b border-line bg-white/90 px-3 leading-normal backdrop-blur lg:px-4">
           <div>
             <h1 className="text-base font-semibold">{titleFor(view)}</h1>
             <p className="text-xs text-steel">规则口径：标签证据、匹配公式、经验档位、BOSS 半自动</p>
@@ -164,7 +164,7 @@ function App() {
           </div>
         </AntLayout.Header>
 
-        <AntLayout.Content className="app-content p-3 lg:p-4" data-testid="app-content">
+        <AntLayout.Content className="app-content p-2.5 lg:p-3" data-testid="app-content">
           <MobileTabs view={view} setView={setView} isAdmin={user.role === "admin"} canUseTasks={user.role !== "interviewer"} />
           {view === "candidates" && <CandidatesPage />}
           {view === "organization" && <InternalTalentPage />}
@@ -1100,13 +1100,13 @@ function RequirementList({ title, items }: { title: string; items: string[] }) {
 function PipelinePage() {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [jobId, setJobId] = useState<number | null>(null);
-  const [board, setBoard] = useState<{ scope?: string; job_id?: number | null; total?: number; stages: string[]; stage_counts?: Record<string, number>; job_counts?: Record<string, number>; columns: Record<string, PipelineItem[]> } | null>(null);
+  const [board, setBoard] = useState<{ scope?: string; job_id?: number | null; total?: number; stages: string[]; stage_counts?: Record<string, number>; job_counts?: Record<string, number>; source_counts?: Record<string, number>; columns: Record<string, PipelineItem[]> } | null>(null);
   const [historyTarget, setHistoryTarget] = useState<PipelineItem | null>(null);
   const [history, setHistory] = useState<PipelineItem[]>([]);
   const [notes, setNotes] = useState<Record<number, string>>({});
   const [message, setMessage] = useState("");
   const [query, setQuery] = useState("");
-  const [sourceFilter, setSourceFilter] = useState("all");
+  const [sourceFilter, setSourceFilter] = useState("interview");
 
   useEffect(() => {
     api.jobs().then((data) => {
@@ -1186,13 +1186,14 @@ function PipelinePage() {
   const totals = board?.total ?? (board?.stages.reduce((sum, stage) => sum + (board.columns[stage]?.length || 0), 0) || 0);
   const visibleTotal = board?.stages.reduce((sum, stage) => sum + visibleItems(stage).length, 0) || 0;
   const selectedJob = jobs.find((job) => job.id === jobId);
+  const sourceCounts = board?.source_counts || {};
 
   return (
     <section className="space-y-5">
       <div className="toolbar">
         <div>
           <h2 className="font-semibold">流程看板</h2>
-          <p className="text-xs text-steel">{selectedJob ? `当前筛选岗位：${selectedJob.title}` : "默认显示全部岗位"} · 流程候选人 {totals} 人，当前筛选 {visibleTotal} 人</p>
+          <p className="text-xs text-steel">{selectedJob ? `当前筛选岗位：${selectedJob.title}` : "默认显示全部招聘岗位"} · 默认只看面试安排 {visibleTotal} 人，完整流程 {totals} 人</p>
         </div>
         <select className="select" value={jobId ?? ""} onChange={(event) => setJobId(event.target.value ? Number(event.target.value) : null)}>
           <option value="">全部岗位</option>
@@ -1206,6 +1207,12 @@ function PipelinePage() {
             <option value="offer">Offer</option>
             <option value="onboarding">入职</option>
           </select>
+          <div className="pipeline-source-summary">
+            <span>面试 {sourceCounts.interview || 0}</span>
+            <span>手动 {sourceCounts.manual || 0}</span>
+            <span>Offer {sourceCounts.offer || 0}</span>
+            <span>入职 {sourceCounts.onboarding || 0}</span>
+          </div>
           <div className="relative">
             <Search className="pointer-events-none absolute left-3 top-2.5 text-steel" size={17} />
             <input className="input w-56 pl-9" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索候选人、岗位、备注" />

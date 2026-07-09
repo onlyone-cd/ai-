@@ -1350,6 +1350,9 @@ def test_interview_assignment_pushes_pipeline_stage(client, admin_headers):
     stages = [item["stage"] for item in history.get_json()["data"]["items"]]
     assert "interview_first" in stages
 
+    board = client.get("/api/pipeline/board?job_id=1", headers=admin_headers).get_json()["data"]
+    assert board["source_counts"]["interview"] >= 1
+
 
 def test_interview_round_update_cancel_and_delete_sync_pipeline(client, admin_headers):
     created = client.post(

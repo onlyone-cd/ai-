@@ -1872,9 +1872,12 @@ def pipeline_global_board(user):
 
 def pipeline_board_payload(latest, scope="all", job_id=None):
     columns = {stage: [] for stage in STAGES}
+    by_source = Counter()
     for item in latest:
         data = item.to_dict()
-        data.update(pipeline_source_payload(item))
+        source = pipeline_source_payload(item)
+        data.update(source)
+        by_source[source["source_type"]] += 1
         columns.setdefault(item.stage, []).append(data)
     by_job = Counter(item.job.title if item.job else str(item.job_id) for item in latest)
     by_stage = Counter(item.stage for item in latest)
@@ -1885,6 +1888,7 @@ def pipeline_board_payload(latest, scope="all", job_id=None):
         "stages": STAGES,
         "stage_counts": {stage: by_stage.get(stage, 0) for stage in STAGES},
         "job_counts": dict(by_job),
+        "source_counts": dict(by_source),
         "columns": columns,
     }
 

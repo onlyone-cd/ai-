@@ -480,6 +480,7 @@ function CandidatesPage() {
   const [selectedJobId, setSelectedJobId] = useState(0);
   const [matchResults, setMatchResults] = useState<MatchResult[]>([]);
   const [matchMessage, setMatchMessage] = useState("");
+  const [matchLoading, setMatchLoading] = useState(false);
   const [selected, setSelected] = useState<Candidate | null>(null);
   const [uploadOpen, setUploadOpen] = useState(false);
 
@@ -555,10 +556,21 @@ function CandidatesPage() {
       notify("error", "请先选择一个岗位");
       return;
     }
-    const data = await api.matchJob(selectedJobId);
-    setMatchResults(data.items);
-    setMatchMessage(`已按「${data.job.title}」完成 AI 综合匹配，候选人已按综合分排序。`);
-    notify("success", `AI 综合匹配已完成，返回 ${data.items.length} 位候选人`);
+    setMatchLoading(true);
+    setMatchMessage(`正在按「${selectedJob?.title || "当前岗位"}」进行岗位匹配，请稍候...`);
+    try {
+      const data = await api.matchJob(selectedJobId);
+      setMatchResults(data.items);
+      const aiReviewed = data.items.filter((item) => item.reason.ai_review?.source === "deepseek").length;
+      setMatchMessage(`已按「${data.job.title}」完成综合匹配，AI 已深度复核前 ${aiReviewed} 位，候选人已按综合分排序。`);
+      notify("success", `岗位匹配完成，返回 ${data.items.length} 位候选人`);
+    } catch (error) {
+      const text = error instanceof Error ? error.message : "岗位匹配失败";
+      setMatchMessage(text);
+      notify("error", text);
+    } finally {
+      setMatchLoading(false);
+    }
   }
 
   async function addCandidateToPipeline(candidate: Candidate) {
@@ -654,9 +666,9 @@ function CandidatesPage() {
             <Search className="pointer-events-none absolute left-3 top-2.5 text-steel" size={17} />
             <input className="input pl-9" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索人才库" />
           </div>
-          <button className="secondary-button" onClick={runTalentMatch} disabled={!selectedJobId}>
+          <button className="secondary-button" onClick={runTalentMatch} disabled={!selectedJobId || matchLoading}>
             <Sparkles size={17} />
-            岗位匹配
+            {matchLoading ? "匹配中" : "岗位匹配"}
           </button>
           <button className="secondary-button" data-testid="resume-upload-open" onClick={() => setUploadOpen(true)}>
             <Upload size={17} />

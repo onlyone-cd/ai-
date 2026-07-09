@@ -140,10 +140,16 @@ def preview_matches(job, limit=None):
     return results[:limit] if limit else results
 
 
-def persist_matches(db, job):
+DEFAULT_AI_REVIEW_LIMIT = 3
+DEFAULT_MATCH_LIMIT = 50
+
+
+def persist_matches(db, job, ai_review_limit=DEFAULT_AI_REVIEW_LIMIT, match_limit=DEFAULT_MATCH_LIMIT):
     results = []
     Match.query.filter_by(job_id=job.id).delete()
-    for item in ai_review_matches(job, preview_matches(job)):
+    preview_items = preview_matches(job, limit=match_limit)
+    reviewed_items = ai_review_matches(job, preview_items, limit=ai_review_limit)
+    for item in reviewed_items:
         match = Match(job_id=job.id, candidate_id=item["candidate_id"], score=item["score"], reason=item["reason"])
         db.session.add(match)
         db.session.flush()
@@ -153,14 +159,24 @@ def persist_matches(db, job):
     return results
 
 
-def ai_review_matches(job, items):
+def ai_review_matches(job, items, limit=None):
     if not llm_available():
         for item in items:
             item["reason"]["ai_review"] = {"source": "disabled", "summary": "AI 未启用，当前为规则匹配分。"}
         return items
 
+    review_limit = len(items) if limit is None else max(0, min(int(limit), len(items)))
     reviewed = []
-    for item in items:
+    for index, item in enumerate(items):
+        if index >= review_limit:
+            item["reason"]["ai_review"] = {
+                "source": "rule_pending",
+                "summary": f"规则初排保留，AI 已优先复核前 {review_limit} 位候选人，避免单次请求阻塞系统。",
+            }
+            item["reason"]["ai_score"] = None
+            item["reason"]["final_score"] = item["reason"].get("rule_score", item["score"])
+            reviewed.append(item)
+            continue
         candidate = db_candidate(item["candidate_id"])
         if not candidate:
             reviewed.append(item)
@@ -225,7 +241,7 @@ def request_ai_match_review(job, candidate, rule_reason):
             ),
         },
     ]
-    return chat_json(messages, temperature=0.1, timeout=45, source="job_match", tool_name="ai_match_review")
+    return chat_json(messages, temperature=0.1, timeout=8, source="job_match", tool_name="ai_match_review")
 
 
 def normalize_ai_review(review):

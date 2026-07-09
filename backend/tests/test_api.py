@@ -1090,8 +1090,10 @@ def test_job_match_combines_rule_score_and_ai_review(client, admin_headers, app,
 
     app.config["LLM_ENABLED"] = True
     app.config["DEEPSEEK_API_KEY"] = "test-key"
+    calls = []
 
     def fake_chat_json(messages, **kwargs):
+        calls.append(messages)
         assert "完整简历" in messages[-1]["content"]
         return {
             "score": 80,
@@ -1108,7 +1110,11 @@ def test_job_match_combines_rule_score_and_ai_review(client, admin_headers, app,
     response = client.post(f"/api/jobs/{accounting_job['id']}/match", headers=admin_headers)
 
     assert response.status_code == 200
-    first = response.get_json()["data"]["items"][0]
+    items = response.get_json()["data"]["items"]
+    assert len(calls) == min(3, Candidate.query.count())
+    if Candidate.query.count() > 3:
+        assert any(item["reason"]["ai_review"]["source"] == "rule_pending" for item in items)
+    first = items[0]
     reason = first["reason"]
     assert reason["ai_score"] == 80
     assert reason["ai_review"]["source"] == "deepseek"

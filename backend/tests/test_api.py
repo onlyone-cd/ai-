@@ -1111,9 +1111,10 @@ def test_job_match_combines_rule_score_and_ai_review(client, admin_headers, app,
 
     assert response.status_code == 200
     items = response.get_json()["data"]["items"]
-    assert len(calls) == min(3, Candidate.query.count())
-    if Candidate.query.count() > 3:
+    assert 3 <= len(calls) <= min(5, Candidate.query.count())
+    if Candidate.query.count() > 5:
         assert any(item["reason"]["ai_review"]["source"] == "rule_pending" for item in items)
+    assert all(item["reason"]["ai_review"]["source"] == "deepseek" for item in items[: min(5, len(items))])
     first = items[0]
     reason = first["reason"]
     assert reason["ai_score"] == 80

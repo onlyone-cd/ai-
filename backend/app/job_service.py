@@ -142,6 +142,7 @@ def preview_matches(job, limit=None):
 
 DEFAULT_AI_REVIEW_LIMIT = 3
 DEFAULT_MATCH_LIMIT = 50
+FINAL_TOP_AI_REVIEW_LIMIT = 5
 
 
 def persist_matches(db, job, ai_review_limit=DEFAULT_AI_REVIEW_LIMIT, match_limit=DEFAULT_MATCH_LIMIT):
@@ -169,19 +170,19 @@ def ai_review_matches(job, items, limit=None):
     reviewed = []
     ai_unavailable_message = ""
     for index, item in enumerate(items):
-        if index >= review_limit:
+        if ai_unavailable_message:
             item["reason"]["ai_review"] = {
-                "source": "rule_pending",
-                "summary": f"规则初排保留，AI 已优先复核前 {review_limit} 位候选人，避免单次请求阻塞系统。",
+                "source": "ai_unavailable",
+                "summary": ai_unavailable_message,
             }
             item["reason"]["ai_score"] = None
             item["reason"]["final_score"] = item["reason"].get("rule_score", item["score"])
             reviewed.append(item)
             continue
-        if ai_unavailable_message:
+        if index >= review_limit:
             item["reason"]["ai_review"] = {
-                "source": "ai_unavailable",
-                "summary": ai_unavailable_message,
+                "source": "rule_pending",
+                "summary": f"未进入本次 AI 复核批次，当前保留规则匹配分；系统会优先补充复核最终前 {FINAL_TOP_AI_REVIEW_LIMIT} 位候选人。",
             }
             item["reason"]["ai_score"] = None
             item["reason"]["final_score"] = item["reason"].get("rule_score", item["score"])
@@ -196,7 +197,39 @@ def ai_review_matches(job, items, limit=None):
         if reviewed_item["reason"].get("ai_review", {}).get("source") == "failed" and is_llm_account_error(failure_message):
             ai_unavailable_message = failure_message
         reviewed.append(reviewed_item)
-    return reviewed
+    return supplement_final_top_ai_reviews(job, reviewed, review_limit, ai_unavailable_message)
+
+
+def supplement_final_top_ai_reviews(job, items, initial_review_limit, ai_unavailable_message=""):
+    if ai_unavailable_message or not items:
+        return items
+    target_limit = min(FINAL_TOP_AI_REVIEW_LIMIT, len(items))
+    max_reviews = min(max(int(initial_review_limit or 0), target_limit), len(items))
+    reviewed_count = sum(1 for item in items if item["reason"].get("ai_review", {}).get("source") in {"deepseek", "failed"})
+
+    while reviewed_count < max_reviews:
+        ranked = sorted(items, key=lambda item: item["score"], reverse=True)
+        pending = next((item for item in ranked[:target_limit] if item["reason"].get("ai_review", {}).get("source") == "rule_pending"), None)
+        if not pending:
+            break
+        candidate = db_candidate(pending["candidate_id"])
+        if not candidate:
+            break
+        reviewed_item = apply_ai_review(job, candidate, pending)
+        reviewed_count += 1
+        review = reviewed_item["reason"].get("ai_review", {})
+        if review.get("source") == "failed" and is_llm_account_error(review.get("summary", "")):
+            mark_ai_unavailable(items, review.get("summary", ""))
+            break
+    return items
+
+
+def mark_ai_unavailable(items, summary):
+    for item in items:
+        if item["reason"].get("ai_review", {}).get("source") == "rule_pending":
+            item["reason"]["ai_review"] = {"source": "ai_unavailable", "summary": summary}
+            item["reason"]["ai_score"] = None
+            item["reason"]["final_score"] = item["reason"].get("rule_score", item["score"])
 
 
 def db_candidate(candidate_id):

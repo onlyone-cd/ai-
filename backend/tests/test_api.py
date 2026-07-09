@@ -1854,6 +1854,11 @@ def test_agent_analyzes_employee_resume_and_recommends_jobs(client, admin_header
         headers=admin_headers,
         json={"items": [{"external_id": "agent-employee-java", "raw_text": "姓名：员工Agent测试\n男 13800001234 agent-employee@example.com\n4 年 Java 后端开发经验，熟悉 Spring Boot、MySQL、Redis，负责绩效系统和接口服务开发。"}]},
     ).get_json()["data"]["items"][0]
+    replacement_candidate = client.post(
+        "/api/boss/candidates/batch-import",
+        headers=admin_headers,
+        json={"items": [{"external_id": "agent-replacement-java", "raw_text": "姓名：替补Agent候选人\n男 13900001234 replacement-agent@example.com\n5 年 Java 后端开发经验，熟悉 Spring Boot、MySQL、Redis 和接口性能优化。"}]},
+    ).get_json()["data"]["items"][0]
     employee = client.post(
         "/api/employees/from-candidate",
         headers=admin_headers,
@@ -1873,7 +1878,60 @@ def test_agent_analyzes_employee_resume_and_recommends_jobs(client, admin_header
     assert data["result"]["employee"]["id"] == employee["id"]
     assert data["result"]["items"][0]["job"]["title"] == "内部 Java 后端工程师"
     assert data["result"]["items"][0]["score"] >= data["result"]["items"][-1]["score"]
+    assert data["result"]["plan"]
+    assert data["result"]["communication_advice"]
+    assert any(item["candidate"]["id"] == replacement_candidate["id"] for item in data["result"]["replacement_candidates"])
     assert data["result"]["resume_optimizations"]
+    assert "本次执行" in data["answer"]
+    assert "离职替补候选人" in data["answer"]
+    assert "沟通建议" in data["answer"]
+    assert "简历优化建议" in data["answer"]
+
+
+def test_agent_analyzes_candidate_resume_when_not_internal_employee(client, admin_headers):
+    java_job = Job(
+        owner_hr_id=1,
+        title="Java 后端开发工程师",
+        city="长沙",
+        department="研发部",
+        job_code="AGENT-CANDIDATE-JAVA",
+        jd_text="负责 Java 后端系统开发，要求 Spring Boot、MySQL、Redis、接口性能优化。",
+        jd_structured={},
+        status="active",
+    )
+    ops_job = Job(
+        owner_hr_id=1,
+        title="运维工程师",
+        city="长沙",
+        department="运维部",
+        job_code="AGENT-CANDIDATE-OPS",
+        jd_text="负责 Linux、Docker、Kubernetes 和 CI/CD 运维。",
+        jd_structured={},
+        status="active",
+    )
+    db.session.add_all([java_job, ops_job])
+    db.session.commit()
+    candidate = client.post(
+        "/api/boss/candidates/batch-import",
+        headers=admin_headers,
+        json={"items": [{"external_id": "agent-candidate-gui", "raw_text": "姓名：桂嘉豪\n男 13700001234 gui@example.com\n3 年 Java 后端开发经验，熟悉 Spring Boot、MySQL、Redis，做过接口性能优化和订单系统。"}]},
+    ).get_json()["data"]["items"][0]
+
+    response = client.post(
+        "/api/agent/chat",
+        headers=admin_headers,
+        json={"message": "查看桂嘉豪的简历 并告诉我他适合什么岗位"},
+    )
+
+    assert response.status_code == 200
+    data = response.get_json()["data"]
+    assert data["tool"] == "analyze_employee_resume"
+    assert data["result"]["matched"] is True
+    assert data["result"]["profile_type"] == "candidate"
+    assert data["result"]["candidate"]["id"] == candidate["id"]
+    assert data["result"]["items"][0]["job"]["title"] == "Java 后端开发工程师"
+    assert data["result"]["resume_optimizations"]
+    assert "适合岗位" in data["answer"]
     assert "简历优化建议" in data["answer"]
 
 

@@ -1,6 +1,7 @@
 from collections import Counter
 from datetime import date, datetime, timedelta, timezone
 import csv
+from difflib import SequenceMatcher
 import hashlib
 from io import BytesIO, StringIO
 from pathlib import Path
@@ -3539,7 +3540,7 @@ def agent_tools(user):
                 {"name": "get_job_summary", "description": "查询岗位数量、开放/关闭状态和最近岗位"},
                 {"name": "create_job", "description": "根据自然语言创建岗位并结构化 JD"},
                 {"name": "match_candidates_for_job", "description": "按岗位预览推荐候选人，不写入匹配结果"},
-                {"name": "analyze_employee_resume", "description": "读取内部员工简历和岗位 JD，推荐适合岗位、解释匹配理由并给出简历优化建议"},
+                {"name": "analyze_employee_resume", "description": "读取内部员工或人才库候选人简历和岗位 JD，推荐适合岗位、解释匹配理由并给出简历优化建议"},
                 {"name": "get_pipeline_funnel", "description": "查询招聘流程漏斗"},
                 {"name": "get_interview_schedule", "description": "查询面试安排和待反馈数量"},
                 {"name": "get_offer_status", "description": "查询 Offer 状态和最近 Offer"},
@@ -3873,18 +3874,31 @@ def is_employee_resume_agent_request(text):
 def analyze_employee_resume_from_agent(user, text, suggestions, history=None):
     employee, alternatives = find_employee_for_agent_message(text)
     if not employee:
+        candidate, candidate_alternatives = find_candidate_for_agent_message(text)
+        if candidate:
+            return analyze_candidate_resume_from_agent(user, candidate, text, suggestions, history=history)
         candidate_lines = "\n".join(
             f"- {item.name}：{item.current_title or '岗位未维护'}，{item.department or (item.organization_unit.name if item.organization_unit else '部门未维护')}，编号 {item.employee_no or item.id}"
             for item in alternatives[:6]
         )
-        answer = "我需要先确认要分析哪位员工。请带上员工姓名、员工编号，或在问题里写清楚当前职位。"
+        talent_lines = "\n".join(
+            f"- {item.name_masked}：{item.title or '职位未维护'}，{item.city or '城市未知'}，编号 {item.id}"
+            for item in candidate_alternatives[:6]
+        )
+        answer = "我需要先确认要分析哪位员工或候选人。请带上姓名、员工编号、手机号后四位，或在问题里写清楚当前职位。"
         if candidate_lines:
             answer += f"\n可能相关的员工：\n{candidate_lines}"
+        if talent_lines:
+            answer += f"\n可能相关的人才库候选人：\n{talent_lines}"
         return {
             "answer": answer,
             "tool": "analyze_employee_resume",
-            "result": {"matched": False, "candidates": [employee_payload(item, user) for item in alternatives[:6]]},
-            "suggestions": ["分析员工 张三 的简历，推荐适合岗位", "分析某员工当前岗位是否匹配", "给这个员工简历优化建议", "推荐内部调岗岗位"],
+            "result": {
+                "matched": False,
+                "employees": [employee_payload(item, user) for item in alternatives[:6]],
+                "candidates": [item.to_dict() for item in candidate_alternatives[:6]],
+            },
+            "suggestions": ["查看张三的简历并推荐适合岗位", "分析员工 张三 的简历，推荐适合岗位", "给这个候选人的简历优化建议", "推荐内部调岗岗位"],
             "readonly": True,
         }
 
@@ -3912,25 +3926,33 @@ def analyze_employee_resume_from_agent(user, text, suggestions, history=None):
     ranked.sort(key=lambda item: item["score"], reverse=True)
     top_items = ranked[:5]
     current_analysis = analyze_employee_against_job(employee, employee.current_job).to_dict(include_salary=can_view_employee_salary(user)) if employee.current_job else None
+    transfer_items = [item for item in ranked if not item.get("current")][:5]
+    replacement_items = employee_replacement_candidates_for_agent(employee, limit=5)
     result = {
         "matched": True,
+        "plan": employee_agent_plan(employee),
         "employee": employee_payload(employee, user, detail=True),
         "items": [employee_job_match_payload(item) for item in top_items],
+        "transfer_recommendations": [employee_job_match_payload(item) for item in transfer_items],
+        "replacement_candidates": replacement_items,
         "current_job_analysis": current_analysis,
         "resume_optimizations": fallback_resume_optimizations(employee, top_items),
+        "communication_advice": fallback_employee_communication_advice(employee, transfer_items, current_analysis),
         "llm": "disabled",
     }
 
     llm_payload = None
     if llm_available():
         try:
-            llm_payload = deepseek_employee_resume_review(user, employee, top_items, current_analysis, history=history)
+            llm_payload = deepseek_employee_resume_review(user, employee, top_items, current_analysis, replacement_items, history=history)
             result["llm"] = "deepseek"
             result["ai_review"] = llm_payload
             if llm_payload.get("recommended_jobs"):
                 result["ai_recommended_jobs"] = llm_payload["recommended_jobs"]
             if llm_payload.get("resume_optimizations"):
                 result["resume_optimizations"] = llm_payload["resume_optimizations"]
+            if llm_payload.get("communication_advice"):
+                result["communication_advice"] = llm_payload["communication_advice"]
         except LLMError as exc:
             result["llm"] = "error"
             result["llm_error"] = str(exc)[:200]
@@ -3976,6 +3998,271 @@ def find_employee_for_agent_message(text):
         fuzzy.sort(key=lambda item: item[0], reverse=True)
         return fuzzy[0][1], [item[1] for item in fuzzy[:6]]
     return None, employees[:6]
+
+
+def find_candidate_for_agent_message(text):
+    normalized = re.sub(r"\s+", "", str(text or "")).lower()
+    candidates = Candidate.query.order_by(Candidate.created_at.desc(), Candidate.id.desc()).limit(800).all()
+    exact = []
+    fuzzy = []
+    for candidate in candidates:
+        fields = [
+            candidate.name_masked or "",
+            candidate.phone_masked or "",
+            candidate.email_masked or "",
+            candidate.title or "",
+            candidate.city or "",
+        ]
+        compact_fields = [re.sub(r"\s+", "", field).lower() for field in fields if field]
+        if any(field and field in normalized for field in compact_fields[:3]):
+            exact.append(candidate)
+            continue
+        score = sum(2 for field in compact_fields if field and field in normalized)
+        name = re.sub(r"\s+", "", candidate.name_masked or "").lower()
+        if name and len(name) >= 2:
+            if SequenceMatcher(None, name, normalized).ratio() >= 0.45:
+                score += 1
+            for start in range(max(1, len(normalized) - len(name) + 1)):
+                window = normalized[start : start + len(name)]
+                if SequenceMatcher(None, name, window).ratio() >= 0.72:
+                    score += 3
+                    break
+        if candidate.raw_text and any(token in candidate.raw_text for token in extract_agent_name_terms(text)):
+            score += 1
+        if score:
+            fuzzy.append((score, candidate))
+    if exact:
+        return exact[0], exact
+    if fuzzy:
+        fuzzy.sort(key=lambda item: item[0], reverse=True)
+        return fuzzy[0][1], [item[1] for item in fuzzy[:6]]
+    return None, candidates[:6]
+
+
+def extract_agent_name_terms(text):
+    cleaned = re.sub(r"[，。！？?、,.;；:：()\[\]【】]", " ", str(text or ""))
+    stop_words = {"查看", "分析", "员工", "候选人", "人才", "简历", "告诉我", "适合", "什么", "岗位", "推荐", "优化", "可以", "哪些", "的"}
+    terms = []
+    for part in cleaned.split():
+        value = part.strip()
+        if len(value) >= 2 and value not in stop_words:
+            terms.append(value)
+    return terms[:8]
+
+
+def analyze_candidate_resume_from_agent(user, candidate, text, suggestions, history=None):
+    jobs = apply_job_scope(Job.query.filter_by(status="active"), "recruiting").order_by(Job.created_at.desc()).all()
+    if not jobs:
+        jobs = Job.query.filter_by(status="active").order_by(Job.created_at.desc()).all()
+    if not jobs:
+        return {
+            "answer": f"已找到候选人 {candidate.name_masked}，但当前没有开放招聘岗位可用于匹配。请先维护岗位 JD。",
+            "tool": "analyze_employee_resume",
+            "result": {"matched": True, "profile_type": "candidate", "candidate": candidate.to_dict(detail=True), "items": []},
+            "suggestions": ["新建招聘岗位 JD", "导入岗位 JD", "查看人才库", "继续优化这份简历"],
+            "readonly": True,
+        }
+    inferred_tags = candidate_tags_for_agent(candidate, jobs)
+    ranked = []
+    for job in jobs:
+        structured = ensure_jd_structured(job)
+        reason = match_candidate(
+            structured.get("skill_tags_raw"),
+            inferred_tags,
+            years_required=structured.get("years_required"),
+            candidate_years=(candidate.resume_json or {}).get("experience_analysis", {}).get("years"),
+            candidate_context=" ".join([candidate.title or "", candidate.raw_text or "", (candidate.resume_json or {}).get("summary") or ""]),
+        )
+        if reason["score"] >= 80:
+            reason["summary"] = "候选人简历与该岗位 JD 匹配度较高，可优先推荐进入流程。"
+        elif reason["score"] >= 60:
+            reason["summary"] = "候选人与该岗位存在一定匹配，建议结合项目细节进一步确认。"
+        else:
+            reason["summary"] = "候选人与该岗位关键要求差距较明显，不建议优先推荐。"
+        ranked.append({"job": job, "score": reason["score"], "reason": reason})
+    ranked.sort(key=lambda item: item["score"], reverse=True)
+    top_items = ranked[:5]
+    result = {
+        "matched": True,
+        "profile_type": "candidate",
+        "plan": candidate_agent_plan(),
+        "candidate": candidate.to_dict(detail=True),
+        "items": [candidate_job_match_payload(item) for item in top_items],
+        "resume_optimizations": fallback_candidate_resume_optimizations(candidate, top_items),
+        "llm": "disabled",
+    }
+    llm_payload = None
+    if llm_available():
+        try:
+            llm_payload = deepseek_candidate_resume_review(candidate, top_items, history=history)
+            result["llm"] = "deepseek"
+            result["ai_review"] = llm_payload
+            if llm_payload.get("recommended_jobs"):
+                result["ai_recommended_jobs"] = llm_payload["recommended_jobs"]
+            if llm_payload.get("resume_optimizations"):
+                result["resume_optimizations"] = llm_payload["resume_optimizations"]
+        except LLMError as exc:
+            result["llm"] = "error"
+            result["llm_error"] = str(exc)[:200]
+    return {
+        "answer": format_candidate_agent_answer(candidate, top_items, result, llm_payload),
+        "tool": "analyze_employee_resume",
+        "result": result,
+        "suggestions": [
+            f"把 {candidate.name_masked} 加入最佳岗位流程",
+            f"继续优化 {candidate.name_masked} 的简历",
+            "给这个候选人生成沟通话术",
+            "换一个岗位重新匹配",
+        ],
+        "readonly": True,
+    }
+
+
+def candidate_tags_for_agent(candidate, jobs):
+    tags = {tag.tag: int(tag.score or 3) for tag in candidate.tags}
+    context = " ".join([candidate.name_masked or "", candidate.title or "", (candidate.resume_json or {}).get("summary") or "", candidate.raw_text or ""])
+    context_lower = context.lower()
+    for job in jobs:
+        structured = ensure_jd_structured(job)
+        for skill in parse_skill_tags(structured.get("skill_tags_raw")):
+            tag = str(skill.get("tag") or "").strip()
+            if tag and tag.lower() in context_lower and tag not in tags:
+                tags[tag] = 4
+    return [{"tag": tag, "score": max(1, min(5, score)), "category": ""} for tag, score in tags.items()]
+
+
+def candidate_agent_plan():
+    return [
+        "识别人才库候选人并读取完整简历",
+        "读取开放招聘岗位 JD",
+        "先用规则算法计算候选人与岗位的匹配分",
+        "调用 DeepSeek 阅读完整简历和 JD，校准岗位推荐与理由",
+        "输出简历优化建议和下一步招聘动作",
+    ]
+
+
+def candidate_job_match_payload(item):
+    return {"job": item["job"].to_dict(), "score": item["score"], "reason": item["reason"]}
+
+
+def fallback_candidate_resume_optimizations(candidate, top_items):
+    missing = []
+    for item in top_items[:3]:
+        missing.extend(item["reason"].get("missing_tags", [])[:3])
+    missing = list(dict.fromkeys(missing))[:6]
+    suggestions = [
+        "简历开头增加 3-5 行个人简介，明确目标岗位、年限、核心技术/业务能力。",
+        "项目经历按“项目背景-个人职责-技术/业务动作-量化结果”展开，避免只有职责描述。",
+        "把与目标岗位相关的技能放到每段项目经历中提供证据，而不是只堆技能词。",
+    ]
+    if missing:
+        suggestions.append("若候选人实际具备这些能力，建议在简历中补充证据：" + "、".join(missing) + "。")
+    if not (candidate.raw_text or "").strip():
+        suggestions.append("当前缺少完整简历原文，建议上传原始附件后再做深度分析。")
+    return suggestions
+
+
+def deepseek_candidate_resume_review(candidate, top_items, history=None):
+    resume = candidate.resume_json or {}
+    jobs_payload = [
+        {
+            "job_id": item["job"].id,
+            "title": item["job"].title,
+            "department": item["job"].department,
+            "city": item["job"].city,
+            "jd": summarize_text(item["job"].jd_text, 900),
+            "structured": ensure_jd_structured(item["job"]),
+            "rule_score": item["score"],
+            "rule_reason": item["reason"],
+        }
+        for item in top_items
+    ]
+    data = chat_json(
+        [
+            {
+                "role": "system",
+                "content": (
+                    "你是招聘 Agent。必须阅读候选人完整简历、开放岗位 JD 和规则匹配结果，判断候选人适合哪些岗位，"
+                    "给出匹配理由、风险、简历优化建议和下一步招聘动作。不要只复述标签。"
+                    "输出 JSON：{\"summary\":\"\",\"recommended_jobs\":[{\"job_id\":1,\"title\":\"\",\"score\":0,\"reason\":\"\",\"gaps\":[\"\"]}],"
+                    "\"resume_optimizations\":[\"\"],\"risks\":[\"\"],\"next_actions\":[\"\"]}。score 为 0-100。"
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"最近对话={format_agent_history(history or [])}\n"
+                    f"候选人={candidate.name_masked} 当前标题={candidate.title or ''} 城市={candidate.city or ''}\n"
+                    f"简历摘要={resume.get('summary') or ''}\n"
+                    f"完整简历={summarize_text(candidate.raw_text or resume.get('summary') or '', 2800)}\n"
+                    f"候选岗位={jobs_payload}"
+                ),
+            },
+        ],
+        temperature=0.25,
+        timeout=35,
+        source="agent",
+        tool_name="analyze_candidate_resume",
+    )
+    data["recommended_jobs"] = normalize_employee_ai_jobs(data.get("recommended_jobs"), top_items)
+    data["resume_optimizations"] = [str(item).strip() for item in data.get("resume_optimizations") or [] if str(item).strip()][:8]
+    data["risks"] = [str(item).strip() for item in data.get("risks") or [] if str(item).strip()][:6]
+    data["next_actions"] = [str(item).strip() for item in data.get("next_actions") or [] if str(item).strip()][:6]
+    return data
+
+
+def format_candidate_agent_answer(candidate, top_items, result, llm_payload=None):
+    if llm_payload:
+        summary = str(llm_payload.get("summary") or "").strip()
+        jobs = llm_payload.get("recommended_jobs") or []
+    else:
+        summary = "已基于候选人简历和开放岗位 JD 做规则匹配；DeepSeek 未启用或暂不可用时，会先给出规则版建议。"
+        jobs = [
+            {
+                "title": item["job"].title,
+                "score": item["score"],
+                "reason": item["reason"].get("summary") or "",
+                "gaps": item["reason"].get("missing_tags", [])[:4],
+            }
+            for item in top_items
+        ]
+    lines = [f"已分析候选人 {candidate.name_masked}（{candidate.title or '职位未维护'}）。"]
+    plan = result.get("plan") or []
+    if plan:
+        lines.append("本次执行：" + " -> ".join(plan))
+    if summary:
+        lines.append(summary)
+    lines.append("")
+    lines.append("适合岗位：")
+    for index, item in enumerate(jobs[:5], start=1):
+        gaps = "；差距：" + "、".join(item.get("gaps") or []) if item.get("gaps") else ""
+        lines.append(f"{index}. {item.get('title')}：{item.get('score')}/100。{item.get('reason') or '可进一步面谈确认'}{gaps}")
+    optimizations = result.get("resume_optimizations") or []
+    if optimizations:
+        lines.append("")
+        lines.append("简历优化建议：")
+        for item in optimizations[:5]:
+            lines.append(f"- {item}")
+    if llm_payload and llm_payload.get("risks"):
+        lines.append("")
+        lines.append("风险点：")
+        for item in llm_payload["risks"][:4]:
+            lines.append(f"- {item}")
+    if llm_payload and llm_payload.get("next_actions"):
+        lines.append("")
+        lines.append("下一步动作：")
+        for item in llm_payload["next_actions"][:4]:
+            lines.append(f"- {item}")
+    if result.get("llm") == "deepseek":
+        lines.append("")
+        lines.append("本次结论已调用 DeepSeek 阅读候选人完整简历和岗位 JD。")
+    elif result.get("llm") == "error":
+        lines.append("")
+        lines.append("DeepSeek 本次调用失败，以上为规则兜底结论。")
+    else:
+        lines.append("")
+        lines.append("DeepSeek 当前未启用，以上为规则兜底结论。")
+    return "\n".join(lines)
 
 
 def employee_tags_for_agent(employee, jobs):
@@ -4028,6 +4315,64 @@ def employee_job_match_payload(item):
     }
 
 
+def employee_agent_plan(employee):
+    steps = [
+        "识别员工身份并读取内部员工档案",
+        "读取员工简历原文、解析摘要、技能标签和当前岗位",
+        "筛选公司内部开放岗位并结构化岗位 JD",
+        "先用规则算法计算岗位匹配分、命中能力和缺失能力",
+        "调用 DeepSeek 阅读完整上下文，校准岗位推荐、风险和简历优化建议",
+    ]
+    if employee.current_job:
+        steps.append("基于员工当前岗位 JD 推荐离职替补候选人")
+    return steps
+
+
+def employee_replacement_candidates_for_agent(employee, limit=5):
+    if not employee.current_job:
+        return []
+    existing_employee_candidate_ids = {
+        item.candidate_id
+        for item in EmployeeProfile.query.filter(EmployeeProfile.candidate_id.isnot(None)).all()
+        if item.candidate_id
+    }
+    items = []
+    for item in preview_matches(employee.current_job, limit=30):
+        candidate_id = item.get("candidate_id")
+        if not candidate_id or candidate_id == employee.candidate_id or candidate_id in existing_employee_candidate_ids:
+            continue
+        candidate = db.session.get(Candidate, candidate_id)
+        if not candidate:
+            continue
+        items.append(
+            {
+                "candidate": candidate.to_dict(),
+                "score": item.get("score", 0),
+                "reason": item.get("reason") or {},
+            }
+        )
+        if len(items) >= limit:
+            break
+    return items
+
+
+def fallback_employee_communication_advice(employee, transfer_items, current_analysis):
+    best = transfer_items[0] if transfer_items else None
+    lines = [
+        f"先和 {employee.name} 确认职业发展意愿、近期项目贡献和对当前岗位的满意度。",
+        "沟通时不要直接下结论，先说明本次分析基于简历、岗位 JD 和系统数据，需要结合绩效与主管反馈复核。",
+    ]
+    if best:
+        lines.append(f"如果讨论调岗，可优先围绕「{best['job'].title}」展开，说明匹配优势和需要补齐的能力。")
+    if current_analysis:
+        salary = (current_analysis.get("analysis") or {}).get("salary") or {}
+        if salary.get("status") == "low":
+            lines.append("当前存在薪资偏低信号，若员工匹配度较高，建议同步评估保留风险。")
+        elif salary.get("status") == "high":
+            lines.append("当前存在薪资偏高信号，建议结合岗位产出和绩效复核成本合理性。")
+    return lines
+
+
 def fallback_resume_optimizations(employee, top_items):
     top_missing = []
     for item in top_items[:3]:
@@ -4045,7 +4390,7 @@ def fallback_resume_optimizations(employee, top_items):
     return suggestions
 
 
-def deepseek_employee_resume_review(user, employee, top_items, current_analysis, history=None):
+def deepseek_employee_resume_review(user, employee, top_items, current_analysis, replacement_items=None, history=None):
     resume = employee.resume_json or {}
     compensation = employee.latest_compensation() if can_view_employee_salary(user) else None
     salary_text = ""
@@ -4072,7 +4417,8 @@ def deepseek_employee_resume_review(user, employee, top_items, current_analysis,
                     "你是企业内部人才盘点和招聘 Agent。必须阅读员工简历、当前岗位、候选岗位 JD 和规则匹配结果，"
                     "综合判断适合岗位、匹配理由、风险和简历优化建议。不要只复述标签。"
                     "输出 JSON：{\"summary\":\"\",\"recommended_jobs\":[{\"job_id\":1,\"title\":\"\",\"score\":0,\"reason\":\"\",\"gaps\":[\"\"]}],"
-                    "\"resume_optimizations\":[\"\"],\"risks\":[\"\"],\"memory_notes\":[\"\"]}。score 为 0-100。"
+                    "\"resume_optimizations\":[\"\"],\"risks\":[\"\"],\"communication_advice\":[\"\"],\"replacement_view\":\"\","
+                    "\"memory_notes\":[\"\"]}。score 为 0-100。"
                 ),
             },
             {
@@ -4085,7 +4431,8 @@ def deepseek_employee_resume_review(user, employee, top_items, current_analysis,
                     f"当前岗位分析={current_analysis}\n"
                     f"简历摘要={resume.get('summary') or ''}\n"
                     f"完整简历={summarize_text(employee.raw_text or resume.get('summary') or '', 2600)}\n"
-                    f"候选岗位={jobs_payload}"
+                    f"候选岗位={jobs_payload}\n"
+                    f"离职替补候选人={replacement_items or []}"
                 ),
             },
         ],
@@ -4097,6 +4444,8 @@ def deepseek_employee_resume_review(user, employee, top_items, current_analysis,
     data["recommended_jobs"] = normalize_employee_ai_jobs(data.get("recommended_jobs"), top_items)
     data["resume_optimizations"] = [str(item).strip() for item in data.get("resume_optimizations") or [] if str(item).strip()][:8]
     data["risks"] = [str(item).strip() for item in data.get("risks") or [] if str(item).strip()][:6]
+    data["communication_advice"] = [str(item).strip() for item in data.get("communication_advice") or [] if str(item).strip()][:6]
+    data["replacement_view"] = str(data.get("replacement_view") or "").strip()[:800]
     data["memory_notes"] = [str(item).strip() for item in data.get("memory_notes") or [] if str(item).strip()][:6]
     return data
 
@@ -4150,8 +4499,19 @@ def format_employee_agent_answer(employee, top_items, result, llm_payload=None):
             for item in top_items
         ]
     lines = [f"已分析员工 {employee.name}（{employee.current_title or '职位未维护'}）。"]
+    plan = result.get("plan") or []
+    if plan:
+        lines.append("本次执行：" + " -> ".join(plan[:5]))
     if summary:
         lines.append(summary)
+    current_analysis = result.get("current_job_analysis")
+    if current_analysis:
+        analysis = current_analysis.get("analysis") or {}
+        lines.append(
+            f"当前岗位/薪资：岗位匹配 {current_analysis.get('match_score')}/100，"
+            f"薪资评分 {current_analysis.get('salary_score')}/100，"
+            f"风险 {risk_label(current_analysis.get('risk_level'))}。{analysis.get('summary') or ''}"
+        )
     lines.append("")
     lines.append("推荐岗位：")
     for index, item in enumerate(jobs[:5], start=1):
@@ -4162,6 +4522,23 @@ def format_employee_agent_answer(employee, top_items, result, llm_payload=None):
         lines.append("")
         lines.append("简历优化建议：")
         for item in optimizations[:5]:
+            lines.append(f"- {item}")
+    replacements = result.get("replacement_candidates") or []
+    if replacements:
+        lines.append("")
+        lines.append("离职替补候选人：")
+        for item in replacements[:3]:
+            candidate = item.get("candidate") or {}
+            reason = item.get("reason") or {}
+            hits = "、".join(hit.get("candidate_tag", "") for hit in reason.get("hits", [])[:3] if hit.get("candidate_tag"))
+            lines.append(f"- {candidate.get('name_masked')}：{item.get('score')}/100，{candidate.get('title') or '职位未维护'}" + (f"，命中 {hits}" if hits else ""))
+    if llm_payload and llm_payload.get("replacement_view"):
+        lines.append(f"替补判断：{llm_payload['replacement_view']}")
+    communication = result.get("communication_advice") or []
+    if communication:
+        lines.append("")
+        lines.append("沟通建议：")
+        for item in communication[:4]:
             lines.append(f"- {item}")
     if result.get("llm") == "deepseek":
         lines.append("")

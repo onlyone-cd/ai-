@@ -870,6 +870,8 @@ export type PipelineItem = {
   job_id: number;
   job?: Job;
   stage: string;
+  source_type?: "interview" | "offer" | "onboarding" | "manual" | string;
+  source_label?: string;
   note: string;
   updated_by?: string;
   ts?: string;

@@ -42,7 +42,7 @@ textarea {
   }
 
   .app-content > section:not(.talent-page):not(.resume-page):not(.agent-chat-page):not(.design-page) {
-    @apply mx-auto max-w-[1360px];
+    @apply mx-auto max-w-[1280px];
   }
 
   .ant-layout,
@@ -60,9 +60,10 @@ textarea {
 
   .ant-menu-dark .ant-menu-item {
     @apply my-0.5 rounded-md text-slate-300;
-    height: 42px !important;
-    line-height: 42px !important;
-    padding-left: 22px !important;
+    height: 38px !important;
+    line-height: 38px !important;
+    padding-left: 18px !important;
+    font-size: 13px !important;
   }
 
   .ant-menu-dark .ant-menu-item-selected {
@@ -80,7 +81,7 @@ textarea {
   }
 
   .ant-card .ant-card-body {
-    @apply p-5;
+    @apply p-4;
   }
 
   .app-content form.rounded-lg,
@@ -160,13 +161,13 @@ textarea {
   }
 
   .input {
-    @apply w-full rounded-md border border-line bg-white px-3 py-2.5 text-sm outline-none transition placeholder:text-slate-400 hover:border-mint focus:border-mint focus:ring-2 focus:ring-mint/15;
-    min-height: 40px;
+    @apply w-full rounded-md border border-line bg-white px-3 py-2 text-sm outline-none transition placeholder:text-slate-400 hover:border-mint focus:border-mint focus:ring-2 focus:ring-mint/15;
+    min-height: 36px;
   }
 
   .select {
-    @apply rounded-md border border-line bg-white px-3 py-2.5 text-sm outline-none transition hover:border-mint focus:border-mint focus:ring-2 focus:ring-mint/15;
-    min-height: 40px;
+    @apply rounded-md border border-line bg-white px-3 py-2 text-sm outline-none transition hover:border-mint focus:border-mint focus:ring-2 focus:ring-mint/15;
+    min-height: 36px;
   }
 
   .field-label {
@@ -199,18 +200,18 @@ textarea {
   }
 
   .primary-button {
-    @apply inline-flex items-center justify-center gap-2 rounded-md bg-mint px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-50;
+    @apply inline-flex items-center justify-center gap-2 rounded-md bg-mint px-3 py-2 text-sm font-semibold text-white shadow-sm transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-50;
     box-shadow: 0 6px 14px rgba(22, 119, 255, 0.24);
-    min-height: 40px;
+    min-height: 36px;
   }
 
   .secondary-button {
-    @apply inline-flex items-center justify-center gap-2 rounded-md border border-line bg-white px-4 py-2.5 text-sm font-semibold text-ink shadow-sm transition hover:border-mint hover:text-mint;
-    min-height: 40px;
+    @apply inline-flex items-center justify-center gap-2 rounded-md border border-line bg-white px-3 py-2 text-sm font-semibold text-ink shadow-sm transition hover:border-mint hover:text-mint;
+    min-height: 36px;
   }
 
   .icon-button {
-    @apply grid h-9 w-9 place-items-center rounded-md border border-line bg-white text-steel shadow-sm transition hover:border-slate-300 hover:bg-slate-50 hover:text-ink;
+    @apply grid h-8 w-8 place-items-center rounded-md border border-line bg-white text-steel shadow-sm transition hover:border-slate-300 hover:bg-slate-50 hover:text-ink;
   }
 
   .modal-backdrop {
@@ -273,7 +274,7 @@ textarea {
   }
 
   .toolbar {
-    @apply flex flex-col gap-3 rounded-lg border border-line bg-white p-4 shadow-panel sm:flex-row sm:items-center sm:justify-between;
+    @apply flex flex-col gap-3 rounded-lg border border-line bg-white p-3 shadow-panel sm:flex-row sm:items-center sm:justify-between;
     box-shadow: 0 10px 30px rgba(15, 23, 42, 0.07);
   }
 
@@ -351,8 +352,8 @@ textarea {
   }
 
   .data-row {
-    @apply flex items-center justify-between gap-3 rounded-md border border-line bg-white px-3 py-3 text-left transition hover:border-mint hover:bg-blue-50/20;
-    min-height: 76px;
+    @apply flex items-center justify-between gap-3 rounded-md border border-line bg-white px-3 py-2.5 text-left transition hover:border-mint hover:bg-blue-50/20;
+    min-height: 64px;
   }
 
   .data-row.active {
@@ -734,14 +735,42 @@ textarea {
 
   .pipeline-board {
     @apply grid grid-flow-col gap-3 overflow-x-auto pb-3;
-    grid-auto-columns: minmax(300px, 320px);
+    grid-auto-columns: minmax(260px, 280px);
     align-items: start;
     overscroll-behavior-x: contain;
   }
 
   .pipeline-column {
-    @apply min-h-72 rounded-lg border border-line bg-white p-3 shadow-panel;
+    @apply rounded-lg border border-line bg-white p-2.5 shadow-panel;
     min-width: 0;
+    min-height: 18rem;
+  }
+
+  .pipeline-column-list {
+    @apply space-y-2 overflow-y-auto pr-1;
+    max-height: min(58vh, 520px);
+  }
+
+  .pipeline-card {
+    @apply rounded-md border border-line bg-white p-2.5 text-sm transition hover:border-mint hover:bg-blue-50/20;
+  }
+
+  .pipeline-card .chip,
+  .pipeline-card .badge {
+    @apply px-1.5 py-0.5;
+  }
+
+  .pipeline-card-actions {
+    @apply mt-2 grid grid-cols-3 gap-1.5;
+  }
+
+  .pipeline-card-actions .secondary-button {
+    @apply px-2 py-1.5 text-xs;
+    min-height: 32px;
+  }
+
+  .pipeline-note-input {
+    min-height: 34px;
   }
 
   .pipeline-column .chip {
@@ -751,7 +780,7 @@ textarea {
 
   @media (max-width: 640px) {
     .pipeline-board {
-      grid-auto-columns: minmax(260px, 82vw);
+      grid-auto-columns: minmax(240px, 82vw);
     }
   }
 
@@ -769,7 +798,7 @@ textarea {
   }
 
   .design-card {
-    @apply rounded-lg border border-line bg-white p-5 shadow-panel;
+    @apply rounded-lg border border-line bg-white p-4 shadow-panel;
   }
 
   .boss-status-bar {

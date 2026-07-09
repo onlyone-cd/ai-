@@ -121,7 +121,7 @@ function App() {
 
   return (
     <AntLayout className="min-h-screen bg-slate-50 text-ink">
-      <AntLayout.Sider width={216} className="fixed inset-y-0 left-0 z-10 hidden border-r border-slate-800 bg-slate-950 lg:block">
+      <AntLayout.Sider width={192} className="fixed inset-y-0 left-0 z-10 hidden border-r border-slate-800 bg-slate-950 lg:block">
         <div className="flex h-14 items-center gap-2.5 border-b border-white/10 px-4">
           <div className="grid h-8 w-8 place-items-center rounded-md bg-white text-mint">
             <Sparkles size={17} />
@@ -141,7 +141,7 @@ function App() {
         />
       </AntLayout.Sider>
 
-      <AntLayout className="min-h-screen bg-slate-50 lg:pl-[216px]">
+      <AntLayout className="min-h-screen bg-slate-50 lg:pl-[192px]">
         <AntLayout.Header className="sticky top-0 z-10 flex h-14 items-center justify-between border-b border-line bg-white/90 px-4 leading-normal backdrop-blur lg:px-5">
           <div>
             <h1 className="text-base font-semibold">{titleFor(view)}</h1>
@@ -164,7 +164,7 @@ function App() {
           </div>
         </AntLayout.Header>
 
-        <AntLayout.Content className="app-content p-3 lg:p-5" data-testid="app-content">
+        <AntLayout.Content className="app-content p-3 lg:p-4" data-testid="app-content">
           <MobileTabs view={view} setView={setView} isAdmin={user.role === "admin"} canUseTasks={user.role !== "interviewer"} />
           {view === "candidates" && <CandidatesPage />}
           {view === "organization" && <InternalTalentPage />}
@@ -1106,6 +1106,7 @@ function PipelinePage() {
   const [notes, setNotes] = useState<Record<number, string>>({});
   const [message, setMessage] = useState("");
   const [query, setQuery] = useState("");
+  const [sourceFilter, setSourceFilter] = useState("all");
 
   useEffect(() => {
     api.jobs().then((data) => {
@@ -1162,6 +1163,7 @@ function PipelinePage() {
   function visibleItems(stage: string) {
     const keyword = query.trim().toLowerCase();
     return (board?.columns[stage] || []).filter((item) => {
+      if (sourceFilter !== "all" && item.source_type !== sourceFilter) return false;
       if (!keyword) return true;
       return [
         item.candidate.name_masked,
@@ -1170,6 +1172,7 @@ function PipelinePage() {
         item.job?.department,
         item.job?.city,
         stageLabels[item.stage] || item.stage,
+        item.source_label,
         item.note,
         item.updated_by
       ]
@@ -1196,6 +1199,13 @@ function PipelinePage() {
           {jobs.map((job) => <option value={job.id} key={job.id}>{job.title}</option>)}
         </select>
         <div className="flex flex-wrap gap-2">
+          <select className="select" value={sourceFilter} onChange={(event) => setSourceFilter(event.target.value)}>
+            <option value="all">全部来源</option>
+            <option value="interview">面试安排</option>
+            <option value="manual">手动流程</option>
+            <option value="offer">Offer</option>
+            <option value="onboarding">入职</option>
+          </select>
           <div className="relative">
             <Search className="pointer-events-none absolute left-3 top-2.5 text-steel" size={17} />
             <input className="input w-56 pl-9" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索候选人、岗位、备注" />
@@ -1219,27 +1229,31 @@ function PipelinePage() {
                 <h3 className="text-sm font-semibold">{stageLabels[stage]}</h3>
                 <span className="badge muted">{visibleItems(stage).length}</span>
               </div>
-              <div className="space-y-3">
+              <div className="pipeline-column-list">
                 {visibleItems(stage).map((item) => (
-                  <div className="rounded-md border border-line p-3" key={item.id}>
+                  <div className="pipeline-card" key={item.id}>
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0">
-                        <div className="font-medium">{item.candidate.name_masked}</div>
-                        <div className="text-xs text-steel">{item.candidate.title} · {item.candidate.experience_analysis?.label || "经验未识别"}</div>
-                        <div className="mt-1 text-xs text-steel">{item.job?.title || `岗位 ${item.job_id}`}</div>
+                        <div className="truncate text-sm font-semibold">{item.candidate.name_masked}</div>
+                        <div className="mt-0.5 truncate text-xs text-steel">{item.candidate.title} · {item.candidate.experience_analysis?.label || "经验未识别"}</div>
+                        <div className="mt-0.5 truncate text-xs text-steel">{item.job?.title || `岗位 ${item.job_id}`}</div>
+                        <div className="mt-1.5 flex flex-wrap gap-1">
+                          <span className={`badge ${item.source_type === "interview" ? "" : "muted"}`}>{item.source_label || "手动流程"}</span>
+                          {item.updated_by && <span className="badge muted">{item.updated_by}</span>}
+                        </div>
                       </div>
-                      <button className="icon-button h-8 w-8" title="流程历史" onClick={() => showHistory(item)}>
+                      <button className="icon-button h-7 w-7" title="流程历史" onClick={() => showHistory(item)}>
                         <Clock3 size={15} />
                       </button>
                     </div>
-                    <TagList tags={item.candidate.tags.slice(0, 4)} />
+                    <TagList tags={item.candidate.tags.slice(0, 3)} />
                     <input
-                      className="input mt-3"
+                      className="input pipeline-note-input mt-2"
                       placeholder="推进备注"
                       value={notes[item.id] || ""}
                       onChange={(event) => setNotes({ ...notes, [item.id]: event.target.value })}
                     />
-                    <div className="mt-3 flex flex-wrap gap-2">
+                    <div className="pipeline-card-actions">
                       {nextStages(stage).map((next) => (
                         <button className={next === "rejected" ? "secondary-button text-red-700" : "secondary-button"} key={next} onClick={() => move(item, next)}>
                           {stageLabels[next]}

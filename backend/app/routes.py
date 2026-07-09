@@ -1873,7 +1873,9 @@ def pipeline_global_board(user):
 def pipeline_board_payload(latest, scope="all", job_id=None):
     columns = {stage: [] for stage in STAGES}
     for item in latest:
-        columns.setdefault(item.stage, []).append(item.to_dict())
+        data = item.to_dict()
+        data.update(pipeline_source_payload(item))
+        columns.setdefault(item.stage, []).append(data)
     by_job = Counter(item.job.title if item.job else str(item.job_id) for item in latest)
     by_stage = Counter(item.stage for item in latest)
     return {
@@ -1885,6 +1887,30 @@ def pipeline_board_payload(latest, scope="all", job_id=None):
         "job_counts": dict(by_job),
         "columns": columns,
     }
+
+
+def pipeline_source_payload(item):
+    if item.stage in {"interview_first", "interview_second", "interview_final"}:
+        assignment = (
+            InterviewAssignment.query.filter_by(candidate_id=item.candidate_id, job_id=item.job_id, round=item.stage)
+            .filter(InterviewAssignment.status != "cancelled")
+            .order_by(InterviewAssignment.created_at.desc())
+            .first()
+        )
+        if assignment:
+            return {"source_type": "interview", "source_label": "面试安排"}
+    if item.stage in {"offer", "onboarded"}:
+        offer = OfferRecord.query.filter_by(candidate_id=item.candidate_id, job_id=item.job_id).order_by(OfferRecord.created_at.desc()).first()
+        if offer:
+            return {"source_type": "offer", "source_label": "Offer"}
+    note = item.note or ""
+    if "已安排" in note or "面试" in note or "轮次" in note:
+        return {"source_type": "interview", "source_label": "面试同步"}
+    if "Offer" in note:
+        return {"source_type": "offer", "source_label": "Offer"}
+    if "入职" in note:
+        return {"source_type": "onboarding", "source_label": "入职"}
+    return {"source_type": "manual", "source_label": "手动流程"}
 
 
 @api.get("/pipeline/<int:job_id>/history/<int:candidate_id>")

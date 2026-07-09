@@ -733,11 +733,26 @@ textarea {
   }
 
   .pipeline-board {
-    @apply grid auto-cols-[minmax(280px,1fr)] grid-flow-col gap-3 overflow-x-auto pb-2 xl:auto-cols-fr;
+    @apply grid grid-flow-col gap-3 overflow-x-auto pb-3;
+    grid-auto-columns: minmax(300px, 320px);
+    align-items: start;
+    overscroll-behavior-x: contain;
   }
 
   .pipeline-column {
     @apply min-h-72 rounded-lg border border-line bg-white p-3 shadow-panel;
+    min-width: 0;
+  }
+
+  .pipeline-column .chip {
+    max-width: 100%;
+    overflow-wrap: anywhere;
+  }
+
+  @media (max-width: 640px) {
+    .pipeline-board {
+      grid-auto-columns: minmax(260px, 82vw);
+    }
   }
 
   .design-page {

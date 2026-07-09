@@ -126,7 +126,7 @@ def preview_matches(job, limit=None):
         )
         reason["rule_score"] = reason["score"]
         reason["final_score"] = reason["score"]
-        reason["score_formula"] = "preview=rule_score; persisted_match=rule_score*45%+ai_score*55% when AI review succeeds"
+        reason["score_formula"] = "preview=rule_score; persisted_match=rule_score*35%+ai_score*65% when AI review succeeds"
         results.append(
             {
                 "job_id": job.id,
@@ -167,6 +167,7 @@ def ai_review_matches(job, items, limit=None):
 
     review_limit = len(items) if limit is None else max(0, min(int(limit), len(items)))
     reviewed = []
+    ai_unavailable_message = ""
     for index, item in enumerate(items):
         if index >= review_limit:
             item["reason"]["ai_review"] = {
@@ -177,11 +178,24 @@ def ai_review_matches(job, items, limit=None):
             item["reason"]["final_score"] = item["reason"].get("rule_score", item["score"])
             reviewed.append(item)
             continue
+        if ai_unavailable_message:
+            item["reason"]["ai_review"] = {
+                "source": "ai_unavailable",
+                "summary": ai_unavailable_message,
+            }
+            item["reason"]["ai_score"] = None
+            item["reason"]["final_score"] = item["reason"].get("rule_score", item["score"])
+            reviewed.append(item)
+            continue
         candidate = db_candidate(item["candidate_id"])
         if not candidate:
             reviewed.append(item)
             continue
-        reviewed.append(apply_ai_review(job, candidate, item))
+        reviewed_item = apply_ai_review(job, candidate, item)
+        failure_message = reviewed_item["reason"].get("ai_review", {}).get("summary", "")
+        if reviewed_item["reason"].get("ai_review", {}).get("source") == "failed" and is_llm_account_error(failure_message):
+            ai_unavailable_message = failure_message
+        reviewed.append(reviewed_item)
     return reviewed
 
 
@@ -204,11 +218,27 @@ def apply_ai_review(job, candidate, item):
         reason["score_formula"] = "final_score=round(rule_score*35% + ai_score*65%); no pre-filter before AI review"
         item["score"] = final_score
     except LLMError as exc:
-        reason["ai_review"] = {"source": "failed", "summary": "AI 复核失败，已保留规则匹配分。", "error": str(exc)[:300]}
+        reason["ai_review"] = {"source": "failed", "summary": llm_failure_summary(exc), "error": str(exc)[:300]}
         reason["ai_score"] = None
         reason["final_score"] = rule_score
         reason["rule_score"] = rule_score
     return item
+
+
+def llm_failure_summary(exc):
+    message = str(exc)
+    if is_llm_account_error(message):
+        return "DeepSeek 余额不足或账号不可用，已保留规则匹配分；请充值或更换可用 API Key 后重新执行匹配。"
+    if "401" in message or "unauthorized" in message.lower() or "invalid api key" in message.lower():
+        return "DeepSeek API Key 无效或无权限，已保留规则匹配分；请检查生产环境 API Key。"
+    if "timeout" in message.lower() or "timed out" in message.lower() or "超时" in message:
+        return "AI 复核超时，已保留规则匹配分；可稍后重新执行匹配。"
+    return "AI 复核失败，已保留规则匹配分。"
+
+
+def is_llm_account_error(message):
+    value = str(message or "").lower()
+    return "402" in value or "insufficient balance" in value or "余额不足" in value
 
 
 def request_ai_match_review(job, candidate, rule_reason):

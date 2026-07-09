@@ -951,7 +951,7 @@ function JobsPage() {
         <div className="toolbar">
           <div>
             <h2 className="font-semibold">匹配结果</h2>
-            <p className="text-xs text-steel">预览先按标签规则排序；执行匹配会调用 AI 阅读完整 JD 与简历，并按规则分 45% + AI 分 55% 生成综合分，不做 50 分初筛。</p>
+            <p className="text-xs text-steel">预览先按标签规则排序；执行匹配会调用 AI 阅读完整 JD 与简历，并按规则分 35% + AI 分 65% 生成综合分，不做 50 分初筛。</p>
           </div>
           <div className="flex flex-wrap gap-2">
             <button className="secondary-button" onClick={() => addToPipeline(visibleMatches.slice(0, 5).map((item) => item.candidate_id))} disabled={!jobId || !visibleMatches.length}>
@@ -985,7 +985,11 @@ function JobsPage() {
                   {match.reason.ai_review && (
                     <div className="mt-2 rounded-md border border-line bg-slate-50 px-3 py-2 text-xs text-steel">
                       <p className="font-medium text-ink">
-                        {match.reason.ai_review.source === "deepseek" ? "AI 综合判断" : "规则匹配"}
+                        {match.reason.ai_review.source === "deepseek"
+                          ? "AI 综合判断"
+                          : match.reason.ai_review.source === "failed" || match.reason.ai_review.source === "ai_unavailable"
+                            ? "AI 暂不可用"
+                            : "规则匹配"}
                         {match.reason.ai_review.summary ? `：${match.reason.ai_review.summary}` : ""}
                       </p>
                       {(match.reason.ai_review.strengths?.length || match.reason.ai_review.risks?.length || match.reason.ai_review.interview_focus?.length) ? (

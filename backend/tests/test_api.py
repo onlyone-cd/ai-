@@ -12,7 +12,7 @@ from sqlalchemy import inspect
 from app import create_app, db
 from app.config import Config
 from app.auth import verify_password
-from app.llm_client import chat_json
+from app.llm_client import LLMError, chat_json
 from app.models import AgentConversation, AgentMessage, AuditLog, BackgroundTask, BossDraft, BossSyncJob, Candidate, CandidateTag, EmployeeCompensation, EmployeeProfile, EmployeeRecommendation, InterviewAssignment, InterviewFeedback, InterviewSpeechLog, Job, LLMUsage, Match, NotificationLog, OfferRecord, OrganizationUnit, PipelineStage, ResumeAttachment, User
 from app.task_service import run_next_task
 
@@ -1121,6 +1121,34 @@ def test_job_match_combines_rule_score_and_ai_review(client, admin_headers, app,
     assert reason["ai_review"]["recommendation"] == "推荐"
     assert reason["score_formula"] == "final_score=round(rule_score*35% + ai_score*65%); no pre-filter before AI review"
     assert first["score"] == round(reason["rule_score"] * 0.35 + 80 * 0.65)
+
+
+def test_job_match_reports_deepseek_balance_error_once(client, admin_headers, app, monkeypatch):
+    jobs = client.get("/api/jobs", headers=admin_headers).get_json()["data"]["items"]
+    accounting_job = next(job for job in jobs if job["title"] == "财务会计主管")
+
+    app.config["LLM_ENABLED"] = True
+    app.config["DEEPSEEK_API_KEY"] = "test-key"
+    calls = []
+
+    def fake_chat_json(messages, **kwargs):
+        calls.append(messages)
+        raise LLMError('LLM HTTP 402: {"message":"Insufficient Balance"}')
+
+    monkeypatch.setattr("app.job_service.chat_json", fake_chat_json)
+
+    response = client.post(f"/api/jobs/{accounting_job['id']}/match", headers=admin_headers)
+
+    assert response.status_code == 200
+    items = response.get_json()["data"]["items"]
+    assert len(calls) == 1
+    failed = [item for item in items if item["reason"]["ai_review"]["source"] == "failed"]
+    unavailable = [item for item in items if item["reason"]["ai_review"]["source"] == "ai_unavailable"]
+    assert len(failed) == 1
+    assert unavailable
+    assert "DeepSeek 余额不足" in failed[0]["reason"]["ai_review"]["summary"]
+    assert "DeepSeek 余额不足" in unavailable[0]["reason"]["ai_review"]["summary"]
+    assert failed[0]["score"] == failed[0]["reason"]["rule_score"]
 
 
 def test_job_creation_structures_jd_without_manual_skill_tags(client, admin_headers):

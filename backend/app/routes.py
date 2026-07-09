@@ -1,4 +1,4 @@
-from collections import Counter
+from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta, timezone
 import csv
 from difflib import SequenceMatcher
@@ -3645,6 +3645,10 @@ def run_agent_tool(user, message, pending_action=None, history=None):
         if lookup:
             return lookup
 
+    global_lookup = answer_global_knowledge_lookup(user, text, suggestions, history=history)
+    if global_lookup:
+        return global_lookup
+
     if should_agent_use_web(text):
         return free_agent_chat(text, suggestions, history=history)
 
@@ -3978,14 +3982,225 @@ def agent_knowledge_context(text, limit=5):
         terms = [word for word in re.split(r"\s+", str(text or "")) if len(word) >= 2][:6]
     candidates = rank_candidates_for_knowledge(terms, limit=limit)
     employees = rank_employees_for_knowledge(terms, limit=limit)
+    users = rank_users_for_knowledge(terms, limit=limit)
     jobs = rank_jobs_for_knowledge(terms, limit=limit)
     return {
         "query_terms": terms,
         "candidates": candidates,
         "employees": employees,
+        "users": users,
         "jobs": jobs,
-        "note": "这些是系统内部知识库检索结果，来自简历、员工档案和岗位 JD。",
+        "note": "这些是系统内部知识库检索结果，来自候选人简历、内部员工档案、系统账号/负责人和岗位 JD。",
     }
+
+
+def answer_global_knowledge_lookup(user, text, suggestions, history=None):
+    if not is_global_entity_lookup_request(text):
+        return None
+    matched_user, user_alternatives = find_user_for_agent_message(text)
+    employee, employee_alternatives = find_employee_for_agent_message(text)
+    candidate, candidate_alternatives = find_candidate_for_agent_message(text)
+    manager_matches = find_manager_reportees_for_agent_message(text)
+    if not any([matched_user, employee, candidate, manager_matches]):
+        return None
+
+    steps = [
+        {"step": "理解问题", "detail": "识别到这是围绕具体人名/负责人/岗位关系的查询。"},
+        {"step": "检索知识库", "detail": "同时查系统账号、内部员工、候选人、岗位负责人、流程、面试和 Offer。"},
+        {"step": "组织回答", "detail": "优先返回系统内有证据的数据；没有证据的部分明确说明未维护。"},
+    ]
+    result = {
+        "plan": steps,
+        "matched": True,
+        "users": [user_activity_payload(matched_user)] if matched_user else [],
+        "employees": [employee_payload(employee, user, detail=True)] if employee else [],
+        "candidates": [candidate.to_dict(detail=True)] if candidate else [],
+        "manager_reportees": [employee_payload(item, user) for item in manager_matches[:10]],
+        "alternatives": {
+            "users": [user_activity_payload(item) for item in user_alternatives[:5] if not matched_user or item.id != matched_user.id],
+            "employees": [employee_payload(item, user) for item in employee_alternatives[:5] if not employee or item.id != employee.id],
+            "candidates": [item.to_dict() for item in candidate_alternatives[:5] if not candidate or item.id != candidate.id],
+        },
+        "knowledge": agent_knowledge_context(text),
+    }
+    lines = ["我先按“人 + 职位/岗位/负责关系”做了全局查询，而不是只走固定关键词规则。"]
+    if matched_user:
+        owned_jobs = jobs_owned_by_user(matched_user)
+        active_jobs = [job for job in owned_jobs if job.status == "active"]
+        candidate_count = Candidate.query.filter_by(owner_hr_id=matched_user.id).count()
+        employee_count = EmployeeProfile.query.filter_by(owner_hr_id=matched_user.id).count()
+        interview_count = InterviewAssignment.query.filter(
+            (InterviewAssignment.interviewer_id == matched_user.id) | (InterviewAssignment.created_by == matched_user.id)
+        ).count()
+        pipeline_count = PipelineStage.query.filter_by(updated_by=matched_user.id).count()
+        result["users"][0].update(
+            {
+                "owned_jobs": [job.to_dict() for job in owned_jobs[:20]],
+                "active_job_count": len(active_jobs),
+                "candidate_count": candidate_count,
+                "employee_count": employee_count,
+                "interview_count": interview_count,
+                "pipeline_count": pipeline_count,
+            }
+        )
+        lines.append(
+            f"找到系统用户/负责人：{matched_user.name}（账号 {matched_user.username}，角色 {matched_user.role}，"
+            f"{'启用' if matched_user.active else '停用'}）。"
+        )
+        if "岗位" in text or "职位" in text or "负责" in text or "名下" in text:
+            if owned_jobs:
+                job_lines = []
+                for index, job in enumerate(owned_jobs[:10], 1):
+                    job_lines.append(f"{index}. {job.title}（{job.status}｜{job.city or '未填城市'}｜{job.department or '未填部门'}）")
+                lines.append(f"{matched_user.name} 当前关联/负责岗位 {len(owned_jobs)} 个，其中开放 {len(active_jobs)} 个：\n" + "\n".join(job_lines))
+            else:
+                lines.append(f"{matched_user.name} 当前没有关联到负责岗位。")
+        lines.append(f"关联数据：候选人 {candidate_count} 位，内部员工档案 {employee_count} 份，面试/创建记录 {interview_count} 条，流程更新 {pipeline_count} 条。")
+    if employee:
+        lines.append(
+            f"内部员工：{employee.name}，当前职位：{employee.current_title or '未维护'}；"
+            f"部门：{employee.department or (employee.organization_unit.name if employee.organization_unit else '未维护')}；"
+            f"编号：{employee.employee_no or employee.id}。"
+        )
+    if candidate:
+        lines.append(
+            f"人才库候选人：{candidate.name_masked}，简历/意向职位：{candidate.title or '未维护'}；"
+            f"城市：{candidate.city or '未知'}；来源：{candidate.source or '未知'}。"
+        )
+    if manager_matches:
+        preview = "、".join(f"{item.name}（{item.current_title or '职位未维护'}）" for item in manager_matches[:8])
+        lines.append(f"同时发现以该姓名作为上级/经理的员工 {len(manager_matches)} 位：{preview}。")
+    if not any([matched_user, employee, candidate]) and (user_alternatives or employee_alternatives or candidate_alternatives):
+        names = [item.name for item in user_alternatives[:3]] + [item.name for item in employee_alternatives[:3]] + [item.name_masked for item in candidate_alternatives[:3]]
+        lines.append("没有精确命中，但找到可能相关对象：" + "、".join(dict.fromkeys(names)))
+    return {
+        "answer": "\n".join(lines),
+        "tool": "global_lookup",
+        "result": result,
+        "suggestions": build_global_lookup_suggestions(matched_user, employee, candidate, suggestions),
+        "readonly": True,
+    }
+
+
+def is_global_entity_lookup_request(text):
+    value = str(text or "")
+    if not value:
+        return False
+    lookup_words = ["查询", "查", "看看", "现在", "谁", "负责", "名下", "职位", "岗位", "账号", "角色", "员工", "候选人", "面试", "流程", "offer", "Offer"]
+    if not any(word in value for word in lookup_words):
+        return False
+    if any(word in value for word in ["创建", "新增", "生成", "发布", "删除", "修改密码"]):
+        return False
+    return bool(
+        find_user_for_agent_message(value)[0]
+        or find_employee_for_agent_message(value)[0]
+        or find_candidate_for_agent_message(value)[0]
+        or find_manager_reportees_for_agent_message(value)
+    )
+
+
+def find_user_for_agent_message(text):
+    normalized = re.sub(r"\s+", "", str(text or "")).lower()
+    users = User.query.order_by(User.active.desc(), User.id.asc()).limit(500).all()
+    exact = []
+    fuzzy = []
+    boss_accounts = BossAccount.query.order_by(BossAccount.updated_at.desc(), BossAccount.id.desc()).limit(200).all()
+    account_by_owner = defaultdict(list)
+    for account in boss_accounts:
+        account_by_owner[account.owner_hr_id].append(account.account or "")
+    for item in users:
+        fields = [item.name or "", item.username or "", item.role or "", *account_by_owner.get(item.id, [])]
+        compact_fields = [re.sub(r"\s+", "", field).lower() for field in fields if field]
+        if any(field and field in normalized for field in compact_fields[:2]):
+            exact.append(item)
+            continue
+        if any(field and field in normalized for field in compact_fields[2:]):
+            fuzzy.append((3, item))
+            continue
+        name = re.sub(r"\s+", "", item.name or "").lower()
+        if name and len(name) >= 2:
+            score = 0
+            if SequenceMatcher(None, name, normalized).ratio() >= 0.45:
+                score += 1
+            for start in range(max(1, len(normalized) - len(name) + 1)):
+                window = normalized[start : start + len(name)]
+                if SequenceMatcher(None, name, window).ratio() >= 0.72:
+                    score += 3
+                    break
+            if score:
+                fuzzy.append((score, item))
+    if exact:
+        return exact[0], exact
+    if fuzzy:
+        fuzzy.sort(key=lambda row: row[0], reverse=True)
+        return fuzzy[0][1], [row[1] for row in fuzzy[:6]]
+    return None, users[:6]
+
+
+def find_manager_reportees_for_agent_message(text):
+    normalized = re.sub(r"\s+", "", str(text or "")).lower()
+    if not normalized:
+        return []
+    matches = []
+    for employee in EmployeeProfile.query.filter(EmployeeProfile.manager_name.isnot(None)).order_by(EmployeeProfile.updated_at.desc()).limit(1000).all():
+        manager = re.sub(r"\s+", "", employee.manager_name or "").lower()
+        if manager and manager in normalized:
+            matches.append(employee)
+    return matches
+
+
+def jobs_owned_by_user(user):
+    if not user:
+        return []
+    return Job.query.filter_by(owner_hr_id=user.id).order_by(Job.status.asc(), Job.created_at.desc(), Job.id.desc()).all()
+
+
+def user_activity_payload(user):
+    if not user:
+        return None
+    accounts = BossAccount.query.filter_by(owner_hr_id=user.id).order_by(BossAccount.updated_at.desc()).all()
+    return {
+        **with_permissions(user),
+        "boss_accounts": [account.to_dict() for account in accounts[:5]],
+        "owned_job_count": Job.query.filter_by(owner_hr_id=user.id).count(),
+        "candidate_count": Candidate.query.filter_by(owner_hr_id=user.id).count(),
+        "employee_count": EmployeeProfile.query.filter_by(owner_hr_id=user.id).count(),
+    }
+
+
+def build_global_lookup_suggestions(matched_user, employee, candidate, fallback):
+    if employee:
+        return [f"分析 {employee.name} 适合什么岗位", f"查看 {employee.name} 的简历优化建议", f"查询 {employee.name} 的薪资是否合理", "查看内部岗位缺口"]
+    if candidate:
+        return [f"分析 {candidate.name_masked} 适合什么岗位", f"查看 {candidate.name_masked} 简历", f"把 {candidate.name_masked} 加入匹配岗位流程", "继续搜索相似候选人"]
+    if matched_user:
+        return [f"查询 {matched_user.name} 负责哪些岗位", f"查看 {matched_user.name} 名下候选人", f"查看 {matched_user.name} 的面试安排", "查询账号权限"]
+    return fallback
+
+
+def rank_users_for_knowledge(terms, limit=5):
+    items = []
+    for item in User.query.order_by(User.active.desc(), User.id.asc()).limit(500).all():
+        account_names = [account.account or "" for account in BossAccount.query.filter_by(owner_hr_id=item.id).limit(5).all()]
+        owned_titles = [job.title or "" for job in Job.query.filter_by(owner_hr_id=item.id).order_by(Job.created_at.desc()).limit(8).all()]
+        haystack = " ".join([item.name or "", item.username or "", item.role or "", *account_names, *owned_titles])
+        score = agent_text_score(terms, haystack, item.name)
+        if score:
+            items.append((score, item, owned_titles))
+    items.sort(key=lambda row: row[0], reverse=True)
+    return [
+        {
+            "id": item.id,
+            "name": item.name,
+            "username": item.username,
+            "role": item.role,
+            "active": item.active,
+            "score": score,
+            "owned_jobs": owned_titles[:5],
+            "owned_job_count": Job.query.filter_by(owner_hr_id=item.id).count(),
+        }
+        for score, item, owned_titles in items[:limit]
+    ]
 
 
 def rank_candidates_for_knowledge(terms, limit=5):
@@ -4314,10 +4529,39 @@ def find_candidate_for_agent_message(text):
 
 def extract_agent_name_terms(text):
     cleaned = re.sub(r"[，。！？?、,.;；:：()\[\]【】]", " ", str(text or ""))
-    stop_words = {"查看", "分析", "员工", "候选人", "人才", "简历", "告诉我", "适合", "什么", "岗位", "推荐", "优化", "可以", "哪些", "的"}
+    stop_words = {
+        "现在",
+        "查询",
+        "查一下",
+        "查",
+        "查看",
+        "看看",
+        "分析",
+        "员工",
+        "候选人",
+        "人才",
+        "简历",
+        "告诉我",
+        "适合",
+        "什么",
+        "岗位",
+        "职位",
+        "负责",
+        "名下",
+        "推荐",
+        "优化",
+        "可以",
+        "哪些",
+        "他的",
+        "她的",
+        "这个人",
+        "的",
+    }
     terms = []
     for part in cleaned.split():
         value = part.strip()
+        for word in sorted(stop_words, key=len, reverse=True):
+            value = value.replace(word, "")
         if len(value) >= 2 and value not in stop_words:
             terms.append(value)
     return terms[:8]

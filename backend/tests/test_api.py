@@ -1963,6 +1963,35 @@ def test_agent_uses_knowledge_lookup_for_profile_questions(client, admin_headers
     assert "人才库" in data["answer"]
 
 
+def test_agent_global_lookup_finds_user_owned_jobs(client, admin_headers):
+    owner = User(username="wangchengdu-agent", name="王成都", role="recruiter", password_hash="x", active=True)
+    db.session.add(owner)
+    db.session.flush()
+    job = Job(
+        owner_hr_id=owner.id,
+        title="Java 平台工程师",
+        city="长沙",
+        department="研发部",
+        job_code="AGENT-WANG-JAVA",
+        jd_text="负责 Java 平台研发，要求 Spring Boot、MySQL、Redis。",
+        jd_structured={},
+        status="active",
+    )
+    db.session.add(job)
+    db.session.commit()
+
+    response = client.post("/api/agent/chat", headers=admin_headers, json={"message": "现在查询王成都的职位"})
+
+    assert response.status_code == 200
+    data = response.get_json()["data"]
+    assert data["tool"] == "global_lookup"
+    assert data["result"]["users"][0]["name"] == "王成都"
+    assert data["result"]["users"][0]["owned_jobs"][0]["title"] == "Java 平台工程师"
+    assert "王成都" in data["answer"]
+    assert "Java 平台工程师" in data["answer"]
+    assert [step["step"] for step in data["result"]["plan"]] == ["理解问题", "检索知识库", "组织回答"]
+
+
 def test_agent_does_not_create_job_from_ambiguous_create_and_recommend(client, admin_headers):
     candidate = client.post(
         "/api/boss/candidates/batch-import",

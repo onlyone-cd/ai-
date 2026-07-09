@@ -580,7 +580,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
         ...init.headers
       }
     });
-    const body = await response.json();
+    const body = await parseApiResponse(response);
     if (!response.ok) {
       const text = errorMessage(body, "请求失败");
       notify("error", text);
@@ -603,7 +603,7 @@ async function upload<T>(path: string, formData: FormData): Promise<T> {
       },
       body: formData
     });
-    const body = await response.json();
+    const body = await parseApiResponse(response);
     if (!response.ok) {
       const text = errorMessage(body, "请求失败");
       notify("error", text);
@@ -615,6 +615,24 @@ async function upload<T>(path: string, formData: FormData): Promise<T> {
     if (error instanceof TypeError) notify("error", "网络连接失败");
     throw error;
   }
+}
+
+async function parseApiResponse(response: Response) {
+  const contentType = response.headers.get("content-type") || "";
+  if (contentType.includes("application/json")) {
+    return response.json();
+  }
+  const text = await response.text();
+  const fallback = response.status === 413
+    ? "上传内容超过大小限制，请压缩文件或分批上传"
+    : response.status >= 500
+      ? "服务暂时不可用，请稍后重试"
+      : "服务返回了非 JSON 响应，请刷新页面后重试";
+  return {
+    error: text && !text.trim().startsWith("<") ? text.slice(0, 200) : fallback,
+    code: `HTTP_${response.status}`,
+    details: {},
+  };
 }
 
 function errorMessage(body: { error?: string; details?: { errors?: { filename?: string; error?: string }[] } }, fallback: string) {

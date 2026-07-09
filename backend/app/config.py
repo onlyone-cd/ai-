@@ -13,7 +13,7 @@ class Config:
     SEED_DEMO_DATA = os.getenv("SEED_DEMO_DATA", "true").lower() == "true"
     UPLOAD_FOLDER = os.getenv("UPLOAD_FOLDER", "uploads")
     BACKUP_FOLDER = os.getenv("BACKUP_FOLDER", "backups")
-    MAX_CONTENT_LENGTH = int(os.getenv("MAX_CONTENT_LENGTH", str(16 * 1024 * 1024)))
+    MAX_CONTENT_LENGTH = int(os.getenv("MAX_CONTENT_LENGTH", str(128 * 1024 * 1024)))
     LLM_ENABLED = os.getenv("LLM_ENABLED", "true").lower() == "true"
     LLM_PROVIDER = os.getenv("LLM_PROVIDER", "deepseek")
     LLM_MODEL = os.getenv("LLM_MODEL", "deepseek-chat")

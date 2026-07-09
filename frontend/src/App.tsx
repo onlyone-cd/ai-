@@ -1120,6 +1120,16 @@ function PipelinePage() {
     setHistory([]);
   }, [jobId]);
 
+  useEffect(() => {
+    const refresh = () => api.pipeline(jobId).then(setBoard).catch(() => undefined);
+    const timer = window.setInterval(refresh, 15000);
+    window.addEventListener("focus", refresh);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", refresh);
+    };
+  }, [jobId]);
+
   async function loadBoard(silent = false) {
     setBoard(await api.pipeline(jobId));
     if (!silent) notify("success", "流程看板已刷新");
@@ -1201,7 +1211,7 @@ function PipelinePage() {
         </div>
       </div>
       {message && <div className="rounded-md bg-blue-50 px-3 py-2 text-sm text-blue-700">{message}</div>}
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
+      <div className="space-y-4">
         <div className="pipeline-board">
           {board?.stages.map((stage) => (
             <div key={stage} className="pipeline-column">
@@ -1243,7 +1253,7 @@ function PipelinePage() {
             </div>
           ))}
         </div>
-        <PipelineHistoryPanel target={historyTarget} history={history} onClose={() => setHistoryTarget(null)} />
+        {historyTarget && <PipelineHistoryPanel target={historyTarget} history={history} onClose={() => setHistoryTarget(null)} />}
       </div>
     </section>
   );

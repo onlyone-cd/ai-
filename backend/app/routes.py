@@ -33,7 +33,7 @@ from .task_service import enqueue_task, retry_task, run_task
 
 api = Blueprint("api", __name__)
 
-STAGES = ["pending", "ai_screen", "business_review", "interview_first", "interview_second", "offer", "onboarded", "rejected"]
+STAGES = ["pending", "ai_screen", "business_review", "interview_first", "interview_second", "interview_final", "offer", "onboarded", "rejected"]
 OFFER_STATUSES = {"draft", "sent", "accepted", "declined", "cancelled"}
 LOGIN_FAILURES = {}
 PUBLIC_INTERVIEW_REQUESTS = {}
@@ -2160,6 +2160,34 @@ def public_interview_complete(token):
     return ok({"assignment": assignment.to_dict(), "feedback": feedback.to_dict(), "closing": closing}, "AI 面试已同步到面试管理")
 
 
+def previous_interview_stage(round_name):
+    return {
+        "interview_first": "business_review",
+        "interview_second": "interview_first",
+        "interview_final": "interview_second",
+    }.get(round_name, "business_review")
+
+
+def push_interview_pipeline(assignment, user_id, stage, note):
+    if stage not in STAGES:
+        stage = "business_review"
+    latest = latest_pipeline_item(assignment.job_id, assignment.candidate_id)
+    if latest and latest.stage == stage:
+        latest.note = note
+        latest.updated_by = user_id
+        latest.ts = utcnow()
+        return latest
+    item = PipelineStage(
+        candidate_id=assignment.candidate_id,
+        job_id=assignment.job_id,
+        stage=stage,
+        updated_by=user_id,
+        note=note,
+    )
+    db.session.add(item)
+    return item
+
+
 @api.post("/interview/assignments")
 @login_required
 @roles_required("admin", "manager", "recruiter")
@@ -2191,15 +2219,7 @@ def create_interview_assignment(user):
     db.session.add(assignment)
     db.session.flush()
     assignment.ai_plan = build_interview_ai_plan(assignment, prefer_deepseek=True)
-    db.session.add(
-        PipelineStage(
-            candidate_id=candidate.id,
-            job_id=job.id,
-            stage=round_name,
-            updated_by=user.id,
-            note=f"已安排{stageLabels_backend(round_name)}：{interviewer.name}",
-        )
-    )
+    push_interview_pipeline(assignment, user.id, round_name, f"已安排{stageLabels_backend(round_name)}：{interviewer.name}")
     audit_log(user, "create", "interview", assignment.id, candidate.name_masked, {"round": round_name, "interviewer": interviewer.name})
     emit_notification_event(
         user,
@@ -2241,7 +2261,10 @@ def update_interview_assignment(user, assignment_id):
     if "round" in payload:
         if payload["round"] not in {"interview_first", "interview_second", "interview_final"}:
             return error("面试轮次不合法")
+        previous_round = assignment.round
         assignment.round = payload["round"]
+        if assignment.round != previous_round:
+            push_interview_pipeline(assignment, user.id, assignment.round, f"面试轮次调整为{stageLabels_backend(assignment.round)}")
     for field in ["location", "note"]:
         if field in payload:
             setattr(assignment, field, payload.get(field))
@@ -2260,7 +2283,7 @@ def cancel_interview_assignment(user, assignment_id):
     if assignment.status != "scheduled":
         return error("该面试已结束或取消，不能重复取消", "INTERVIEW_CLOSED", 409)
     assignment.status = "cancelled"
-    db.session.add(PipelineStage(candidate_id=assignment.candidate_id, job_id=assignment.job_id, stage=assignment.round, updated_by=user.id, note="面试已取消"))
+    push_interview_pipeline(assignment, user.id, previous_interview_stage(assignment.round), f"{stageLabels_backend(assignment.round)}已取消，回退流程")
     audit_log(user, "cancel", "interview", assignment.id, assignment.candidate.name_masked, {"round": assignment.round})
     db.session.commit()
     return ok(assignment.to_dict(), "面试已取消")
@@ -2274,6 +2297,8 @@ def delete_interview_assignment(user, assignment_id):
     if not assignment:
         return error("面试安排不存在", "NOT_FOUND", 404)
     InterviewFeedback.query.filter_by(assignment_id=assignment.id).delete()
+    if assignment.status == "scheduled":
+        push_interview_pipeline(assignment, user.id, previous_interview_stage(assignment.round), f"{stageLabels_backend(assignment.round)}安排已删除，回退流程")
     audit_log(user, "delete", "interview", assignment.id, assignment.candidate.name_masked, {"round": assignment.round})
     db.session.delete(assignment)
     db.session.commit()

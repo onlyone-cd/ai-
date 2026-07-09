@@ -1351,6 +1351,54 @@ def test_interview_assignment_pushes_pipeline_stage(client, admin_headers):
     assert "interview_first" in stages
 
 
+def test_interview_round_update_cancel_and_delete_sync_pipeline(client, admin_headers):
+    created = client.post(
+        "/api/interview/assignments",
+        headers=admin_headers,
+        json={
+            "candidate_id": 1,
+            "job_id": 1,
+            "interviewer_id": 2,
+            "round": "interview_first",
+            "scheduled_at": "2026-07-03T10:00:00",
+        },
+    ).get_json()["data"]
+
+    updated = client.patch(
+        f"/api/interview/assignments/{created['id']}",
+        headers=admin_headers,
+        json={"round": "interview_final"},
+    )
+
+    assert updated.status_code == 200
+    history = client.get("/api/pipeline/1/history/1", headers=admin_headers).get_json()["data"]["items"]
+    assert history[-1]["stage"] == "interview_final"
+
+    cancelled = client.post(f"/api/interview/assignments/{created['id']}/cancel", headers=admin_headers)
+
+    assert cancelled.status_code == 200
+    board = client.get("/api/pipeline/board?job_id=1", headers=admin_headers).get_json()["data"]
+    latest = [item for rows in board["columns"].values() for item in rows if item["candidate_id"] == 1 and item["job_id"] == 1][0]
+    assert latest["stage"] == "interview_second"
+
+    another = client.post(
+        "/api/interview/assignments",
+        headers=admin_headers,
+        json={
+            "candidate_id": 2,
+            "job_id": 1,
+            "interviewer_id": 2,
+            "round": "interview_second",
+            "scheduled_at": "2026-07-05T10:00:00",
+        },
+    ).get_json()["data"]
+    deleted = client.delete(f"/api/interview/assignments/{another['id']}", headers=admin_headers)
+
+    assert deleted.status_code == 200
+    latest_after_delete = PipelineStage.query.filter_by(job_id=1, candidate_id=2).order_by(PipelineStage.ts.desc()).first()
+    assert latest_after_delete.stage == "interview_first"
+
+
 def test_interview_ai_plan_generates_questions(client, admin_headers):
     assignment = client.post(
         "/api/interview/assignments",

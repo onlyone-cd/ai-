@@ -58,6 +58,36 @@ const offerStatusLabels: Record<string, string> = {
 
 type View = "candidates" | "organization" | "internal" | "jobs" | "pipeline" | "interviews" | "offers" | "boss" | "bi" | "agent" | "tasks" | "audit" | "users";
 
+async function copyTextToClipboard(text: string) {
+  const value = String(text || "");
+  if (!value) return false;
+  const clipboard = navigator.clipboard;
+  if (clipboard && typeof clipboard.writeText === "function") {
+    try {
+      await clipboard.writeText(value);
+      return true;
+    } catch {
+      // Some production browsers disable Clipboard API on plain HTTP.
+    }
+  }
+  const textarea = document.createElement("textarea");
+  textarea.value = value;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  textarea.style.top = "0";
+  textarea.style.opacity = "0";
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+  textarea.setSelectionRange(0, value.length);
+  try {
+    return document.execCommand("copy");
+  } finally {
+    document.body.removeChild(textarea);
+  }
+}
+
 function App() {
   const roomToken = window.location.pathname.match(/^\/interview-room\/([^/]+)/)?.[1] || "";
   const [user, setUser] = useState<User | null>(null);
@@ -1428,8 +1458,13 @@ function InterviewsPage() {
 
   async function copyRoomLink(assignment: InterviewAssignment) {
     const data = await api.interviewRoomLink(assignment.id);
-    await navigator.clipboard.writeText(data.url);
-    notify("success", "候选人面试间链接已复制");
+    const copied = await copyTextToClipboard(data.url);
+    if (copied) {
+      notify("success", "候选人面试间链接已复制");
+      return;
+    }
+    window.prompt("请手动复制候选人面试间链接", data.url);
+    notify("error", "浏览器限制自动复制，请手动复制");
   }
 
   const visibleAssignments = useMemo(() => {
@@ -2097,9 +2132,16 @@ function BossPage() {
   }
 
   async function copyPluginToken() {
-    await navigator.clipboard.writeText(localStorage.getItem("hireinsight_token") || "");
-    setMessage("插件 Token 已复制，请粘贴到 Chrome 扩展中");
-    notify("success", "插件 Token 已复制");
+    const value = localStorage.getItem("hireinsight_token") || "";
+    const copied = await copyTextToClipboard(value);
+    if (copied) {
+      setMessage("插件 Token 已复制，请粘贴到 Chrome 扩展中");
+      notify("success", "插件 Token 已复制");
+      return;
+    }
+    window.prompt("请手动复制插件 Token", value);
+    setMessage("浏览器限制自动复制，请手动复制插件 Token");
+    notify("error", "浏览器限制自动复制，请手动复制");
   }
 
   function openBoss() {

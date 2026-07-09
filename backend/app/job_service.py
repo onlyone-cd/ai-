@@ -143,6 +143,7 @@ def preview_matches(job, limit=None):
 DEFAULT_AI_REVIEW_LIMIT = 3
 DEFAULT_MATCH_LIMIT = 50
 FINAL_TOP_AI_REVIEW_LIMIT = 5
+MAX_AI_REVIEW_CALLS = 8
 
 
 def persist_matches(db, job, ai_review_limit=DEFAULT_AI_REVIEW_LIMIT, match_limit=DEFAULT_MATCH_LIMIT):
@@ -180,12 +181,7 @@ def ai_review_matches(job, items, limit=None):
             reviewed.append(item)
             continue
         if index >= review_limit:
-            item["reason"]["ai_review"] = {
-                "source": "rule_pending",
-                "summary": f"未进入本次 AI 复核批次，当前保留规则匹配分；系统会优先补充复核最终前 {FINAL_TOP_AI_REVIEW_LIMIT} 位候选人。",
-            }
-            item["reason"]["ai_score"] = None
-            item["reason"]["final_score"] = item["reason"].get("rule_score", item["score"])
+            mark_rule_pending(item)
             reviewed.append(item)
             continue
         candidate = db_candidate(item["candidate_id"])
@@ -204,7 +200,7 @@ def supplement_final_top_ai_reviews(job, items, initial_review_limit, ai_unavail
     if ai_unavailable_message or not items:
         return items
     target_limit = min(FINAL_TOP_AI_REVIEW_LIMIT, len(items))
-    max_reviews = min(max(int(initial_review_limit or 0), target_limit), len(items))
+    max_reviews = min(max(int(initial_review_limit or 0), target_limit), MAX_AI_REVIEW_CALLS, len(items))
     reviewed_count = sum(1 for item in items if item["reason"].get("ai_review", {}).get("source") in {"deepseek", "failed"})
 
     while reviewed_count < max_reviews:
@@ -230,6 +226,19 @@ def mark_ai_unavailable(items, summary):
             item["reason"]["ai_review"] = {"source": "ai_unavailable", "summary": summary}
             item["reason"]["ai_score"] = None
             item["reason"]["final_score"] = item["reason"].get("rule_score", item["score"])
+            item["score"] = item["reason"]["final_score"]
+
+
+def mark_rule_pending(item):
+    rule_score = int(item["reason"].get("rule_score", item["score"]) or 0)
+    pending_score = round(rule_score * 0.35)
+    item["reason"]["ai_review"] = {
+        "source": "rule_pending",
+        "summary": f"未进入本次 AI 复核批次，当前仅按规则分 35% 折算展示；系统会优先补充复核最终前 {FINAL_TOP_AI_REVIEW_LIMIT} 位候选人。",
+    }
+    item["reason"]["ai_score"] = None
+    item["reason"]["final_score"] = pending_score
+    item["score"] = pending_score
 
 
 def db_candidate(candidate_id):

@@ -1981,6 +1981,19 @@ def test_agent_does_not_create_job_from_ambiguous_create_and_recommend(client, a
     assert "不会把" in data["answer"]
 
 
+def test_agent_web_trend_question_is_not_treated_as_candidate_search(client, admin_headers):
+    response = client.post(
+        "/api/agent/chat",
+        headers=admin_headers,
+        json={"message": "联网查一下今年Java招聘趋势，再结合我们人才库说说"},
+    )
+
+    assert response.status_code == 200
+    data = response.get_json()["data"]
+    assert data["tool"] == "chat"
+    assert data["tool"] != "search_candidates"
+
+
 def test_agent_free_chat_falls_back_to_llm_chat(client, admin_headers):
     response = client.post("/api/agent/chat", headers=admin_headers, json={"message": "帮我规划一下下周招聘重点"})
 

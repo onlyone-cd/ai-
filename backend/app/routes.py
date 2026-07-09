@@ -3645,6 +3645,9 @@ def run_agent_tool(user, message, pending_action=None, history=None):
         if lookup:
             return lookup
 
+    if should_agent_use_web(text):
+        return free_agent_chat(text, suggestions, history=history)
+
     if is_candidate_count_request(text):
         stats = candidate_segment_stats()
         requested = requested_segments(text)

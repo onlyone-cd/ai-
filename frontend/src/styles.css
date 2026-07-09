@@ -865,9 +865,10 @@ textarea {
 
     .talent-row {
       grid-template-columns: minmax(0, 1fr) auto;
-      gap: 0.75rem 1rem;
+      gap: 0.5rem 0.75rem;
       min-height: auto;
       align-items: start;
+      padding-block: 0.75rem;
     }
 
     .talent-row > div:nth-child(2) {
@@ -879,10 +880,22 @@ textarea {
       grid-column: 1 / -1;
     }
 
+    .talent-archive p,
+    .talent-person p {
+      margin-top: 0;
+      line-height: 1.45;
+    }
+
     .talent-actions {
       grid-column: 2;
       grid-row: 1;
       min-width: 112px;
+    }
+
+    .talent-actions .secondary-button,
+    .talent-actions .primary-button {
+      min-height: 2rem;
+      padding-block: 0.35rem;
     }
   }
 

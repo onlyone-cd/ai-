@@ -1825,6 +1825,58 @@ def test_agent_conversations_persist_messages_and_context(client, admin_headers)
     assert AgentMessage.query.count() == 4
 
 
+def test_agent_analyzes_employee_resume_and_recommends_jobs(client, admin_headers):
+    java_job = Job(
+        owner_hr_id=1,
+        title="内部 Java 后端工程师",
+        city="上海",
+        department="研发部",
+        job_code="INTERNAL-AGENT-JAVA",
+        jd_text="负责 Java 后端服务开发，要求 Spring Boot、MySQL、Redis，薪资 20-30K。",
+        jd_structured={},
+        status="active",
+    )
+    product_job = Job(
+        owner_hr_id=1,
+        title="内部产品经理",
+        city="上海",
+        department="产品部",
+        job_code="INTERNAL-AGENT-PM",
+        jd_text="负责产品规划、需求分析和跨部门沟通。",
+        jd_structured={},
+        status="active",
+    )
+    db.session.add_all([java_job, product_job])
+    db.session.commit()
+
+    candidate = client.post(
+        "/api/boss/candidates/batch-import",
+        headers=admin_headers,
+        json={"items": [{"external_id": "agent-employee-java", "raw_text": "姓名：员工Agent测试\n男 13800001234 agent-employee@example.com\n4 年 Java 后端开发经验，熟悉 Spring Boot、MySQL、Redis，负责绩效系统和接口服务开发。"}]},
+    ).get_json()["data"]["items"][0]
+    employee = client.post(
+        "/api/employees/from-candidate",
+        headers=admin_headers,
+        json={"candidate_id": candidate["id"], "current_job_id": java_job.id, "employee_no": "EMP-AGENT-001", "salary_monthly_k": 18, "salary_months": 13},
+    ).get_json()["data"]
+
+    response = client.post(
+        "/api/agent/chat",
+        headers=admin_headers,
+        json={"message": "分析员工 员工Agent测试 的简历，推荐适合岗位，并告诉我简历有哪些可以优化"},
+    )
+
+    assert response.status_code == 200
+    data = response.get_json()["data"]
+    assert data["tool"] == "analyze_employee_resume"
+    assert data["result"]["matched"] is True
+    assert data["result"]["employee"]["id"] == employee["id"]
+    assert data["result"]["items"][0]["job"]["title"] == "内部 Java 后端工程师"
+    assert data["result"]["items"][0]["score"] >= data["result"]["items"][-1]["score"]
+    assert data["result"]["resume_optimizations"]
+    assert "简历优化建议" in data["answer"]
+
+
 def test_agent_free_chat_falls_back_to_llm_chat(client, admin_headers):
     response = client.post("/api/agent/chat", headers=admin_headers, json={"message": "帮我规划一下下周招聘重点"})
 

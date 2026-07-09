@@ -713,7 +713,7 @@ function CandidatesPage() {
                     <span className="badge">{candidate.experience_analysis.label}</span>
                     {scoreByCandidate.has(candidate.id) && <span className="badge">匹配 {scoreByCandidate.get(candidate.id)?.score}/100</span>}
                   </div>
-                  <TagList tags={candidate.tags} />
+                  <TagList tags={candidate.tags} limit={5} compact />
                   {scoreByCandidate.has(candidate.id) && (
                     <p className="mt-2 text-xs text-steel">
                       命中：{scoreByCandidate.get(candidate.id)?.reason.hits.slice(0, 4).map((hit) => hit.candidate_tag).join("、") || "无"}；
@@ -4977,11 +4977,14 @@ function MobileTabs({ view, setView, isAdmin, canUseTasks }: { view: View; setVi
   );
 }
 
-function TagList({ tags }: { tags: { tag: string; score: number; category: string }[] }) {
-  const visible = [...tags].sort((a, b) => b.score - a.score || a.tag.localeCompare(b.tag)).slice(0, 8);
+function TagList({ tags, limit = 8, compact = false }: { tags: { tag: string; score: number; category: string }[]; limit?: number; compact?: boolean }) {
+  const sorted = [...tags].sort((a, b) => b.score - a.score || a.tag.localeCompare(b.tag));
+  const visible = sorted.slice(0, limit);
+  const hiddenCount = Math.max(0, sorted.length - visible.length);
   return (
-    <div className="mt-3 flex flex-wrap gap-1.5">
+    <div className={`${compact ? "tag-list-compact" : "mt-3 flex flex-wrap gap-1.5"}`}>
       {visible.map((tag) => <span className="chip" key={tag.tag}>{tag.tag} · {tag.score}/5</span>)}
+      {hiddenCount > 0 && <span className="chip muted">+{hiddenCount}</span>}
     </div>
   );
 }

@@ -809,12 +809,12 @@ textarea {
   }
 
   .talent-list-card {
-    @apply mx-6 mb-6 overflow-hidden rounded-lg border border-line bg-white;
+    @apply mx-4 mb-5 overflow-hidden rounded-lg border border-line bg-white md:mx-6;
   }
 
   .talent-list-head,
   .talent-row {
-    @apply grid gap-4 border-b border-line px-4 py-3 xl:grid-cols-[minmax(260px,1fr)_1fr_240px_150px];
+    @apply grid gap-3 border-b border-line px-4 py-3 xl:grid-cols-[minmax(220px,1.1fr)_minmax(300px,1.45fr)_minmax(180px,0.8fr)_120px];
   }
 
   .talent-list-head {
@@ -822,7 +822,8 @@ textarea {
   }
 
   .talent-row {
-    @apply items-start bg-white;
+    @apply items-center bg-white;
+    min-height: 112px;
   }
 
   .talent-person {
@@ -830,16 +831,31 @@ textarea {
   }
 
   .talent-person h3 {
-    @apply font-semibold text-ink;
+    @apply text-sm font-semibold text-ink;
   }
 
   .talent-person p,
   .talent-archive p {
-    @apply mt-1 text-sm text-steel;
+    @apply mt-1 text-xs leading-5 text-steel;
+  }
+
+  .tag-list-compact {
+    @apply mt-2 flex flex-wrap gap-1.5;
+    max-height: 56px;
+    overflow: hidden;
+  }
+
+  .tag-list-compact .chip {
+    @apply px-2 py-0.5;
   }
 
   .talent-actions {
-    @apply flex flex-wrap gap-2 xl:justify-end;
+    @apply flex flex-wrap gap-2 xl:flex-col xl:items-stretch xl:justify-center;
+  }
+
+  .talent-actions .secondary-button,
+  .talent-actions .primary-button {
+    @apply min-h-9 justify-center px-3 py-2 text-sm;
   }
 
   .upload-panel {

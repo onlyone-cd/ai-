@@ -6162,10 +6162,12 @@ def experience_stats(candidates):
     return [{"key": key, "label": labels[key], "count": stats.get(key, 0)} for key in labels]
 
 
-def latest_pipeline_items(job_id=None, since=None):
+def latest_pipeline_items(job_id=None, since=None, include_internal=False):
     query = PipelineStage.query
     if job_id:
         query = query.filter_by(job_id=job_id)
+    elif not include_internal:
+        query = query.join(Job, PipelineStage.job_id == Job.id).filter(or_(Job.job_code.is_(None), ~Job.job_code.like("INTERNAL-%")))
     if since:
         query = query.filter(PipelineStage.ts >= since)
     items = query.order_by(PipelineStage.ts.desc()).all()

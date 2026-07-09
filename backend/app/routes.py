@@ -4063,10 +4063,15 @@ def answer_global_knowledge_lookup(user, text, suggestions, history=None):
             f"编号：{employee.employee_no or employee.id}。"
         )
     if candidate:
+        terms = extract_agent_name_terms(text)
+        evidence = candidate_text_evidence(candidate, terms)
         lines.append(
             f"人才库候选人：{candidate.name_masked}，简历/意向职位：{candidate.title or '未维护'}；"
             f"城市：{candidate.city or '未知'}；来源：{candidate.source or '未知'}。"
         )
+        if evidence:
+            lines.append(f"注意：查询词也出现在该候选人的简历全文中，相关片段：{evidence}")
+        result["candidates"][0]["matched_evidence"] = evidence
     if manager_matches:
         preview = "、".join(f"{item.name}（{item.current_title or '职位未维护'}）" for item in manager_matches[:8])
         lines.append(f"同时发现以该姓名作为上级/经理的员工 {len(manager_matches)} 位：{preview}。")
@@ -4490,6 +4495,7 @@ def find_employee_for_agent_message(text):
 
 def find_candidate_for_agent_message(text):
     normalized = re.sub(r"\s+", "", str(text or "")).lower()
+    terms = extract_agent_name_terms(text)
     candidates = Candidate.query.order_by(Candidate.created_at.desc(), Candidate.id.desc()).limit(800).all()
     exact = []
     fuzzy = []
@@ -4515,7 +4521,7 @@ def find_candidate_for_agent_message(text):
                 if SequenceMatcher(None, name, window).ratio() >= 0.72:
                     score += 3
                     break
-        if candidate.raw_text and any(token in candidate.raw_text for token in extract_agent_name_terms(text)):
+        if candidate.raw_text and any(token in candidate.raw_text for token in terms):
             score += 1
         if score:
             fuzzy.append((score, candidate))
@@ -4564,7 +4570,31 @@ def extract_agent_name_terms(text):
             value = value.replace(word, "")
         if len(value) >= 2 and value not in stop_words:
             terms.append(value)
+    if not terms:
+        compact = re.sub(r"\s+", "", cleaned)
+        for word in sorted(stop_words, key=len, reverse=True):
+            compact = compact.replace(word, " ")
+        for value in re.split(r"\s+", compact):
+            value = value.strip()
+            if len(value) >= 2 and value not in stop_words:
+                terms.append(value)
     return terms[:8]
+
+
+def candidate_text_evidence(candidate, terms, limit=120):
+    text = re.sub(r"\s+", " ", candidate.raw_text or "").strip()
+    if not text:
+        return ""
+    for term in terms:
+        if not term:
+            continue
+        index = text.find(term)
+        if index >= 0:
+            start = max(0, index - 40)
+            end = min(len(text), index + len(term) + 80)
+            snippet = text[start:end]
+            return summarize_text(snippet, limit)
+    return ""
 
 
 def analyze_candidate_resume_from_agent(user, candidate, text, suggestions, history=None):

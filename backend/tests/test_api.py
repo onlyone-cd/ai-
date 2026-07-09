@@ -1992,6 +1992,23 @@ def test_agent_global_lookup_finds_user_owned_jobs(client, admin_headers):
     assert [step["step"] for step in data["result"]["plan"]] == ["理解问题", "检索知识库", "组织回答"]
 
 
+def test_agent_global_lookup_uses_candidate_resume_full_text(client, admin_headers):
+    candidate = client.post(
+        "/api/boss/candidates/batch-import",
+        headers=admin_headers,
+        json={"items": [{"external_id": "agent-candidate-ref-wang", "raw_text": "姓名：张伟\n男 13900001111 zhangwei@example.com\n5 年 Java 后端经验。沟通过的招聘负责人是王成都，期望继续了解平台研发岗位。"}]},
+    ).get_json()["data"]["items"][0]
+
+    response = client.post("/api/agent/chat", headers=admin_headers, json={"message": "现在查询王成都的职位"})
+
+    assert response.status_code == 200
+    data = response.get_json()["data"]
+    assert data["tool"] == "global_lookup"
+    assert data["result"]["candidates"][0]["id"] == candidate["id"]
+    assert "简历全文" in data["answer"]
+    assert "王成都" in data["result"]["candidates"][0]["matched_evidence"]
+
+
 def test_agent_does_not_create_job_from_ambiguous_create_and_recommend(client, admin_headers):
     candidate = client.post(
         "/api/boss/candidates/batch-import",

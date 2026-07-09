@@ -606,7 +606,84 @@ textarea {
   }
 
   .agent-trace {
-    @apply mt-3 flex items-center gap-2 rounded-md border border-line bg-slate-50 px-3 py-2 text-xs font-medium text-steel;
+    @apply mt-3 space-y-2 rounded-md border border-line bg-slate-50 px-3 py-2 text-xs text-steel;
+  }
+
+  .agent-trace-head {
+    @apply flex flex-wrap items-center justify-between gap-2 font-medium text-ink;
+  }
+
+  .agent-trace-head span {
+    @apply inline-flex items-center gap-1.5;
+  }
+
+  .agent-trace-head span:last-child {
+    @apply max-w-full truncate text-steel;
+  }
+
+  .agent-trace-steps {
+    @apply grid gap-2 sm:grid-cols-3;
+  }
+
+  .agent-trace-step {
+    @apply min-w-0 rounded-md border border-line bg-white px-2.5 py-2;
+  }
+
+  .agent-trace-step b {
+    @apply mr-1.5 inline-grid h-5 w-5 place-items-center rounded bg-mint/10 text-[11px] text-mint;
+  }
+
+  .agent-trace-step span {
+    @apply font-medium text-ink;
+  }
+
+  .agent-trace-step small {
+    @apply mt-1 block line-clamp-2 leading-5 text-steel;
+  }
+
+  .agent-trace-calls {
+    @apply flex flex-wrap gap-2;
+  }
+
+  .agent-trace-calls span {
+    @apply inline-flex items-center gap-1.5 rounded-md border border-line bg-white px-2 py-1 font-medium;
+  }
+
+  .agent-trace-calls span.done {
+    @apply border-green-200 bg-green-50 text-green-700;
+  }
+
+  .agent-trace-calls span.planned {
+    @apply border-blue-200 bg-blue-50 text-blue-700;
+  }
+
+  .agent-trace-calls small {
+    @apply text-[10px] font-normal opacity-75;
+  }
+
+  .agent-trace-detail {
+    @apply rounded-md border border-line bg-white px-2.5 py-2;
+  }
+
+  .agent-trace-detail summary {
+    @apply flex cursor-pointer list-none items-center gap-1.5 font-medium text-steel;
+  }
+
+  .agent-trace-detail summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .agent-trace-grid {
+    @apply mt-2 grid gap-2 sm:grid-cols-3;
+  }
+
+  .agent-trace-grid span {
+    @apply rounded bg-slate-50 px-2 py-1;
+  }
+
+  .agent-trace-detail ul {
+    @apply mt-2 space-y-1 pl-4 leading-5;
+    list-style: disc;
   }
 
   .agent-thinking {

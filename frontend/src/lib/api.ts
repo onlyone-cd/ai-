@@ -480,6 +480,25 @@ export type AgentResponse = {
   answer: string;
   tool: string;
   result: unknown;
+  agent_trace?: {
+    mode?: string;
+    intent?: string;
+    plan?: { step: string; detail?: string }[];
+    selected_tools?: { name: string; reason?: string }[];
+    tool_calls?: { name: string; status: string; readonly?: boolean; summary?: string }[];
+    memory?: string[];
+    knowledge?: {
+      query_terms?: string[];
+      candidates?: unknown[];
+      employees?: unknown[];
+      users?: unknown[];
+      jobs?: unknown[];
+    };
+    web?: { needed?: boolean; reason?: string };
+    final?: { status?: string; summary?: string };
+    planner_error?: string;
+  };
+  tool_calls?: { name: string; status: string; readonly?: boolean; summary?: string }[];
   pending_action?: Record<string, unknown> | null;
   suggestions: string[];
   readonly: boolean;

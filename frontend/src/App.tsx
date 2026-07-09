@@ -2595,12 +2595,58 @@ function upsertConversation(items: AgentConversation[], conversation: AgentConve
 }
 
 function AgentTrace({ response }: { response: AgentResponse }) {
-  if (!response.tool || response.tool === "chat") return null;
+  const trace = response.agent_trace;
+  if (!trace && (!response.tool || response.tool === "chat")) return null;
+  const plan = trace?.plan || [];
+  const calls = trace?.tool_calls || response.tool_calls || (response.tool ? [{ name: response.tool, status: "succeeded", readonly: response.readonly }] : []);
+  const knowledge = trace?.knowledge;
+  const knowledgeCount = knowledge
+    ? (knowledge.candidates?.length || 0) + (knowledge.employees?.length || 0) + (knowledge.users?.length || 0) + (knowledge.jobs?.length || 0)
+    : 0;
   return (
     <div className="agent-trace">
-      <Wrench size={14} />
-      <span>调用工具：{response.tool}</span>
-      <ChevronRight size={14} />
+      <div className="agent-trace-head">
+        <span><Sparkles size={14} />{trace?.mode === "deepseek" ? "DeepSeek 规划" : "本地规划"}</span>
+        <span>{trace?.intent || response.tool}</span>
+      </div>
+      {plan.length > 0 && (
+        <div className="agent-trace-steps">
+          {plan.slice(0, 4).map((item, index) => (
+            <div className="agent-trace-step" key={`${item.step}-${index}`}>
+              <b>{index + 1}</b>
+              <span>{item.step}</span>
+              {item.detail && <small>{item.detail}</small>}
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="agent-trace-calls">
+        {calls.map((call, index) => (
+          <span className={call.status === "succeeded" ? "done" : "planned"} key={`${call.name}-${index}`}>
+            <Wrench size={13} />
+            {call.name}
+            <small>{call.status === "succeeded" ? "已调用" : "计划"}</small>
+          </span>
+        ))}
+      </div>
+      <details className="agent-trace-detail">
+        <summary>
+          <Database size={13} />
+          记忆与知识库
+          <ChevronRight size={13} />
+        </summary>
+        <div className="agent-trace-grid">
+          <span>历史记忆：{trace?.memory?.length || 0} 条</span>
+          <span>知识命中：{knowledgeCount} 条</span>
+          <span>联网：{trace?.web?.needed ? "已判断需要" : "未需要"}</span>
+          {trace?.planner_error && <span>规划器兜底：{trace.planner_error}</span>}
+        </div>
+        {calls.some((call) => call.summary) && (
+          <ul>
+            {calls.filter((call) => call.summary).map((call, index) => <li key={`${call.name}-summary-${index}`}>{call.name}：{call.summary}</li>)}
+          </ul>
+        )}
+      </details>
     </div>
   );
 }

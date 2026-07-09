@@ -1985,6 +1985,9 @@ def test_agent_global_lookup_finds_user_owned_jobs(client, admin_headers):
     assert response.status_code == 200
     data = response.get_json()["data"]
     assert data["tool"] == "global_lookup"
+    assert data["agent_trace"]["plan"]
+    assert data["agent_trace"]["tool_calls"][-1]["name"] == "global_lookup"
+    assert data["agent_trace"]["tool_calls"][-1]["status"] == "succeeded"
     assert data["result"]["users"][0]["name"] == "王成都"
     assert data["result"]["users"][0]["owned_jobs"][0]["title"] == "Java 平台工程师"
     assert "王成都" in data["answer"]
@@ -2004,6 +2007,7 @@ def test_agent_global_lookup_uses_candidate_resume_full_text(client, admin_heade
     assert response.status_code == 200
     data = response.get_json()["data"]
     assert data["tool"] == "global_lookup"
+    assert data["agent_trace"]["knowledge"]["query_terms"]
     assert data["result"]["candidates"][0]["id"] == candidate["id"]
     assert "简历全文" in data["answer"]
     assert "王成都" in data["result"]["candidates"][0]["matched_evidence"]

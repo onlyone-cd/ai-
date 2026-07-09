@@ -2013,6 +2013,31 @@ def test_agent_global_lookup_uses_candidate_resume_full_text(client, admin_heade
     assert "王成都" in data["result"]["candidates"][0]["matched_evidence"]
 
 
+def test_agent_runs_multi_tool_chain_for_explicit_multi_step_requests(client, admin_headers):
+    owner = User(username="multi-wangchengdu", name="王成都", role="recruiter", password_hash="x", active=True)
+    db.session.add(owner)
+    db.session.flush()
+    job = Job(owner_hr_id=owner.id, title="Java 平台工程师", city="长沙", department="研发部", job_code="AGENT-CHAIN-JAVA", jd_text="负责 Java 平台研发。", jd_structured={}, status="active")
+    candidate = Candidate(owner_hr_id=1, upload_batch_id="agent-chain", name_masked="链路候选人", title="Java", raw_text="姓名：链路候选人\nJava 后端开发", resume_json={}, source="upload")
+    db.session.add_all([job, candidate])
+    db.session.flush()
+    db.session.add(PipelineStage(candidate_id=candidate.id, job_id=job.id, stage="pending", updated_by=1))
+    db.session.add(InterviewAssignment(candidate_id=candidate.id, job_id=job.id, interviewer_id=1, round="interview_first", scheduled_at=datetime.now(timezone.utc), created_by=1))
+    db.session.commit()
+
+    response = client.post("/api/agent/chat", headers=admin_headers, json={"message": "现在查询王成都的职位，同时查看流程和面试情况"})
+
+    assert response.status_code == 200
+    data = response.get_json()["data"]
+    assert data["tool"] == "agent_toolchain"
+    tool_names = [item["name"] for item in data["agent_trace"]["tool_calls"]]
+    assert "global_lookup" in tool_names
+    assert "get_pipeline_funnel" in tool_names
+    assert "get_interview_schedule" in tool_names
+    assert all(item["status"] == "succeeded" for item in data["agent_trace"]["tool_calls"])
+    assert len(data["result"]["chain"]) >= 3
+
+
 def test_agent_does_not_create_job_from_ambiguous_create_and_recommend(client, admin_headers):
     candidate = client.post(
         "/api/boss/candidates/batch-import",

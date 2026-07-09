@@ -3511,7 +3511,7 @@ def agent_chat(user):
     db.session.add(AgentMessage(conversation_id=conversation.id, role="user", content=str(message or "")[:12000]))
     db.session.flush()
     planner = build_agent_execution_plan(user, message, pending_action, history)
-    result = run_agent_tool(user, message, pending_action, history=history)
+    result = run_agent_multi_tool_chain(user, message, planner, history=history) if should_run_agent_multi_tool_chain(planner, pending_action, message) else run_agent_tool(user, message, pending_action, history=history)
     result = attach_agent_trace(result, planner)
     conversation.pending_action = result.get("pending_action")
     if conversation.title == "新对话":
@@ -3621,7 +3621,8 @@ def build_agent_execution_plan(user, message, pending_action=None, history=None)
     text = str(message or "").strip()
     history_items = history or []
     knowledge = agent_knowledge_context(text, limit=3) if text else {"query_terms": [], "candidates": [], "employees": [], "users": [], "jobs": []}
-    heuristic_tool = infer_agent_tool_name(text, pending_action)
+    heuristic_tools = infer_agent_tool_names(text, pending_action)
+    heuristic_tool = heuristic_tools[0]
     base_plan = [
         {"step": "理解问题", "detail": agent_intent_summary(text, pending_action)},
         {"step": "检索记忆和知识库", "detail": agent_knowledge_summary(knowledge, history_items)},
@@ -3631,7 +3632,7 @@ def build_agent_execution_plan(user, message, pending_action=None, history=None)
         "mode": "rules",
         "intent": heuristic_tool,
         "plan": base_plan,
-        "selected_tools": [{"name": heuristic_tool, "reason": "本地规划器根据问题关键词、实体和上下文选择。"}],
+        "selected_tools": [{"name": name, "reason": "本地规划器根据问题关键词、实体和上下文选择。"} for name in heuristic_tools],
         "memory": agent_memory_from_history(history_items),
         "knowledge": slim_agent_knowledge(knowledge),
         "web": {"needed": should_agent_use_web(text), "reason": "问题包含联网/趋势/最新等外部信息意图" if should_agent_use_web(text) else "优先使用系统内部知识库"},
@@ -3697,47 +3698,54 @@ def attach_agent_trace(result, planner):
 
 
 def infer_agent_tool_name(text, pending_action=None):
+    return infer_agent_tool_names(text, pending_action)[0]
+
+
+def infer_agent_tool_names(text, pending_action=None):
     if pending_action:
-        return f"continue_{pending_action.get('type', 'pending_action')}"
+        return [f"continue_{pending_action.get('type', 'pending_action')}"]
     value = str(text or "")
     lowered = value.lower()
+    tools = []
     if is_greeting_or_smalltalk(value):
-        return "chat"
+        return ["chat"]
     if is_ambiguous_create_and_recommend_request(value):
-        return "agent_plan"
+        return ["agent_plan"]
     if is_create_job_request(value):
-        return "create_job"
+        return ["create_job"]
     if is_employee_resume_agent_request(value):
-        return "analyze_employee_resume"
+        tools.append("analyze_employee_resume")
     if is_profile_knowledge_lookup_request(value):
-        return "knowledge_lookup"
+        tools.append("knowledge_lookup")
     if is_global_entity_lookup_request(value):
-        return "global_lookup"
+        tools.append("global_lookup")
     if should_agent_use_web(value):
-        return "chat"
+        tools.append("chat")
     if is_candidate_count_request(value):
-        return "get_candidate_segment_stats"
+        tools.append("get_candidate_segment_stats")
     if "offer" in lowered or "入职" in value:
-        return "get_offer_status"
+        tools.append("get_offer_status")
     if "面试" in value:
-        return "get_interview_schedule"
+        tools.append("get_interview_schedule")
     if "漏斗" in value or "流程" in value or "阶段" in value:
-        return "get_pipeline_funnel"
+        tools.append("get_pipeline_funnel")
     if "岗位" in value and "推荐" not in value and "匹配" not in value:
-        return "get_job_summary"
+        tools.append("get_job_summary")
     if "经验" in value or "档位" in value or "年限" in value:
-        return "get_candidate_experience_stats"
+        tools.append("get_candidate_experience_stats")
     if "推荐" in value or "匹配" in value or "最佳候选人" in value:
-        return "match_candidates_for_job"
+        tools.append("match_candidates_for_job")
     if "候选人" in value or "人才" in value or "找" in value or "搜索" in value:
-        return "search_candidates"
+        tools.append("search_candidates")
     if "boss" in lowered:
-        return "get_boss_status"
+        tools.append("get_boss_status")
     if "用户" in value or "账号" in value or "权限" in value:
-        return "get_user_summary"
+        tools.append("get_user_summary")
     if is_bi_request(value):
-        return "get_bi_snapshot"
-    return "chat"
+        tools.append("get_bi_snapshot")
+    if not tools:
+        tools.append("chat")
+    return list(dict.fromkeys(tools))[:5]
 
 
 def agent_intent_summary(text, pending_action=None):
@@ -3826,6 +3834,14 @@ def merge_agent_trace_plan(plan, result):
 
 def build_agent_tool_calls(selected_tools, result):
     executed = str(result.get("tool") or "chat")
+    payload = result.get("result")
+    if executed == "agent_toolchain" and isinstance(payload, dict):
+        calls = []
+        for item in payload.get("chain") or []:
+            tool_name = item.get("tool")
+            if tool_name:
+                calls.append({"name": tool_name, "status": "succeeded", "readonly": True, "summary": summarize_agent_tool_result(item)})
+        return calls[:6]
     calls = []
     for item in selected_tools or []:
         name = item.get("name")
@@ -3851,9 +3867,224 @@ def summarize_agent_tool_result(result):
         return f"返回 {len(payload.get('items') or [])} 位候选人，覆盖 {len(payload.get('jobs') or []) or 1} 个岗位。"
     if tool == "analyze_employee_resume" and isinstance(payload, dict):
         return f"读取简历并推荐 {len(payload.get('items') or [])} 个岗位。"
+    if tool == "agent_toolchain" and isinstance(payload, dict):
+        return f"完成 {len(payload.get('chain') or [])} 个工具的连续调用。"
     if isinstance(payload, dict):
         return "已返回结构化结果：" + "、".join(list(payload.keys())[:5])
     return summarize_text(result.get("answer"), 120)
+
+
+def should_run_agent_multi_tool_chain(planner, pending_action=None, text=""):
+    if pending_action:
+        return False
+    selected = [item.get("name") for item in (planner or {}).get("selected_tools") or [] if item.get("name")]
+    selected = [name for name in dict.fromkeys(selected) if name in agent_readonly_tool_names()]
+    if len(selected) < 2:
+        return False
+    if "create_job" in selected or "agent_plan" in selected:
+        return False
+    if not is_explicit_multi_step_agent_request(text):
+        return False
+    return True
+
+
+def is_explicit_multi_step_agent_request(text):
+    value = str(text or "")
+    return any(keyword in value for keyword in ["同时", "顺便", "然后", "再查", "再看", "再查看", "一起", "综合", "并查看", "并查询", "并统计"])
+
+
+def agent_readonly_tool_names():
+    return {
+        "global_lookup",
+        "knowledge_lookup",
+        "get_candidate_segment_stats",
+        "get_candidate_experience_stats",
+        "search_candidates",
+        "get_job_summary",
+        "match_candidates_for_job",
+        "analyze_employee_resume",
+        "get_pipeline_funnel",
+        "get_interview_schedule",
+        "get_offer_status",
+        "get_boss_status",
+        "get_bi_snapshot",
+        "get_user_summary",
+        "chat",
+    }
+
+
+def run_agent_multi_tool_chain(user, message, planner, history=None):
+    text = str(message or "").strip()
+    suggestions = [
+        "继续深挖第一位人选",
+        "按当前结论生成下一步动作",
+        "换一个岗位重新匹配",
+        "查看流程和面试风险",
+    ]
+    selected = [item.get("name") for item in (planner or {}).get("selected_tools") or [] if item.get("name") in agent_readonly_tool_names()]
+    selected = list(dict.fromkeys(name for name in selected if name != "chat"))[:4]
+    if not selected:
+        selected = [infer_agent_tool_name(text)]
+    tool_results = []
+    for tool_name in selected:
+        result = execute_agent_readonly_tool(user, text, tool_name, history=history)
+        if result:
+            tool_results.append(result)
+    if not tool_results:
+        return run_agent_tool(user, message, None, history=history)
+    answer = synthesize_agent_multi_tool_answer(text, tool_results, planner, history=history)
+    return {
+        "answer": answer,
+        "tool": "agent_toolchain",
+        "result": {
+            "chain": [{"tool": item.get("tool"), "answer": item.get("answer"), "result": item.get("result")} for item in tool_results],
+            "plan": [step.get("step") for step in (planner or {}).get("plan") or []],
+            "mode": (planner or {}).get("mode", "rules"),
+        },
+        "suggestions": suggestions,
+        "readonly": True,
+    }
+
+
+def execute_agent_readonly_tool(user, text, tool_name, history=None):
+    suggestions = []
+    if tool_name == "global_lookup":
+        return answer_global_knowledge_lookup(user, text, suggestions, history=history)
+    if tool_name == "knowledge_lookup":
+        return answer_profile_knowledge_lookup(user, text, suggestions, history=history)
+    if tool_name == "analyze_employee_resume":
+        if is_employee_resume_agent_request(text) or find_candidate_for_agent_message(text)[0] or find_employee_for_agent_message(text)[0]:
+            return analyze_employee_resume_from_agent(user, text, suggestions, history=history)
+        return None
+    if tool_name == "get_candidate_segment_stats":
+        stats = candidate_segment_stats()
+        requested = requested_segments(text)
+        if requested:
+            parts = [f"{stats['segments'][segment]['label']} {stats['segments'][segment]['count']} 人" for segment in requested]
+            answer = f"当前人才库共 {stats['total']} 人，其中" + "，".join(parts) + "。"
+        else:
+            answer = f"当前人才库共 {stats['total']} 人，软件开发 {stats['segments']['software']['count']} 人，会计/财务 {stats['segments']['accounting']['count']} 人。"
+        return {"answer": answer, "tool": "get_candidate_segment_stats", "result": stats, "suggestions": suggestions, "readonly": True}
+    if tool_name == "get_candidate_experience_stats":
+        data = experience_stats(Candidate.query.all())
+        return {"answer": f"当前人才库经验档位共统计 {sum(item['count'] for item in data)} 人。", "tool": "get_candidate_experience_stats", "result": data, "suggestions": suggestions, "readonly": True}
+    if tool_name == "get_job_summary":
+        jobs = Job.query.order_by(Job.created_at.desc()).all()
+        counts = Counter(job.status for job in jobs)
+        return {"answer": f"当前共有 {len(jobs)} 个岗位，开放 {counts.get('active', 0)} 个。\n{format_job_list(jobs)}", "tool": "get_job_summary", "result": {"counts": dict(counts), "recent": [job.to_dict() for job in jobs[:8]]}, "suggestions": suggestions, "readonly": True}
+    if tool_name == "match_candidates_for_job":
+        jobs = jobs_for_match_request(text)
+        results = []
+        for job in jobs[:5]:
+            job.jd_structured = ensure_jd_structured(job)
+            matches = ai_review_matches(job, preview_matches(job, limit=8))
+            matches.sort(key=lambda item: item["score"], reverse=True)
+            results.append({"job": job.to_dict(), "items": matches[:5]})
+        if results:
+            db.session.commit()
+        first = results[0] if results else {"job": None, "items": []}
+        return {"answer": format_match_results(results) if results else "当前还没有岗位，无法执行候选人推荐。", "tool": "match_candidates_for_job", "result": {"job": first["job"], "items": first["items"], "jobs": results}, "suggestions": suggestions, "readonly": True}
+    if tool_name == "search_candidates":
+        items = search_candidates_for_agent(text)
+        return {"answer": f"找到 {len(items)} 位相关候选人，已按关键词和标签命中排序。", "tool": "search_candidates", "result": {"items": items}, "suggestions": suggestions, "readonly": True}
+    if tool_name == "get_pipeline_funnel":
+        pipeline = Counter(item.stage for item in latest_pipeline_items())
+        result = {stage: pipeline.get(stage, 0) for stage in STAGES}
+        active_count = sum(value for stage, value in result.items() if stage not in {"onboarded", "rejected"})
+        return {"answer": f"当前流程中活跃候选人 {active_count} 人，Offer 阶段 {result.get('offer', 0)} 人，已入职 {result.get('onboarded', 0)} 人。", "tool": "get_pipeline_funnel", "result": result, "suggestions": suggestions, "readonly": True}
+    if tool_name == "get_interview_schedule":
+        assignments = InterviewAssignment.query.order_by(InterviewAssignment.scheduled_at.desc()).all()
+        counts = Counter(assignment.status for assignment in assignments)
+        return {"answer": f"当前共有 {len(assignments)} 条面试安排，待反馈 {counts.get('scheduled', 0)} 条，已反馈 {counts.get('completed', 0)} 条。", "tool": "get_interview_schedule", "result": {"counts": dict(counts), "upcoming": [item.to_dict() for item in assignments[:8]]}, "suggestions": suggestions, "readonly": True}
+    if tool_name == "get_offer_status":
+        offers = OfferRecord.query.order_by(OfferRecord.updated_at.desc()).all()
+        counts = Counter(offer.status for offer in offers)
+        return {"answer": f"当前共有 {len(offers)} 条 Offer，已接受 {counts.get('accepted', 0)} 条，已发放待确认 {counts.get('sent', 0)} 条。", "tool": "get_offer_status", "result": {"counts": {status: counts.get(status, 0) for status in sorted(OFFER_STATUSES)}, "recent": [item.to_dict() for item in offers[:5]]}, "suggestions": suggestions, "readonly": True}
+    if tool_name == "get_boss_status":
+        inbox = [boss_inbox_item(candidate) for candidate in Candidate.query.filter_by(source="boss").order_by(Candidate.created_at.desc()).limit(20).all() if looks_like_boss_resume_text(candidate.raw_text)]
+        jobs = Job.query.filter(Job.job_code.like("BOSS-%")).order_by(Job.created_at.desc()).limit(20).all()
+        account = latest_boss_account(user)
+        return {"answer": f"BOSS 当前为半自动模式，已同步候选人 {len(inbox)} 位，BOSS 岗位 {len(jobs)} 个。", "tool": "get_boss_status", "result": {"status": {"cookie_bound": bool(account), "account": account.account if account else "未绑定", "mode": "半自动", "can_auto_send": False}, "inbox": inbox, "jobs": [job.to_dict() for job in jobs]}, "suggestions": suggestions, "readonly": True}
+    if tool_name == "get_user_summary" and user.role == "admin":
+        users = User.query.order_by(User.id.asc()).all()
+        roles = Counter(item.role for item in users)
+        return {"answer": f"当前共有 {len(users)} 个账号，管理员 {roles.get('admin', 0)} 个，招聘经理 {roles.get('manager', 0)} 个，HR {roles.get('recruiter', 0)} 个，面试官 {roles.get('interviewer', 0)} 个。", "tool": "get_user_summary", "result": {"roles": dict(roles), "items": [with_permissions(item) for item in users]}, "suggestions": suggestions, "readonly": True}
+    if tool_name == "get_bi_snapshot":
+        snapshot = bi_snapshot()
+        return {"answer": f"当前人才库 {snapshot['total_candidates']} 人，开放岗位 {snapshot['active_jobs']} 个，Offer 已接受 {snapshot['offer_status'].get('accepted', 0)} 条。", "tool": "get_bi_snapshot", "result": snapshot, "suggestions": suggestions, "readonly": True}
+    return None
+
+
+def synthesize_agent_multi_tool_answer(text, tool_results, planner, history=None):
+    if llm_available():
+        try:
+            payload = [
+                {
+                    "tool": item.get("tool"),
+                    "answer": item.get("answer"),
+                    "summary": summarize_agent_tool_result(item),
+                    "result": compact_agent_tool_payload(item.get("result")),
+                }
+                for item in tool_results
+            ]
+            data = chat_json(
+                [
+                    {
+                        "role": "system",
+                        "content": (
+                            "你是 HireInsight 招聘 Agent。根据多个工具的真实结果综合回答。"
+                            "必须说明你先后调用了哪些工具、关键发现、冲突/不确定点和下一步建议。"
+                            "不能编造工具结果之外的数据。输出 JSON：{\"answer\":\"中文回答\"}"
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": json.dumps(
+                            {
+                                "question": text,
+                                "planner": {"mode": (planner or {}).get("mode"), "intent": (planner or {}).get("intent"), "plan": (planner or {}).get("plan")},
+                                "history": format_agent_history(history or []),
+                                "tool_results": payload,
+                            },
+                            ensure_ascii=False,
+                        ),
+                    },
+                ],
+                temperature=0.2,
+                timeout=30,
+                source="agent",
+                tool_name="agent_toolchain",
+            )
+            answer = str(data.get("answer") or "").strip()
+            if answer:
+                return answer
+        except LLMError:
+            pass
+    lines = ["我按多步工具链完成了这次查询："]
+    for index, item in enumerate(tool_results, 1):
+        lines.append(f"{index}. {item.get('tool')}：{summarize_agent_tool_result(item)}")
+        if item.get("answer"):
+            lines.append(summarize_text(item.get("answer"), 220))
+    lines.append("以上为系统内真实数据汇总；需要写入或推进流程时，我会等你确认后再执行。")
+    return "\n".join(lines)
+
+
+def compact_agent_tool_payload(payload):
+    if isinstance(payload, list):
+        return payload[:5]
+    if not isinstance(payload, dict):
+        return payload
+    compact = {}
+    for key, value in payload.items():
+        if key == "agent_trace":
+            continue
+        if isinstance(value, list):
+            compact[key] = value[:5]
+        elif isinstance(value, dict):
+            compact[key] = {nested_key: nested_value for nested_key, nested_value in list(value.items())[:8]}
+        else:
+            compact[key] = value
+    return compact
 
 
 def run_agent_tool(user, message, pending_action=None, history=None):

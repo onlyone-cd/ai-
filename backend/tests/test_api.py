@@ -1934,6 +1934,52 @@ def test_agent_analyzes_candidate_resume_when_not_internal_employee(client, admi
     assert "适合岗位" in data["answer"]
     assert "简历优化建议" in data["answer"]
 
+    short_question = client.post(
+        "/api/agent/chat",
+        headers=admin_headers,
+        json={"message": "桂嘉豪适合什么岗位"},
+    )
+    assert short_question.status_code == 200
+    short_data = short_question.get_json()["data"]
+    assert short_data["tool"] == "analyze_employee_resume"
+    assert short_data["result"]["profile_type"] == "candidate"
+    assert short_data["result"]["candidate"]["id"] == candidate["id"]
+
+
+def test_agent_uses_knowledge_lookup_for_profile_questions(client, admin_headers):
+    candidate = client.post(
+        "/api/boss/candidates/batch-import",
+        headers=admin_headers,
+        json={"items": [{"external_id": "agent-candidate-knowledge", "raw_text": "姓名：知识库候选人\n女 13600001234 knowledge@example.com\n2 年数据分析经验，熟悉 SQL、Python、报表分析。"}]},
+    ).get_json()["data"]["items"][0]
+
+    response = client.post("/api/agent/chat", headers=admin_headers, json={"message": "知识库候选人怎么样"})
+
+    assert response.status_code == 200
+    data = response.get_json()["data"]
+    assert data["tool"] == "knowledge_lookup"
+    assert data["result"]["profile_type"] == "candidate"
+    assert data["result"]["candidate"]["id"] == candidate["id"]
+    assert "人才库" in data["answer"]
+
+
+def test_agent_does_not_create_job_from_ambiguous_create_and_recommend(client, admin_headers):
+    candidate = client.post(
+        "/api/boss/candidates/batch-import",
+        headers=admin_headers,
+        json={"items": [{"external_id": "agent-ambiguous-gui", "raw_text": "姓名：桂嘉豪\n男 13700001234 gui-ambiguous@example.com\n3 年 Java 后端开发经验，熟悉 Spring Boot、MySQL。"}]},
+    ).get_json()["data"]["items"][0]
+    before = Job.query.count()
+
+    response = client.post("/api/agent/chat", headers=admin_headers, json={"message": "创建新岗位并推荐桂嘉豪"})
+
+    assert response.status_code == 200
+    data = response.get_json()["data"]
+    assert data["tool"] == "agent_plan"
+    assert data["result"]["candidate"]["id"] == candidate["id"]
+    assert Job.query.count() == before
+    assert "不会把" in data["answer"]
+
 
 def test_agent_free_chat_falls_back_to_llm_chat(client, admin_headers):
     response = client.post("/api/agent/chat", headers=admin_headers, json={"message": "帮我规划一下下周招聘重点"})

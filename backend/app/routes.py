@@ -4,9 +4,12 @@ import csv
 from difflib import SequenceMatcher
 import hashlib
 from io import BytesIO, StringIO
+import json
 from pathlib import Path
 import re
 from time import time
+from urllib.parse import urlencode
+from urllib.request import Request as UrlRequest, urlopen
 from xml.etree import ElementTree
 import zipfile
 
@@ -3621,18 +3624,26 @@ def run_agent_tool(user, message, pending_action=None, history=None):
 
     if is_greeting_or_smalltalk(text):
         return {
-            "answer": "你好，我是 AI 招聘 Agent。你可以直接让我查人才库人数、统计软件开发/会计人才、创建岗位、推荐候选人，或者查看流程、面试、Offer、BOSS 和 BI 数据。",
+            "answer": "你好，我是 AI 招聘 Agent。我会先理解你的意图，再检索项目知识库里的简历、员工档案和岗位 JD；需要外部资料时也可以联网补充。你可以直接问：查看某人的简历并推荐岗位、分析某员工是否适合调岗、根据 JD 推荐候选人、创建岗位草案、查看流程/面试/Offer/BOSS/BI。",
             "tool": "chat",
             "result": {"capabilities": [item for item in suggestions]},
             "suggestions": suggestions,
             "readonly": True,
         }
 
+    if is_ambiguous_create_and_recommend_request(text):
+        return handle_ambiguous_create_and_recommend(user, text, suggestions)
+
     if is_create_job_request(text):
         return create_job_from_agent(user, text, suggestions)
 
     if is_employee_resume_agent_request(text):
         return analyze_employee_resume_from_agent(user, text, suggestions, history=history)
+
+    if is_profile_knowledge_lookup_request(text):
+        lookup = answer_profile_knowledge_lookup(user, text, suggestions, history=history)
+        if lookup:
+            return lookup
 
     if is_candidate_count_request(text):
         stats = candidate_segment_stats()
@@ -3806,13 +3817,17 @@ def free_agent_chat(text, suggestions, history=None):
     snapshot = bi_snapshot()
     jobs = Job.query.order_by(Job.created_at.desc()).limit(5).all()
     recent_history = format_agent_history(history or [])
+    knowledge = agent_knowledge_context(text)
+    web_context = agent_web_context(text)
     messages = [
         {
             "role": "system",
             "content": (
                 "你是 HireInsight 招聘 AI Agent。你可以自由回答招聘系统相关问题，并结合当前对话上下文理解用户追问。"
-                "不能编造系统数据；如果需要精确数据，应建议或调用已有工具。"
-                "已有确定工具能力：查人才库统计、查候选人、创建岗位、推荐候选人、查流程、面试、Offer、BOSS、BI。"
+                "你的项目知识库来自系统内的候选人简历、内部员工档案、岗位 JD、流程和面试数据。"
+                "回答招聘问题时先使用知识库证据；如果知识库没有证据，明确说明不确定，不要编造系统数据。"
+                "需要外部信息时可以参考联网摘要，但外部信息不能覆盖系统内简历和岗位数据。"
+                "已有确定工具能力：查人才库统计、查候选人、创建岗位、推荐候选人、分析员工/候选人简历、查流程、面试、Offer、BOSS、BI。"
                 "涉及创建岗位、删除、发送消息等写操作时，提醒用户需要明确指令或人工确认。"
                 "输出 JSON：{\"answer\":\"中文回答\",\"suggestions\":[\"下一步建议1\",\"下一步建议2\",\"下一步建议3\"]}"
             ),
@@ -3823,6 +3838,8 @@ def free_agent_chat(text, suggestions, history=None):
                 f"最近对话={recent_history}\n"
                 f"系统快照={snapshot}\n"
                 f"最近岗位={[job.to_dict() for job in jobs]}\n"
+                f"知识库检索={knowledge}\n"
+                f"联网摘要={web_context}\n"
                 f"用户问题={text}"
             ),
         },
@@ -3840,7 +3857,7 @@ def free_agent_chat(text, suggestions, history=None):
     return {
         "answer": str(data.get("answer") or "我可以继续帮你处理招聘相关问题。"),
         "tool": "chat",
-        "result": {"llm": "deepseek"},
+        "result": {"llm": "deepseek", "knowledge": knowledge, "web": web_context},
         "suggestions": data.get("suggestions") or suggestions,
         "readonly": True,
     }
@@ -3859,6 +3876,257 @@ def is_create_job_request(text):
     return ("创建" in text or "新增" in text or "发布" in text or "生成" in text) and "岗位" in text
 
 
+def is_ambiguous_create_and_recommend_request(text):
+    value = str(text or "")
+    if not (("创建" in value or "新增" in value or "生成" in value) and "岗位" in value and "推荐" in value):
+        return False
+    payload = parse_job_payload_from_message(value)
+    title = str(payload.get("title") or "").strip()
+    if not title or title in {"新岗位", "一个岗位"}:
+        return True
+    if title.startswith("并推荐") or title.startswith("推荐"):
+        return True
+    return False
+
+
+def handle_ambiguous_create_and_recommend(user, text, suggestions):
+    candidate, candidate_alternatives = find_candidate_for_agent_message(text)
+    employee, employee_alternatives = find_employee_for_agent_message(text)
+    lines = [
+        "我理解到这是一个复合任务：先创建岗位，再把指定人才推荐到这个岗位。",
+        "但当前缺少明确的岗位名称或 JD，我不会把“并推荐某人”误当成岗位名去创建。",
+    ]
+    result = {"intent": "create_job_then_recommend", "needs": ["岗位名称", "岗位 JD/职责要求"], "readonly": True}
+    if candidate:
+        lines.append(f"我已在人才库里识别到候选人：{candidate.name_masked}（{candidate.title or '职位未维护'}）。")
+        result["candidate"] = candidate.to_dict(detail=True)
+    elif employee:
+        lines.append(f"我已在内部员工库里识别到员工：{employee.name}（{employee.current_title or '职位未维护'}）。")
+        result["employee"] = employee_payload(employee, user, detail=True)
+    else:
+        people = [item.name_masked for item in candidate_alternatives[:3]] + [item.name for item in employee_alternatives[:3]]
+        if people:
+            lines.append("可能相关的人选：" + "、".join(people))
+    lines.append("请补充岗位名称和核心要求，例如：创建岗位 Java 后端工程师，要求 Spring Boot、MySQL、Redis，3 年经验，然后推荐桂嘉豪。")
+    return {
+        "answer": "\n".join(lines),
+        "tool": "agent_plan",
+        "result": result,
+        "suggestions": [
+            "创建岗位 Java 后端工程师，要求 Spring Boot、MySQL、Redis，3 年经验，然后推荐桂嘉豪",
+            "查看桂嘉豪的简历并推荐适合岗位",
+            "根据现有岗位推荐桂嘉豪",
+            "先只创建岗位草案",
+        ],
+        "readonly": True,
+    }
+
+
+def is_profile_knowledge_lookup_request(text):
+    value = str(text or "")
+    if any(word in value for word in ["怎么样", "是谁", "介绍", "评价", "背景", "经历", "能力", "简历"]):
+        return bool(find_candidate_for_agent_message(value)[0] or find_employee_for_agent_message(value)[0])
+    return False
+
+
+def answer_profile_knowledge_lookup(user, text, suggestions, history=None):
+    employee, _ = find_employee_for_agent_message(text)
+    candidate, _ = find_candidate_for_agent_message(text)
+    if employee:
+        tags = "、".join(tag.tag for tag in employee.tags()[:8]) or "暂无标签"
+        summary = summarize_text((employee.resume_json or {}).get("summary") or employee.raw_text, 700)
+        answer = (
+            f"我在内部员工库里找到 {employee.name}（{employee.current_title or '职位未维护'}）。\n"
+            f"部门：{employee.department or (employee.organization_unit.name if employee.organization_unit else '未维护')}；编号：{employee.employee_no or employee.id}。\n"
+            f"能力标签：{tags}。\n"
+            f"简历/档案摘要：{summary or '暂无完整简历摘要'}。\n"
+            "如果你要判断适合岗位，可以继续说“推荐他适合什么岗位”或“分析他的简历并给调岗建议”。"
+        )
+        return {
+            "answer": answer,
+            "tool": "knowledge_lookup",
+            "result": {"profile_type": "employee", "employee": employee_payload(employee, user, detail=True), "knowledge": agent_knowledge_context(text)},
+            "suggestions": [f"分析 {employee.name} 适合什么岗位", f"给 {employee.name} 简历优化建议", f"推荐 {employee.name} 的离职替补候选人", "查看内部岗位缺口"],
+            "readonly": True,
+        }
+    if candidate:
+        tags = "、".join(tag.tag for tag in candidate.tags[:8]) or "暂无标签"
+        summary = summarize_text((candidate.resume_json or {}).get("summary") or candidate.raw_text, 700)
+        answer = (
+            f"我在人才库里找到 {candidate.name_masked}（{candidate.title or '职位未维护'}）。\n"
+            f"城市：{candidate.city or '未知'}；来源：{candidate.source or '未知'}。\n"
+            f"能力标签：{tags}。\n"
+            f"简历摘要：{summary or '暂无完整简历摘要'}。\n"
+            "如果你要岗位判断，可以继续说“他适合什么岗位”或“按现有岗位给他做匹配”。"
+        )
+        return {
+            "answer": answer,
+            "tool": "knowledge_lookup",
+            "result": {"profile_type": "candidate", "candidate": candidate.to_dict(detail=True), "knowledge": agent_knowledge_context(text)},
+            "suggestions": [f"分析 {candidate.name_masked} 适合什么岗位", f"给 {candidate.name_masked} 简历优化建议", f"把 {candidate.name_masked} 加入匹配岗位流程", "换一个岗位重新匹配"],
+            "readonly": True,
+        }
+    return None
+
+
+def agent_knowledge_context(text, limit=5):
+    terms = extract_agent_name_terms(text)
+    if not terms:
+        terms = [word for word in re.split(r"\s+", str(text or "")) if len(word) >= 2][:6]
+    candidates = rank_candidates_for_knowledge(terms, limit=limit)
+    employees = rank_employees_for_knowledge(terms, limit=limit)
+    jobs = rank_jobs_for_knowledge(terms, limit=limit)
+    return {
+        "query_terms": terms,
+        "candidates": candidates,
+        "employees": employees,
+        "jobs": jobs,
+        "note": "这些是系统内部知识库检索结果，来自简历、员工档案和岗位 JD。",
+    }
+
+
+def rank_candidates_for_knowledge(terms, limit=5):
+    items = []
+    for candidate in Candidate.query.order_by(Candidate.created_at.desc(), Candidate.id.desc()).limit(800).all():
+        haystack = " ".join(
+            [
+                candidate.name_masked or "",
+                candidate.title or "",
+                candidate.city or "",
+                candidate.raw_text or "",
+                (candidate.resume_json or {}).get("summary") or "",
+                " ".join(tag.tag for tag in candidate.tags),
+            ]
+        )
+        score = agent_text_score(terms, haystack, candidate.name_masked)
+        if score:
+            items.append((score, candidate))
+    items.sort(key=lambda item: item[0], reverse=True)
+    return [
+        {
+            "id": candidate.id,
+            "name": candidate.name_masked,
+            "title": candidate.title,
+            "city": candidate.city,
+            "score": score,
+            "summary": summarize_text((candidate.resume_json or {}).get("summary") or candidate.raw_text, 500),
+            "tags": [tag.tag for tag in candidate.tags[:8]],
+        }
+        for score, candidate in items[:limit]
+    ]
+
+
+def rank_employees_for_knowledge(terms, limit=5):
+    items = []
+    for employee in EmployeeProfile.query.order_by(EmployeeProfile.updated_at.desc(), EmployeeProfile.id.desc()).limit(800).all():
+        haystack = " ".join(
+            [
+                employee.name or "",
+                employee.employee_no or "",
+                employee.current_title or "",
+                employee.department or "",
+                employee.raw_text or "",
+                (employee.resume_json or {}).get("summary") or "",
+            ]
+        )
+        score = agent_text_score(terms, haystack, employee.name)
+        if score:
+            items.append((score, employee))
+    items.sort(key=lambda item: item[0], reverse=True)
+    return [
+        {
+            "id": employee.id,
+            "name": employee.name,
+            "employee_no": employee.employee_no,
+            "title": employee.current_title,
+            "department": employee.department or (employee.organization_unit.name if employee.organization_unit else ""),
+            "score": score,
+            "summary": summarize_text((employee.resume_json or {}).get("summary") or employee.raw_text, 500),
+            "tags": [tag.tag for tag in employee.tags()[:8]],
+        }
+        for score, employee in items[:limit]
+    ]
+
+
+def rank_jobs_for_knowledge(terms, limit=5):
+    items = []
+    for job in Job.query.order_by(Job.created_at.desc(), Job.id.desc()).limit(500).all():
+        structured = ensure_jd_structured(job)
+        haystack = " ".join([job.title or "", job.department or "", job.city or "", job.jd_text or "", structured.get("skill_tags_raw") or ""])
+        score = agent_text_score(terms, haystack, job.title)
+        if score:
+            items.append((score, job, structured))
+    items.sort(key=lambda item: item[0], reverse=True)
+    return [
+        {
+            "id": job.id,
+            "title": job.title,
+            "city": job.city,
+            "department": job.department,
+            "status": job.status,
+            "score": score,
+            "jd_summary": summarize_text(job.jd_text, 500),
+            "skills": structured.get("skill_tags_raw"),
+        }
+        for score, job, structured in items[:limit]
+    ]
+
+
+def agent_text_score(terms, haystack, name=""):
+    value = str(haystack or "").lower()
+    compact = re.sub(r"\s+", "", value)
+    score = 0
+    for term in terms:
+        raw = str(term or "").strip()
+        if not raw:
+            continue
+        term_lower = raw.lower()
+        term_compact = re.sub(r"\s+", "", term_lower)
+        if term_lower in value or term_compact in compact:
+            score += 4
+        elif name and SequenceMatcher(None, term_compact, re.sub(r"\s+", "", str(name).lower())).ratio() >= 0.65:
+            score += 3
+    return score
+
+
+def agent_web_context(text):
+    if not should_agent_use_web(text):
+        return {"enabled": False, "reason": "问题未要求联网或外部信息，优先使用内部知识库。"}
+    query = re.sub(r"\s+", " ", str(text or "")).strip()[:120]
+    if not query:
+        return {"enabled": False, "reason": "联网查询词为空。"}
+    try:
+        params = urlencode({"q": query, "format": "json", "no_redirect": 1, "no_html": 1, "kl": "cn-zh"})
+        req = UrlRequest(f"https://api.duckduckgo.com/?{params}", headers={"User-Agent": "HireInsightAgent/1.0"})
+        with urlopen(req, timeout=4) as response:
+            payload = json.loads(response.read().decode("utf-8", errors="replace"))
+        related = []
+        for item in payload.get("RelatedTopics") or []:
+            if isinstance(item, dict) and item.get("Text"):
+                related.append({"text": item.get("Text"), "url": item.get("FirstURL")})
+            elif isinstance(item, dict):
+                for nested in item.get("Topics") or []:
+                    if nested.get("Text"):
+                        related.append({"text": nested.get("Text"), "url": nested.get("FirstURL")})
+            if len(related) >= 4:
+                break
+        return {
+            "enabled": True,
+            "provider": "duckduckgo_instant_answer",
+            "query": query,
+            "abstract": payload.get("AbstractText") or "",
+            "answer": payload.get("Answer") or "",
+            "related": related,
+        }
+    except Exception as exc:
+        return {"enabled": True, "query": query, "error": str(exc)[:160], "note": "联网查询失败，已回退内部知识库。"}
+
+
+def should_agent_use_web(text):
+    value = str(text or "").lower()
+    return any(keyword in value for keyword in ["联网", "网上", "最新", "新闻", "政策", "市场", "趋势", "搜索", "查一下", "外部", "互联网", "web"])
+
+
 def is_employee_resume_agent_request(text):
     if not text:
         return False
@@ -3868,6 +4136,8 @@ def is_employee_resume_agent_request(text):
         return True
     if "简历" in text and any(word in text for word in ["适合什么岗位", "推荐岗位", "优化建议", "怎么优化"]):
         return True
+    if "岗位" in text and any(word in text for word in ["适合", "推荐", "匹配"]) and not any(word in text for word in ["所有岗位", "最佳候选人", "人才库中"]):
+        return bool(find_candidate_for_agent_message(text)[0] or find_employee_for_agent_message(text)[0])
     return False
 
 

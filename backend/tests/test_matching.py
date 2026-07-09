@@ -1,5 +1,5 @@
 from app.matching import match_candidate, parse_skill_tags
-from app.tag_library import rule_based_tags
+from app.tag_library import normalize_llm_tags, rule_based_tags
 
 
 def test_parse_skill_tags_supports_multiline_weights():
@@ -62,3 +62,35 @@ def test_rule_based_tags_require_context_for_finance_system_tools():
 
     assert "金蝶" not in developer_tags
     assert {"金蝶", "用友"} <= accountant_tags
+
+
+def test_generic_and_management_tags_need_real_role_context():
+    text = "Java 开发工程师，开发项目管理系统、工程监理平台和任务落地看板，负责后端接口。"
+    tags = {item["tag"] for item in rule_based_tags(text)}
+
+    assert "项目管理" not in tags
+    assert "监理" not in tags
+    assert "执行" not in tags
+
+
+def test_generic_capability_scores_are_capped_without_strong_evidence():
+    text = "候选人负责客户沟通、需求沟通和跨部门协调，推动事项闭环。"
+    tags = {item["tag"]: item["score"] for item in rule_based_tags(text)}
+
+    assert tags["沟通"] <= 4
+    assert tags["跨部门协作"] <= 4
+    assert tags["执行"] <= 4
+
+
+def test_llm_generic_tags_are_capped_by_evidence_strength():
+    text = "候选人负责客户沟通、需求沟通和跨部门协调，推动事项闭环。"
+    tags = normalize_llm_tags(
+        [
+            {"tag": "沟通", "score": 5, "evidence": "客户沟通"},
+            {"tag": "跨部门协作", "score": 5, "evidence": "跨部门协调"},
+            {"tag": "执行", "score": 5, "evidence": "推动事项闭环"},
+        ],
+        text,
+    )
+
+    assert {item["tag"]: item["score"] for item in tags} == {"执行": 4, "沟通": 4, "跨部门协作": 4}

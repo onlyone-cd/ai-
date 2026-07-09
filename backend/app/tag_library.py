@@ -28,6 +28,32 @@ LABEL_CONTEXT_REQUIREMENTS = {
     "用友": ["会计", "财务", "总账", "账务", "税务", "纳税", "报税", "出纳", "审计", "报表", "核算", "成本"],
     "SAP": ["会计", "财务", "总账", "账务", "税务", "纳税", "报表", "核算", "成本", "ERP", "供应链", "采购", "库存"],
     "ERP财务": ["会计", "财务", "总账", "账务", "税务", "纳税", "报表", "核算", "成本"],
+    "项目管理": ["项目经理", "项目负责人", "进度管理", "风险管理", "交付管理", "里程碑", "项目计划", "统筹项目", "项目管理经验", "负责项目管理"],
+    "跨部门协作": ["跨部门", "协同", "沟通协调", "协调", "对接", "联动"],
+    "沟通": ["沟通能力", "沟通协调", "客户沟通", "跨部门沟通", "需求沟通", "表达能力", "汇报"],
+    "执行": ["执行力", "推动落地", "落地执行", "推进", "跟进", "闭环"],
+    "监理": ["工程", "施工", "土建", "建筑", "工地", "房建", "市政", "监理员", "监理工程师"],
+}
+
+TAG_SCORE_CAPS = {
+    "沟通": 3,
+    "执行": 3,
+    "跨部门协作": 3,
+    "项目管理": 4,
+    "需求分析": 4,
+    "数据分析": 4,
+    "监理": 4,
+}
+
+EXTRA_EVIDENCE_TERMS = {
+    "跨部门协作": ("跨部门协调", "跨部门对接", "跨部门联动"),
+    "执行": ("推动事项闭环", "事项闭环", "推进落地", "推动落地"),
+}
+
+SYSTEM_REFERENCE_WORDS = ("系统", "平台", "模块", "接口", "看板", "软件", "应用")
+ROLE_EVIDENCE_TERMS = {
+    "监理": ("监理员", "监理工程师", "工程监理经验", "施工现场", "工地", "房建", "市政", "土建", "负责监理"),
+    "项目管理": ("项目经理", "项目负责人", "进度管理", "风险管理", "交付管理", "项目管理经验", "负责项目管理", "统筹项目"),
 }
 
 
@@ -68,7 +94,7 @@ def label_map():
 def candidate_labels_for_text(text, limit=120):
     hits = []
     for label in load_labels():
-        matched_terms = [term for term in label.evidence_terms if term and term_in_text(term, text)]
+        matched_terms = [term for term in evidence_terms_for(label) if term and term_in_text(term, text)]
         if matched_terms and label_has_required_context(label, text, matched_terms):
             hits.append(label)
     return hits[:limit]
@@ -79,12 +105,12 @@ def rule_based_tags(text, limit=50):
     for label in load_labels():
         if not has_category_context(label.category, text):
             continue
-        matched_terms = [term for term in label.evidence_terms if term and term_in_text(term, text)]
+        matched_terms = [term for term in evidence_terms_for(label) if term and term_in_text(term, text)]
         if not matched_terms:
             continue
         if not label_has_required_context(label, text, matched_terms):
             continue
-        score = evidence_score(matched_terms, text)
+        score = capped_score(label, evidence_score(matched_terms, text), text, matched_terms)
         tags.append({"tag": label.tag, "score": score, "category": label.category})
     return dedupe_tags(tags)[:limit] or [{"tag": "沟通", "score": 2, "category": "通用能力"}]
 
@@ -100,10 +126,12 @@ def normalize_llm_tags(items, text, min_score=2, limit=50):
         evidence = str(item.get("evidence", "")).strip()
         has_evidence = evidence and evidence.lower() in text.lower()
         if not has_evidence:
-            has_evidence = any(term and term_in_text(term, text) for term in label.evidence_terms)
+            has_evidence = any(term and term_in_text(term, text) for term in evidence_terms_for(label))
         if not has_evidence:
             continue
-        matched_terms = [term for term in label.evidence_terms if term and term_in_text(term, text)]
+        matched_terms = [term for term in evidence_terms_for(label) if term and term_in_text(term, text)]
+        if evidence and evidence.lower() in text.lower():
+            matched_terms.append(evidence)
         if not label_has_required_context(label, text, matched_terms):
             continue
         if not has_category_context(label.category, text):
@@ -114,7 +142,8 @@ def normalize_llm_tags(items, text, min_score=2, limit=50):
             score = 3
         if score < min_score:
             continue
-        normalized.append({"tag": tag, "score": max(1, min(5, score)), "category": label.category})
+        score = capped_score(label, max(1, min(5, score)), text, matched_terms)
+        normalized.append({"tag": tag, "score": score, "category": label.category})
     return dedupe_tags(normalized)[:limit]
 
 
@@ -138,6 +167,10 @@ def term_in_text(term, text):
     return value.lower() in text.lower()
 
 
+def evidence_terms_for(label):
+    return (*label.evidence_terms, *EXTRA_EVIDENCE_TERMS.get(label.tag, ()))
+
+
 def label_has_required_context(label, text, matched_terms):
     required_terms = LABEL_CONTEXT_REQUIREMENTS.get(label.tag)
     if not required_terms:
@@ -146,7 +179,42 @@ def label_has_required_context(label, text, matched_terms):
     for term in matched_terms:
         contexts.extend(term_contexts(term, text, radius=80))
     normalized_context = "\n".join(contexts).lower()
+    if is_system_reference(label.tag, normalized_context):
+        return False
     return any(term.lower() in normalized_context for term in required_terms)
+
+
+def is_system_reference(tag, context):
+    role_terms = ROLE_EVIDENCE_TERMS.get(tag)
+    if not role_terms:
+        return False
+    if not has_any(context, SYSTEM_REFERENCE_WORDS):
+        return False
+    return not has_any(context, role_terms)
+
+
+def capped_score(label, score, text, matched_terms):
+    score = max(1, min(5, int(score or 1)))
+    base_cap = TAG_SCORE_CAPS.get(label.tag)
+    if not base_cap:
+        return score
+    contexts = []
+    for term in matched_terms:
+        contexts.extend(term_contexts(term, text, radius=90))
+    context = "\n".join(contexts)
+    cap = base_cap
+    if label.tag in {"沟通", "执行", "跨部门协作"} and has_any(context, ["主导", "统筹", "推动", "跨部门", "协调", "客户", "汇报", "闭环", "落地"]):
+        cap = 4
+    if label.tag == "项目管理":
+        cap = 5 if has_any(context, ["PMP", "项目经理", "项目负责人", "总负责人", "大型项目"]) else 4
+    if label.tag == "监理":
+        cap = 5 if has_any(context, ["注册监理工程师", "总监理工程师"]) else 4
+    return min(score, cap)
+
+
+def has_any(text, words):
+    lowered = str(text or "").lower()
+    return any(str(word).lower() in lowered for word in words)
 
 
 def evidence_score(terms, text):

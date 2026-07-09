@@ -179,13 +179,13 @@ def apply_ai_review(job, candidate, item):
     try:
         review = request_ai_match_review(job, candidate, reason)
         ai_score = clamp_score(review.get("score"), rule_score)
-        final_score = round(rule_score * 0.45 + ai_score * 0.55)
+        final_score = round(rule_score * 0.35 + ai_score * 0.65)
         review["source"] = "deepseek"
         reason["ai_review"] = normalize_ai_review(review)
         reason["ai_score"] = ai_score
         reason["final_score"] = final_score
         reason["rule_score"] = rule_score
-        reason["score_formula"] = "final_score=round(rule_score*45% + ai_score*55%); no pre-filter before AI review"
+        reason["score_formula"] = "final_score=round(rule_score*35% + ai_score*65%); no pre-filter before AI review"
         item["score"] = final_score
     except LLMError as exc:
         reason["ai_review"] = {"source": "failed", "summary": "AI 复核失败，已保留规则匹配分。", "error": str(exc)[:300]}
@@ -204,8 +204,10 @@ def request_ai_match_review(job, candidate, rule_reason):
             "content": (
                 "你是资深招聘匹配评估官。请同时阅读岗位 JD、候选人完整简历、规则标签命中结果，"
                 "判断候选人是否适合该岗位。不能只按关键词，必须结合项目经历、业务场景、职责深度、年限和风险。"
+                "如果规则命中的标签在简历原文中没有直接证据，或只是同名系统、网页噪音、岗位推荐、聊天记录、无关菜单，必须判定为规则误判并降低分数。"
+                "如果候选人职业方向与 JD 明显不一致，例如 Java 开发候选人匹配财务会计岗位，不能因为出现 Excel、金蝶、用友等词就给高分。"
                 "输出 JSON：{\"score\":0-100,\"recommendation\":\"强烈推荐/推荐/可考虑/不推荐\","
-                "\"summary\":\"\",\"strengths\":[\"\"],\"risks\":[\"\"],\"interview_focus\":[\"\"],\"evidence\":[\"\"]}。"
+                "\"summary\":\"\",\"strengths\":[\"\"],\"risks\":[\"\"],\"interview_focus\":[\"\"],\"evidence\":[\"\"],\"rule_corrections\":[\"\"]}。"
             ),
         },
         {
@@ -236,6 +238,7 @@ def normalize_ai_review(review):
         "risks": list_of_text(review.get("risks"))[:5],
         "interview_focus": list_of_text(review.get("interview_focus"))[:5],
         "evidence": list_of_text(review.get("evidence"))[:5],
+        "rule_corrections": list_of_text(review.get("rule_corrections"))[:5],
     }
 
 

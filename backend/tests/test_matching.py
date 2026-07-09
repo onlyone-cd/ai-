@@ -1,4 +1,5 @@
 from app.matching import match_candidate, parse_skill_tags
+from app.tag_library import rule_based_tags
 
 
 def test_parse_skill_tags_supports_multiline_weights():
@@ -31,3 +32,33 @@ def test_business_system_names_do_not_match_business_roles():
 
     assert tech["hits"] == []
     assert buyer["hits"][0]["candidate_tag"] == "采购"
+
+
+def test_finance_tools_do_not_related_match_general_finance_or_office_tags():
+    tags = [
+        {"tag": "Excel", "score": 5, "category": "工具"},
+        {"tag": "纳税申报", "score": 5, "category": "财务/会计"},
+    ]
+
+    result = match_candidate("金蝶 5|用友 5", tags, candidate_context="总账会计，熟悉纳税申报、财务报表、Excel。")
+
+    assert result["hits"] == []
+    assert result["missing_tags"] == ["金蝶", "用友"]
+
+
+def test_finance_system_tags_require_accounting_context_even_for_exact_match():
+    tags = [{"tag": "金蝶", "score": 5, "category": "工具"}]
+
+    developer = match_candidate("金蝶 5", tags, candidate_context="Java 开发工程师，负责金蝶接口、ERP系统集成和Spring Boot后端服务。")
+    accountant = match_candidate("金蝶 5", tags, candidate_context="总账会计，负责财务核算、报表编制，熟悉金蝶KIS。")
+
+    assert developer["hits"] == []
+    assert accountant["hits"][0]["match_type"] == "exact"
+
+
+def test_rule_based_tags_require_context_for_finance_system_tools():
+    developer_tags = {item["tag"] for item in rule_based_tags("Java 开发工程师，负责金蝶接口、ERP系统集成和Spring Boot后端服务。")}
+    accountant_tags = {item["tag"] for item in rule_based_tags("总账会计，负责财务核算、报表编制，熟悉金蝶KIS和用友U8。")}
+
+    assert "金蝶" not in developer_tags
+    assert {"金蝶", "用友"} <= accountant_tags

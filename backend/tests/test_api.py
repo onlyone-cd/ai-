@@ -1113,8 +1113,8 @@ def test_job_match_combines_rule_score_and_ai_review(client, admin_headers, app,
     assert reason["ai_score"] == 80
     assert reason["ai_review"]["source"] == "deepseek"
     assert reason["ai_review"]["recommendation"] == "推荐"
-    assert reason["score_formula"] == "final_score=round(rule_score*45% + ai_score*55%); no pre-filter before AI review"
-    assert first["score"] == round(reason["rule_score"] * 0.45 + 80 * 0.55)
+    assert reason["score_formula"] == "final_score=round(rule_score*35% + ai_score*65%); no pre-filter before AI review"
+    assert first["score"] == round(reason["rule_score"] * 0.35 + 80 * 0.65)
 
 
 def test_job_creation_structures_jd_without_manual_skill_tags(client, admin_headers):

@@ -2,12 +2,19 @@ import re
 
 from .tag_library import has_category_context, label_map
 
-RELATED_GROUPS = [
-    {"会计", "总账会计", "财务", "财务核算", "财务报表", "税务", "纳税申报", "审计", "出纳", "Excel", "金蝶", "用友"},
-    {"Python", "Flask", "Django", "FastAPI", "SQL", "MySQL", "Redis", "Docker", "后端开发"},
-    {"React", "Vue", "TypeScript", "JavaScript", "前端开发", "Vite"},
-    {"采购", "供应商", "库存", "供应链"},
+RELATED_SETS = [
+    ({"会计", "总账会计", "财务核算", "财务报表"}, 0.85),
+    ({"税务", "纳税申报"}, 0.85),
+    ({"Python", "Flask", "Django", "FastAPI"}, 0.75),
+    ({"Java", "Spring", "Spring Boot", "Spring Cloud", "MyBatis"}, 0.78),
+    ({"JavaScript", "TypeScript", "React", "Vue"}, 0.75),
+    ({"SQL", "MySQL", "PostgreSQL", "Oracle", "SQL Server"}, 0.72),
+    ({"Docker", "Kubernetes"}, 0.65),
+    ({"采购", "供应商", "供应链"}, 0.75),
 ]
+
+EXACT_ONLY_TAGS = {"Excel", "PowerPoint", "Word", "金蝶", "用友", "SAP"}
+FINANCE_SYSTEM_TAGS = {"金蝶", "用友", "ERP财务"}
 
 ALIASES = {
     "js": "javascript",
@@ -48,24 +55,20 @@ def relation_factor(jd_tag, candidate_tag):
         return 1.0, "exact"
     jd_norm = normalize(jd_tag)
     candidate_norm = normalize(candidate_tag)
-    for group in RELATED_GROUPS:
+    exact_only = {normalize(item) for item in EXACT_ONLY_TAGS}
+    if jd_norm in exact_only or candidate_norm in exact_only:
+        return 0.0, "missing"
+    for group, factor in RELATED_SETS:
         normalized_group = {normalize(item) for item in group}
         if jd_norm in normalized_group and candidate_norm in normalized_group:
-            strong_pairs = [
-                {"会计", "总账会计", "财务核算", "财务报表"},
-                {"税务", "纳税申报"},
-                {"Python", "Flask", "Django", "FastAPI", "后端开发"},
-                {"React", "Vue", "TypeScript", "JavaScript", "前端开发"},
-            ]
-            for pair in strong_pairs:
-                normalized_pair = {normalize(item) for item in pair}
-                if jd_norm in normalized_pair and candidate_norm in normalized_pair:
-                    return 0.85, "related"
-            return 0.65, "related"
+            return factor, "related"
     return 0.0, "missing"
 
 
 def has_domain_context(jd_tag, candidate_tag, candidate_context):
+    finance_system_tags = {normalize(item) for item in FINANCE_SYSTEM_TAGS}
+    if normalize(jd_tag) in finance_system_tags or normalize(candidate_tag) in finance_system_tags:
+        return has_category_context("财务/会计", candidate_context)
     labels = label_map()
     category = labels.get(candidate_tag).category if candidate_tag in labels else ""
     return has_category_context(category, candidate_context)

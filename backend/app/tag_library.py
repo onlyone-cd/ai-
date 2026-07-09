@@ -23,6 +23,13 @@ DOMAIN_SIGNALS = {
     "零售/门店": ["门店管理", "店长", "收银", "导购", "商品陈列"],
 }
 
+LABEL_CONTEXT_REQUIREMENTS = {
+    "金蝶": ["会计", "财务", "总账", "账务", "税务", "纳税", "报税", "出纳", "审计", "报表", "核算", "成本"],
+    "用友": ["会计", "财务", "总账", "账务", "税务", "纳税", "报税", "出纳", "审计", "报表", "核算", "成本"],
+    "SAP": ["会计", "财务", "总账", "账务", "税务", "纳税", "报表", "核算", "成本", "ERP", "供应链", "采购", "库存"],
+    "ERP财务": ["会计", "财务", "总账", "账务", "税务", "纳税", "报表", "核算", "成本"],
+}
+
 
 @dataclass(frozen=True)
 class SkillLabel:
@@ -61,7 +68,8 @@ def label_map():
 def candidate_labels_for_text(text, limit=120):
     hits = []
     for label in load_labels():
-        if any(term and term_in_text(term, text) for term in label.evidence_terms):
+        matched_terms = [term for term in label.evidence_terms if term and term_in_text(term, text)]
+        if matched_terms and label_has_required_context(label, text, matched_terms):
             hits.append(label)
     return hits[:limit]
 
@@ -73,6 +81,8 @@ def rule_based_tags(text, limit=50):
             continue
         matched_terms = [term for term in label.evidence_terms if term and term_in_text(term, text)]
         if not matched_terms:
+            continue
+        if not label_has_required_context(label, text, matched_terms):
             continue
         score = evidence_score(matched_terms, text)
         tags.append({"tag": label.tag, "score": score, "category": label.category})
@@ -92,6 +102,9 @@ def normalize_llm_tags(items, text, min_score=2, limit=50):
         if not has_evidence:
             has_evidence = any(term and term_in_text(term, text) for term in label.evidence_terms)
         if not has_evidence:
+            continue
+        matched_terms = [term for term in label.evidence_terms if term and term_in_text(term, text)]
+        if not label_has_required_context(label, text, matched_terms):
             continue
         if not has_category_context(label.category, text):
             continue
@@ -123,6 +136,17 @@ def term_in_text(term, text):
     if re.fullmatch(r"[A-Za-z0-9+#.]{1,3}", value):
         return bool(re.search(rf"(?<![A-Za-z0-9+#.]){re.escape(value)}(?![A-Za-z0-9+#.])", text, re.I))
     return value.lower() in text.lower()
+
+
+def label_has_required_context(label, text, matched_terms):
+    required_terms = LABEL_CONTEXT_REQUIREMENTS.get(label.tag)
+    if not required_terms:
+        return True
+    contexts = []
+    for term in matched_terms:
+        contexts.extend(term_contexts(term, text, radius=80))
+    normalized_context = "\n".join(contexts).lower()
+    return any(term.lower() in normalized_context for term in required_terms)
 
 
 def evidence_score(terms, text):

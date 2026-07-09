@@ -190,6 +190,58 @@ def validate_target_schema(connection):
         raise RuntimeError(f"target database is missing tables: {', '.join(missing)}. Run Alembic migrations first.")
 
 
+def primary_key_values(data: dict[str, list[dict[str, Any]]], table):
+    columns = list(table.primary_key.columns)
+    if len(columns) != 1:
+        return set()
+    column_name = columns[0].name
+    return {row.get(column_name) for row in data.get(table.name, [])}
+
+
+def sanitize_foreign_key_rows(data: dict[str, list[dict[str, Any]]]):
+    """Drop or null rows that SQLite allowed but PostgreSQL FK checks reject."""
+    table_by_name = {table.name: table for table in app_tables()}
+    removed: dict[str, int] = {}
+    nulled: dict[str, int] = {}
+    changed = True
+    while changed:
+        changed = False
+        pk_cache = {table.name: primary_key_values(data, table) for table in table_by_name.values()}
+        for table in app_tables():
+            rows = data.get(table.name, [])
+            if not rows:
+                continue
+            kept = []
+            for row in rows:
+                drop = False
+                updated = dict(row)
+                for foreign_key in table.foreign_keys:
+                    parent_table = foreign_key.column.table
+                    if parent_table.name not in table_by_name:
+                        continue
+                    parent_columns = list(parent_table.primary_key.columns)
+                    if len(parent_columns) != 1 or foreign_key.column.name != parent_columns[0].name:
+                        continue
+                    child_column = foreign_key.parent
+                    value = updated.get(child_column.name)
+                    if value is None or value in pk_cache[parent_table.name]:
+                        continue
+                    if child_column.nullable:
+                        updated[child_column.name] = None
+                        nulled[table.name] = nulled.get(table.name, 0) + 1
+                        changed = True
+                    else:
+                        drop = True
+                        break
+                if drop:
+                    removed[table.name] = removed.get(table.name, 0) + 1
+                    changed = True
+                else:
+                    kept.append(updated)
+            data[table.name] = kept
+    return {"removed": removed, "nulled": nulled}
+
+
 def target_counts(connection):
     return {table.name: count_rows(connection, table) for table in app_tables()}
 
@@ -255,6 +307,7 @@ def import_package(args):
     require_confirm(args.apply, args.confirm_overwrite)
 
     manifest, data = load_package(package_path)
+    sanitize_summary = sanitize_foreign_key_rows(data)
     engine = create_db_engine(target_database_url)
     with engine.begin() as connection:
         validate_target_schema(connection)
@@ -286,6 +339,7 @@ def import_package(args):
                 "before": before,
                 "planned": planned,
                 "after": after,
+                "sanitized": sanitize_summary,
                 "uploads": upload_summary,
             },
             ensure_ascii=False,

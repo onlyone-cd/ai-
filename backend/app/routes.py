@@ -19,7 +19,7 @@ from .auth import hash_password, issue_token, login_required, roles_required, va
 from .job_service import ai_review_matches, build_jd_structured, ensure_jd_structured, persist_matches, preview_matches
 from .llm_client import LLMError, chat_json, llm_available, llm_status
 from .matching import match_candidate
-from .models import AuditLog, BackgroundTask, BossAccount, BossDraft, BossSyncItem, BossSyncJob, Candidate, CandidateTag, EmployeeAnalysis, EmployeeCompensation, EmployeeProfile, EmployeeRecommendation, InterviewAssignment, InterviewFeedback, InterviewSpeechLog, Job, LLMUsage, Match, NotificationChannel, NotificationEvent, NotificationLog, OfferRecord, OrganizationUnit, PipelineStage, ResumeAttachment, UploadBatch, User, years_between
+from .models import AgentConversation, AgentMessage, AuditLog, BackgroundTask, BossAccount, BossDraft, BossSyncItem, BossSyncJob, Candidate, CandidateTag, EmployeeAnalysis, EmployeeCompensation, EmployeeProfile, EmployeeRecommendation, InterviewAssignment, InterviewFeedback, InterviewSpeechLog, Job, LLMUsage, Match, NotificationChannel, NotificationEvent, NotificationLog, OfferRecord, OrganizationUnit, PipelineStage, ResumeAttachment, UploadBatch, User, utcnow, years_between
 from .ops_service import build_data_quality_report, build_deploy_gate_report, list_backup_packages, migration_status, storage_status, table_counts
 from .rbac import ROLES, role_permissions
 from .resume_service import ARCHIVE_EXTENSIONS, parse_and_save_archive, parse_and_save_resume, parse_and_save_text, reparse_candidate, rescan_attachment, resume_upload_dir
@@ -3447,13 +3447,72 @@ def fallback_jd_text(title, city="", department=""):
     return f"{place}{team}岗位名称：{title}\n岗位职责：负责{title}相关工作，推动业务目标落地。\n任职要求：具备相关岗位经验，沟通清晰，执行力强。"
 
 
+@api.get("/agent/conversations")
+@login_required
+@roles_required("admin", "manager", "recruiter")
+def list_agent_conversations(user):
+    query = AgentConversation.query.filter_by(owner_hr_id=user.id).filter(AgentConversation.status != "archived").order_by(AgentConversation.updated_at.desc(), AgentConversation.id.desc())
+    conversations, meta = paginate_query(query, default_limit=30, max_limit=100)
+    return ok({"items": [conversation.to_dict() for conversation in conversations], **meta})
+
+
+@api.post("/agent/conversations")
+@login_required
+@roles_required("admin", "manager", "recruiter")
+def create_agent_conversation(user):
+    payload = request.get_json(silent=True) or {}
+    title = str(payload.get("title") or "新对话").strip()[:128] or "新对话"
+    conversation = AgentConversation(owner_hr_id=user.id, title=title)
+    db.session.add(conversation)
+    db.session.commit()
+    return ok(conversation.to_dict(detail=True), "新对话已创建")
+
+
+@api.get("/agent/conversations/<int:conversation_id>")
+@login_required
+@roles_required("admin", "manager", "recruiter")
+def get_agent_conversation(user, conversation_id):
+    conversation = agent_conversation_for_user(user, conversation_id)
+    if not conversation:
+        return error("对话不存在", "NOT_FOUND", 404)
+    return ok(conversation.to_dict(detail=True))
+
+
+@api.patch("/agent/conversations/<int:conversation_id>")
+@login_required
+@roles_required("admin", "manager", "recruiter")
+def update_agent_conversation(user, conversation_id):
+    conversation = agent_conversation_for_user(user, conversation_id)
+    if not conversation:
+        return error("对话不存在", "NOT_FOUND", 404)
+    payload = request.get_json(force=True)
+    if "title" in payload:
+        conversation.title = str(payload.get("title") or conversation.title).strip()[:128] or conversation.title
+    if payload.get("status") in {"active", "archived"}:
+        conversation.status = payload["status"]
+    conversation.updated_at = utcnow()
+    db.session.commit()
+    return ok(conversation.to_dict(detail=True), "对话已更新")
+
+
 @api.post("/agent/chat")
 @login_required
 @roles_required("admin", "manager", "recruiter")
 def agent_chat(user):
     payload = request.get_json(force=True)
     message = payload.get("message", "")
-    result = run_agent_tool(user, message, payload.get("pending_action"))
+    conversation = resolve_agent_conversation(user, payload, message)
+    history = agent_recent_history(conversation)
+    pending_action = payload.get("pending_action") if "pending_action" in payload else conversation.pending_action
+    db.session.add(AgentMessage(conversation_id=conversation.id, role="user", content=str(message or "")[:12000]))
+    db.session.flush()
+    result = run_agent_tool(user, message, pending_action, history=history)
+    conversation.pending_action = result.get("pending_action")
+    if conversation.title == "新对话":
+        conversation.title = agent_conversation_title(message)
+    conversation.updated_at = utcnow()
+    db.session.add(AgentMessage(conversation_id=conversation.id, role="assistant", content=str(result.get("answer") or "")[:20000], tool=result.get("tool"), response=safe_agent_response(result)))
+    result["conversation"] = conversation.to_dict()
     audit_log(
         user,
         "agent_tool",
@@ -3463,6 +3522,7 @@ def agent_chat(user):
         {"tool": result.get("tool"), "readonly": bool(result.get("readonly", True)), "message_length": len(str(message or ""))},
     )
     db.session.commit()
+    result["conversation"] = conversation.to_dict()
     return ok(result)
 
 
@@ -3506,7 +3566,45 @@ def employee_payload(employee, user, detail=False):
     return employee.to_dict(detail=detail, include_salary=can_view_employee_salary(user))
 
 
-def run_agent_tool(user, message, pending_action=None):
+def agent_conversation_for_user(user, conversation_id):
+    query = AgentConversation.query.filter_by(id=conversation_id)
+    if user.role != "admin":
+        query = query.filter_by(owner_hr_id=user.id)
+    return query.first()
+
+
+def resolve_agent_conversation(user, payload, message):
+    conversation_id = payload.get("conversation_id")
+    conversation = agent_conversation_for_user(user, int(conversation_id)) if conversation_id else None
+    if conversation and conversation.status == "archived":
+        conversation.status = "active"
+    if conversation:
+        return conversation
+    conversation = AgentConversation(owner_hr_id=user.id, title=agent_conversation_title(message))
+    db.session.add(conversation)
+    db.session.flush()
+    return conversation
+
+
+def agent_conversation_title(message):
+    text = re.sub(r"\s+", " ", str(message or "")).strip()
+    if not text:
+        return "新对话"
+    return text[:28] + ("..." if len(text) > 28 else "")
+
+
+def agent_recent_history(conversation, limit=12):
+    messages = sorted(conversation.messages, key=lambda item: (item.created_at or utcnow(), item.id or 0))[-limit:]
+    return [{"role": item.role, "content": item.content, "tool": item.tool} for item in messages]
+
+
+def safe_agent_response(result):
+    data = dict(result or {})
+    data.pop("conversation", None)
+    return data
+
+
+def run_agent_tool(user, message, pending_action=None, history=None):
     text = (message or "").strip()
     lowered = text.lower()
     suggestions = [
@@ -3517,7 +3615,7 @@ def run_agent_tool(user, message, pending_action=None):
     ]
 
     if pending_action:
-        return continue_pending_agent_action(user, text, pending_action, suggestions)
+        return continue_pending_agent_action(user, text, pending_action, suggestions, history=history)
 
     if is_greeting_or_smalltalk(text):
         return {
@@ -3688,10 +3786,10 @@ def run_agent_tool(user, message, pending_action=None):
             "readonly": True,
         }
 
-    return free_agent_chat(text, suggestions)
+    return free_agent_chat(text, suggestions, history=history)
 
 
-def free_agent_chat(text, suggestions):
+def free_agent_chat(text, suggestions, history=None):
     if not llm_available():
         return {
             "answer": "我可以继续自由对话，但当前 DeepSeek 未启用。你也可以直接让我查人才库、创建岗位、推荐候选人、看流程/面试/Offer/BOSS/BI。",
@@ -3702,11 +3800,13 @@ def free_agent_chat(text, suggestions):
         }
     snapshot = bi_snapshot()
     jobs = Job.query.order_by(Job.created_at.desc()).limit(5).all()
+    recent_history = format_agent_history(history or [])
     messages = [
         {
             "role": "system",
             "content": (
-                "你是 HireInsight 招聘 AI Agent。你可以自由回答招聘系统相关问题，但不能编造系统数据。"
+                "你是 HireInsight 招聘 AI Agent。你可以自由回答招聘系统相关问题，并结合当前对话上下文理解用户追问。"
+                "不能编造系统数据；如果需要精确数据，应建议或调用已有工具。"
                 "已有确定工具能力：查人才库统计、查候选人、创建岗位、推荐候选人、查流程、面试、Offer、BOSS、BI。"
                 "涉及创建岗位、删除、发送消息等写操作时，提醒用户需要明确指令或人工确认。"
                 "输出 JSON：{\"answer\":\"中文回答\",\"suggestions\":[\"下一步建议1\",\"下一步建议2\",\"下一步建议3\"]}"
@@ -3715,6 +3815,7 @@ def free_agent_chat(text, suggestions):
         {
             "role": "user",
             "content": (
+                f"最近对话={recent_history}\n"
                 f"系统快照={snapshot}\n"
                 f"最近岗位={[job.to_dict() for job in jobs]}\n"
                 f"用户问题={text}"
@@ -3753,9 +3854,19 @@ def is_create_job_request(text):
     return ("创建" in text or "新增" in text or "发布" in text or "生成" in text) and "岗位" in text
 
 
-def continue_pending_agent_action(user, text, pending_action, suggestions):
+def format_agent_history(history):
+    rows = []
+    for item in history[-10:]:
+        role = "用户" if item.get("role") == "user" else "助手"
+        tool = f"（工具：{item.get('tool')}）" if item.get("tool") else ""
+        content = re.sub(r"\s+", " ", str(item.get("content") or "")).strip()[:500]
+        rows.append(f"{role}{tool}: {content}")
+    return "\n".join(rows)
+
+
+def continue_pending_agent_action(user, text, pending_action, suggestions, history=None):
     if not isinstance(pending_action, dict) or pending_action.get("type") != "create_job":
-        return free_agent_chat(text, suggestions)
+        return free_agent_chat(text, suggestions, history=history)
     if is_agent_cancel(text):
         return {
             "answer": "已取消当前岗位创建草案，没有写入系统。你可以重新描述一个岗位，或者继续让我查询人才库和推荐候选人。",

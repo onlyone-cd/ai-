@@ -507,7 +507,7 @@ textarea {
   }
 
   .agent-chat-page {
-    @apply mx-auto flex min-h-[calc(100vh-8rem)] max-w-6xl flex-col overflow-hidden rounded-lg border border-line bg-white shadow-panel;
+    @apply mx-auto flex min-h-[calc(100vh-8rem)] max-w-[1280px] flex-col overflow-hidden rounded-lg border border-line bg-white shadow-panel;
   }
 
   .agent-page-head,
@@ -529,12 +529,52 @@ textarea {
     @apply text-xs text-steel;
   }
 
-  .agent-live-dot {
-    @apply h-2.5 w-2.5 rounded-full bg-blue-500;
+  .agent-shell {
+    @apply grid min-h-0 flex-1 grid-cols-[280px_minmax(0,1fr)];
+  }
+
+  .agent-sidebar {
+    @apply flex min-h-0 flex-col border-r border-line bg-slate-50;
+  }
+
+  .agent-sidebar-title {
+    @apply flex items-center justify-between border-b border-line px-4 py-3 text-xs font-semibold text-steel;
+  }
+
+  .agent-session-list {
+    @apply min-h-0 flex-1 space-y-2 overflow-auto p-3;
+  }
+
+  .agent-session {
+    @apply block w-full rounded-md border border-transparent bg-white px-3 py-3 text-left transition hover:border-mint/40;
+  }
+
+  .agent-session.active {
+    @apply border-mint bg-blue-50;
+  }
+
+  .agent-session strong {
+    @apply block truncate text-sm font-semibold text-ink;
+  }
+
+  .agent-session span {
+    @apply mt-1 block line-clamp-2 text-xs leading-5 text-steel;
+  }
+
+  .agent-session small {
+    @apply mt-2 block text-[11px] text-steel/80;
+  }
+
+  .agent-empty {
+    @apply rounded-md border border-dashed border-line bg-white px-3 py-6 text-center text-xs text-steel;
+  }
+
+  .agent-main {
+    @apply flex min-h-0 flex-col;
   }
 
   .agent-thread {
-    @apply flex-1 space-y-5 overflow-auto bg-slate-50 px-4 py-5 sm:px-8;
+    @apply min-h-0 flex-1 space-y-5 overflow-auto bg-slate-50 px-4 py-5 sm:px-8;
   }
 
   .agent-turn {
@@ -608,7 +648,11 @@ textarea {
   }
 
   .agent-footnote {
-    @apply border-t border-line bg-white px-4 pb-3 text-center text-xs text-steel;
+    @apply flex items-center justify-between gap-3 border-t border-line bg-white px-4 pb-3 text-xs text-steel;
+  }
+
+  .agent-footnote button {
+    @apply rounded-md border border-line bg-slate-50 px-2.5 py-1.5 font-medium transition hover:border-mint hover:text-ink;
   }
 
   .design-page {

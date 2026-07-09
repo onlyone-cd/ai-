@@ -34,7 +34,7 @@ import {
   Users,
   X
 } from "lucide-react";
-import { api, AgentResponse, AiInterviewPlan, AuditLog, BackgroundTask, BiOverview, BossInboxItem, Candidate, clearToken, DataIntegrity, EmployeeAnalysis, EmployeeProfile, EmployeeRecommendation, InterviewAssignment, InterviewFeedback, InterviewMessage, InterviewSpeechStatus, Job, LLMUsageSummary, MatchResult, notify, OfferRecord, OpsBackupStatus, OpsDataQuality, OpsDeployGates, OrganizationUnit, PipelineItem, PublicInterviewRoom, setToken, SkillTag, User } from "./lib/api";
+import { api, AgentConversation, AgentMessage, AgentResponse, AiInterviewPlan, AuditLog, BackgroundTask, BiOverview, BossInboxItem, Candidate, clearToken, DataIntegrity, EmployeeAnalysis, EmployeeProfile, EmployeeRecommendation, InterviewAssignment, InterviewFeedback, InterviewMessage, InterviewSpeechStatus, Job, LLMUsageSummary, MatchResult, notify, OfferRecord, OpsBackupStatus, OpsDataQuality, OpsDeployGates, OrganizationUnit, PipelineItem, PublicInterviewRoom, setToken, SkillTag, User } from "./lib/api";
 
 const stageLabels: Record<string, string> = {
   pending: "待处理",
@@ -2379,24 +2379,70 @@ function useClientPagination<T>(items: T[], defaultLimit = 20) {
 function AgentPage() {
   type AgentTurn = { role: "user" | "assistant"; content: string; response?: AgentResponse };
   const [message, setMessage] = useState("");
-  const [turns, setTurns] = useState<AgentTurn[]>([
-    {
-      role: "assistant",
-      content: "我可以像招聘 Agent 一样调用各模块工具：查人才库、分类统计、创建岗位、推荐候选人、查流程/面试/Offer/BOSS/BI。"
-    }
-  ]);
+  const [conversations, setConversations] = useState<AgentConversation[]>([]);
+  const [activeConversation, setActiveConversation] = useState<AgentConversation | null>(null);
+  const [turns, setTurns] = useState<AgentTurn[]>([]);
   const [tools, setTools] = useState<{ name: string; description: string }[]>([]);
   const [busy, setBusy] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [pendingAction, setPendingAction] = useState<Record<string, unknown> | null>(null);
   const threadEndRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
     api.agentTools().then((data) => setTools(data.items));
+    loadConversations();
   }, []);
 
   useEffect(() => {
     threadEndRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [turns, busy]);
+
+  async function loadConversations(selectId?: number) {
+    setLoading(true);
+    try {
+      const data = await api.agentConversations();
+      setConversations(data.items);
+      const target = selectId ? data.items.find((item) => item.id === selectId) : data.items[0];
+      if (target) {
+        await openConversation(target.id);
+      } else {
+        setActiveConversation(null);
+        setTurns(welcomeTurns());
+        setPendingAction(null);
+      }
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function openConversation(id: number) {
+    const data = await api.getAgentConversation(id);
+    setActiveConversation(data);
+    setPendingAction(data.pending_action || null);
+    setTurns(agentMessagesToTurns(data.messages || []));
+  }
+
+  async function newConversation() {
+    const data = await api.createAgentConversation("新对话");
+    setConversations((items) => [data, ...items]);
+    setActiveConversation(data);
+    setPendingAction(null);
+    setTurns(welcomeTurns());
+  }
+
+  async function archiveConversation(id: number) {
+    await api.updateAgentConversation(id, { status: "archived" });
+    const next = conversations.filter((item) => item.id !== id);
+    setConversations(next);
+    if (activeConversation?.id === id) {
+      if (next[0]) await openConversation(next[0].id);
+      else {
+        setActiveConversation(null);
+        setTurns(welcomeTurns());
+        setPendingAction(null);
+      }
+    }
+  }
 
   async function send(nextMessage = message) {
     const content = nextMessage.trim();
@@ -2405,9 +2451,13 @@ function AgentPage() {
     setTurns((current) => [...current, { role: "user", content }]);
     setMessage("");
     try {
-      const data = await api.chat(content, pendingAction);
+      const data = await api.chat(content, pendingAction, activeConversation?.id || null);
       setPendingAction(data.pending_action || null);
       setTurns((current) => [...current, { role: "assistant", content: data.answer, response: data }]);
+      if (data.conversation) {
+        setActiveConversation(data.conversation);
+        setConversations((items) => upsertConversation(items, data.conversation as AgentConversation));
+      }
     } finally {
       setBusy(false);
     }
@@ -2420,72 +2470,128 @@ function AgentPage() {
     <section className="agent-chat-page" data-testid="page-agent">
       <header className="agent-page-head">
         <div>
-          <h1>Agent</h1>
-          <span>{busy ? "正在执行" : "就绪"} · 已连接 {tools.length || 12} 个工具</span>
+          <h1>AI Agent</h1>
+          <span>{busy ? "正在执行" : loading ? "正在加载历史" : "就绪"} · 已连接 {tools.length || 12} 个工具 · 历史自动保存</span>
         </div>
-        <div className="agent-live-dot" />
+        <button className="primary-button" type="button" onClick={newConversation}>
+          <Plus size={17} />
+          新建聊天
+        </button>
       </header>
 
-      <div className="agent-thread">
-        {turns.map((turn, index) => (
-          <div className={`agent-turn ${turn.role}`} key={`${turn.role}-${index}`}>
-            <div className="agent-turn-icon">
-              {turn.role === "assistant" ? <Bot size={16} /> : <Users size={16} />}
-            </div>
-            <div className="agent-message">
-              <p>{turn.content}</p>
-              {turn.role === "assistant" && turn.response && <AgentTrace response={turn.response} />}
-            </div>
+      <div className="agent-shell">
+        <aside className="agent-sidebar">
+          <div className="agent-sidebar-title">
+            <span>对话历史</span>
+            <span>{conversations.length}</span>
           </div>
-        ))}
-        {busy && (
-          <div className="agent-turn assistant">
-            <div className="agent-turn-icon"><Bot size={16} /></div>
-            <div className="agent-message agent-thinking">
-              <span />
-              <span />
-              <span />
-            </div>
+          <div className="agent-session-list">
+            {conversations.map((item) => (
+              <button
+                className={`agent-session ${activeConversation?.id === item.id ? "active" : ""}`}
+                key={item.id}
+                type="button"
+                onClick={() => openConversation(item.id)}
+              >
+                <strong>{item.title}</strong>
+                <span>{item.last_message || "暂无消息"}</span>
+                <small>{item.updated_at ? formatDateTime(item.updated_at) : ""}</small>
+              </button>
+            ))}
+            {!conversations.length && <div className="agent-empty">还没有历史对话</div>}
           </div>
-        )}
-        <div ref={threadEndRef} />
-      </div>
+        </aside>
 
-      <div className="agent-quick-row">
-        {quickQuestions.slice(0, 4).map((question) => (
-          <button type="button" key={question} onClick={() => send(question)}>
-            {question}
-          </button>
-        ))}
-      </div>
+        <main className="agent-main">
+          <div className="agent-thread">
+            {turns.map((turn, index) => (
+              <div className={`agent-turn ${turn.role}`} key={`${turn.role}-${index}`}>
+                <div className="agent-turn-icon">
+                  {turn.role === "assistant" ? <Bot size={16} /> : <Users size={16} />}
+                </div>
+                <div className="agent-message">
+                  <p>{turn.content}</p>
+                  {turn.role === "assistant" && turn.response && <AgentTrace response={turn.response} />}
+                </div>
+              </div>
+            ))}
+            {busy && (
+              <div className="agent-turn assistant">
+                <div className="agent-turn-icon"><Bot size={16} /></div>
+                <div className="agent-message agent-thinking">
+                  <span />
+                  <span />
+                  <span />
+                </div>
+              </div>
+            )}
+            <div ref={threadEndRef} />
+          </div>
 
-      <form
-        className="agent-composer"
-        data-testid="agent-composer"
-        onSubmit={(event) => {
-          event.preventDefault();
-          send();
-        }}
-      >
-        <textarea
-          data-testid="agent-input"
-          value={message}
-          onChange={(event) => setMessage(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter" && !event.shiftKey) {
+          <div className="agent-quick-row">
+            {quickQuestions.slice(0, 4).map((question) => (
+              <button type="button" key={question} onClick={() => send(question)}>
+                {question}
+              </button>
+            ))}
+          </div>
+
+          <form
+            className="agent-composer"
+            data-testid="agent-composer"
+            onSubmit={(event) => {
               event.preventDefault();
               send();
-            }
-          }}
-          placeholder="输入问题，Enter 发送 · Shift+Enter 换行"
-        />
-        <button type="submit" disabled={busy || !message.trim()} title="发送">
-          <SendHorizontal size={18} />
-        </button>
-      </form>
-      <p className="agent-footnote">AI 可自由对话；涉及写入、发送、删除等动作仍需要明确指令和人工确认。</p>
+            }}
+          >
+            <textarea
+              data-testid="agent-input"
+              value={message}
+              onChange={(event) => setMessage(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !event.shiftKey) {
+                  event.preventDefault();
+                  send();
+                }
+              }}
+              placeholder="输入问题，Enter 发送 · Shift+Enter 换行"
+            />
+            <button type="submit" disabled={busy || !message.trim()} title="发送">
+              <SendHorizontal size={18} />
+            </button>
+          </form>
+          <div className="agent-footnote">
+            <span>当前对话：{activeConversation?.title || "新对话"}</span>
+            {activeConversation && (
+              <button type="button" onClick={() => archiveConversation(activeConversation.id)}>
+                归档对话
+              </button>
+            )}
+          </div>
+        </main>
+      </div>
     </section>
   );
+}
+
+function welcomeTurns(): { role: "user" | "assistant"; content: string; response?: AgentResponse }[] {
+  return [{
+    role: "assistant",
+    content: "我是招聘 AI Agent。现在支持新建多轮对话、保留历史记录，并可以结合上下文调用人才库、岗位匹配、流程、面试、Offer、BOSS 和 BI 工具。"
+  }];
+}
+
+function agentMessagesToTurns(messages: AgentMessage[]): { role: "user" | "assistant"; content: string; response?: AgentResponse }[] {
+  if (!messages.length) return welcomeTurns();
+  return messages.map((item) => ({
+    role: item.role,
+    content: item.content,
+    response: item.response || undefined
+  }));
+}
+
+function upsertConversation(items: AgentConversation[], conversation: AgentConversation) {
+  return [conversation, ...items.filter((item) => item.id !== conversation.id)].sort((a, b) => String(b.updated_at || "").localeCompare(String(a.updated_at || "")));
 }
 
 function AgentTrace({ response }: { response: AgentResponse }) {

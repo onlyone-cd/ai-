@@ -13,7 +13,7 @@ from app import create_app, db
 from app.config import Config
 from app.auth import verify_password
 from app.llm_client import chat_json
-from app.models import AuditLog, BackgroundTask, BossDraft, BossSyncJob, Candidate, CandidateTag, EmployeeProfile, InterviewAssignment, InterviewFeedback, InterviewSpeechLog, Job, LLMUsage, Match, NotificationLog, OfferRecord, OrganizationUnit, PipelineStage, ResumeAttachment, User
+from app.models import AgentConversation, AgentMessage, AuditLog, BackgroundTask, BossDraft, BossSyncJob, Candidate, CandidateTag, EmployeeProfile, InterviewAssignment, InterviewFeedback, InterviewSpeechLog, Job, LLMUsage, Match, NotificationLog, OfferRecord, OrganizationUnit, PipelineStage, ResumeAttachment, User
 from app.task_service import run_next_task
 
 
@@ -1798,6 +1798,31 @@ def test_agent_smalltalk_does_not_trigger_bi_snapshot(client, admin_headers):
     data = response.get_json()["data"]
     assert data["tool"] == "chat"
     assert "AI 招聘 Agent" in data["answer"]
+
+
+def test_agent_conversations_persist_messages_and_context(client, admin_headers):
+    first = client.post("/api/agent/chat", headers=admin_headers, json={"message": "创建岗位 Java后端工程师"})
+    assert first.status_code == 200
+    first_data = first.get_json()["data"]
+    conversation = first_data["conversation"]
+    assert conversation["title"].startswith("创建岗位 Java")
+    assert first_data["pending_action"]["type"] == "create_job"
+
+    second = client.post(
+        "/api/agent/chat",
+        headers=admin_headers,
+        json={"conversation_id": conversation["id"], "message": "城市上海，岗位Java后端工程师"},
+    )
+    assert second.status_code == 200
+    second_data = second.get_json()["data"]
+    assert second_data["conversation"]["id"] == conversation["id"]
+
+    conversations = client.get("/api/agent/conversations", headers=admin_headers).get_json()["data"]["items"]
+    assert conversations[0]["id"] == conversation["id"]
+    detail = client.get(f"/api/agent/conversations/{conversation['id']}", headers=admin_headers).get_json()["data"]
+    assert [message["role"] for message in detail["messages"]] == ["user", "assistant", "user", "assistant"]
+    assert AgentConversation.query.count() == 1
+    assert AgentMessage.query.count() == 4
 
 
 def test_agent_free_chat_falls_back_to_llm_chat(client, admin_headers):

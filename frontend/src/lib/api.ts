@@ -483,6 +483,31 @@ export type AgentResponse = {
   pending_action?: Record<string, unknown> | null;
   suggestions: string[];
   readonly: boolean;
+  conversation?: AgentConversation;
+};
+
+export type AgentMessage = {
+  id: number;
+  conversation_id: number;
+  role: "user" | "assistant";
+  content: string;
+  tool?: string | null;
+  response?: AgentResponse | null;
+  created_at?: string | null;
+};
+
+export type AgentConversation = {
+  id: number;
+  owner_hr_id: number;
+  owner_name: string;
+  title: string;
+  status: string;
+  pending_action?: Record<string, unknown> | null;
+  message_count: number;
+  last_message?: string;
+  created_at?: string | null;
+  updated_at?: string | null;
+  messages?: AgentMessage[];
 };
 
 type ApiResponse<T> = { status: "ok"; data: T; message: string };
@@ -806,8 +831,14 @@ export const api = {
   bossAiScreen: (payload: { job_id: number; candidate_ids?: number[]; limit?: number }) =>
     request<{ created: PipelineItem[]; skipped: { candidate_id: number; stage: string }[] }>("/boss/candidates/ai-screen", { method: "POST", body: JSON.stringify(payload) }),
   agentTools: () => request<{ items: { name: string; description: string }[]; readonly: boolean }>("/agent/tools"),
-  chat: (message: string, pending_action?: Record<string, unknown> | null) =>
-    request<AgentResponse>("/agent/chat", { method: "POST", body: JSON.stringify({ message, pending_action }) })
+  agentConversations: () => request<{ items: AgentConversation[] } & Partial<PaginationMeta>>("/agent/conversations?limit=50"),
+  createAgentConversation: (title?: string) =>
+    request<AgentConversation>("/agent/conversations", { method: "POST", body: JSON.stringify({ title }) }),
+  getAgentConversation: (id: number) => request<AgentConversation>(`/agent/conversations/${id}`),
+  updateAgentConversation: (id: number, payload: Partial<Pick<AgentConversation, "title" | "status">>) =>
+    request<AgentConversation>(`/agent/conversations/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
+  chat: (message: string, pending_action?: Record<string, unknown> | null, conversation_id?: number | null) =>
+    request<AgentResponse>("/agent/chat", { method: "POST", body: JSON.stringify({ message, pending_action, conversation_id }) })
 };
 
 export type PipelineItem = {

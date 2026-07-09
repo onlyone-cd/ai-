@@ -2038,6 +2038,76 @@ def test_agent_runs_multi_tool_chain_for_explicit_multi_step_requests(client, ad
     assert len(data["result"]["chain"]) >= 3
 
 
+def test_agent_remembers_clarification_and_continues_resume_analysis(client, admin_headers):
+    job = Job(
+        owner_hr_id=1,
+        title="Java 后端工程师",
+        city="长沙",
+        department="研发部",
+        job_code="AGENT-CLARIFY-JAVA",
+        jd_text="负责 Java 后端开发，要求 Spring Boot、MySQL、Redis。",
+        jd_structured={},
+        status="active",
+    )
+    db.session.add(job)
+    db.session.commit()
+    candidate = client.post(
+        "/api/boss/candidates/batch-import",
+        headers=admin_headers,
+        json={"items": [{"external_id": "agent-clarify-gui", "raw_text": "姓名：桂嘉豪\n男 13700001234 clarify-gui@example.com\n3 年 Java 后端经验，熟悉 Spring Boot、MySQL、Redis。"}]},
+    ).get_json()["data"]["items"][0]
+
+    first = client.post("/api/agent/chat", headers=admin_headers, json={"message": "分析他的简历并推荐岗位"})
+
+    assert first.status_code == 200
+    first_data = first.get_json()["data"]
+    assert first_data["tool"] == "agent_clarification"
+    assert first_data["pending_action"]["type"] == "agent_clarification"
+    assert first_data["pending_action"]["missing"] == ["person"]
+
+    second = client.post(
+        "/api/agent/chat",
+        headers=admin_headers,
+        json={"conversation_id": first_data["conversation"]["id"], "message": "桂嘉豪"},
+    )
+
+    assert second.status_code == 200
+    second_data = second.get_json()["data"]
+    assert second_data["tool"] == "analyze_employee_resume"
+    assert second_data["pending_action"] is None
+    assert second_data["result"]["profile_type"] == "candidate"
+    assert second_data["result"]["candidate"]["id"] == candidate["id"]
+    assert second_data["result"]["continued_from"]["user_clarification"] == "桂嘉豪"
+    assert "接上上一步任务" in second_data["answer"]
+
+
+def test_agent_asks_for_job_before_open_ended_candidate_match(client, admin_headers):
+    job = Job(owner_hr_id=1, title="会计", city="上海", department="财务部", job_code="AGENT-CLARIFY-ACCOUNTING", jd_text="负责总账会计、财务报表、纳税申报。", jd_structured={}, status="active")
+    candidate = Candidate(owner_hr_id=1, upload_batch_id="agent-clarify-job", name_masked="会计候选人", title="总账会计", raw_text="5 年总账会计经验，熟悉财务报表和纳税申报。", resume_json={}, source="upload")
+    db.session.add_all([job, candidate])
+    db.session.commit()
+
+    first = client.post("/api/agent/chat", headers=admin_headers, json={"message": "推荐候选人"})
+
+    assert first.status_code == 200
+    first_data = first.get_json()["data"]
+    assert first_data["tool"] == "agent_clarification"
+    assert first_data["pending_action"]["missing"] == ["job"]
+
+    second = client.post(
+        "/api/agent/chat",
+        headers=admin_headers,
+        json={"conversation_id": first_data["conversation"]["id"], "message": "会计"},
+    )
+
+    assert second.status_code == 200
+    second_data = second.get_json()["data"]
+    assert second_data["tool"] == "match_candidates_for_job"
+    assert second_data["pending_action"] is None
+    assert second_data["result"]["continued_from"]["user_clarification"] == "会计"
+    assert "会计" in second_data["answer"]
+
+
 def test_agent_does_not_create_job_from_ambiguous_create_and_recommend(client, admin_headers):
     candidate = client.post(
         "/api/boss/candidates/batch-import",

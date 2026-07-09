@@ -4115,6 +4115,10 @@ def run_agent_tool(user, message, pending_action=None, history=None):
     if is_create_job_request(text):
         return create_job_from_agent(user, text, suggestions)
 
+    clarification = agent_clarification_request(user, text, suggestions)
+    if clarification:
+        return clarification
+
     if is_employee_resume_agent_request(text):
         return analyze_employee_resume_from_agent(user, text, suggestions, history=history)
 
@@ -4346,6 +4350,85 @@ def free_agent_chat(text, suggestions, history=None):
         "suggestions": data.get("suggestions") or suggestions,
         "readonly": True,
     }
+
+
+def agent_clarification_request(user, text, suggestions):
+    value = str(text or "").strip()
+    if not value:
+        return None
+    if is_agent_cancel(value) or is_greeting_or_smalltalk(value):
+        return None
+    if is_employee_resume_agent_request(value) and not (find_candidate_for_agent_message(value)[0] or find_employee_for_agent_message(value)[0]):
+        return ask_agent_clarification(
+            value,
+            intent="analyze_employee_resume",
+            missing=["person"],
+            selected_tools=["analyze_employee_resume"],
+            answer="我可以分析简历、推荐岗位和给优化建议，但需要先确认对象是谁。请补充候选人/员工姓名、员工编号、手机号后四位，或直接说“分析桂嘉豪”。",
+            suggestions=["桂嘉豪", "王成都", "知识库候选人", "取消"],
+        )
+    if is_person_reference_without_entity(value):
+        return ask_agent_clarification(
+            value,
+            intent="global_lookup",
+            missing=["person"],
+            selected_tools=["global_lookup"],
+            answer="我理解你要查某个人的信息，但当前问题里没有可识别的姓名或编号。请补充姓名、员工编号、手机号后四位，或说明是候选人还是内部员工。",
+            suggestions=["王成都", "桂嘉豪", "查询这个人的职位", "取消"],
+        )
+    if is_match_request_missing_job(value):
+        return ask_agent_clarification(
+            value,
+            intent="match_candidates_for_job",
+            missing=["job"],
+            selected_tools=["get_job_summary", "match_candidates_for_job"],
+            answer="我可以做岗位匹配，但需要先确认匹配哪个岗位。请补充岗位名称，或说“所有开放岗位”。",
+            suggestions=["机械设计工程师", "会计", "数据分析师", "所有开放岗位"],
+        )
+    return None
+
+
+def ask_agent_clarification(original_message, intent, missing, selected_tools, answer, suggestions):
+    return {
+        "answer": answer,
+        "tool": "agent_clarification",
+        "result": {
+            "intent": intent,
+            "missing": missing,
+            "original_message": original_message,
+            "selected_tools": selected_tools,
+            "status": "waiting_for_user",
+        },
+        "pending_action": {
+            "type": "agent_clarification",
+            "intent": intent,
+            "missing": missing,
+            "original_message": original_message,
+            "selected_tools": selected_tools,
+        },
+        "suggestions": suggestions,
+        "readonly": True,
+    }
+
+
+def is_person_reference_without_entity(text):
+    value = str(text or "")
+    pronoun_words = ["他", "她", "这个人", "该员工", "该候选人", "这个候选人", "这个员工"]
+    task_words = ["职位", "岗位", "简历", "适合", "推荐", "匹配", "分析", "查询", "查", "评价", "背景", "能力"]
+    if not (any(word in value for word in pronoun_words) and any(word in value for word in task_words)):
+        return False
+    return not (find_candidate_for_agent_message(value)[0] or find_employee_for_agent_message(value)[0] or find_user_for_agent_message(value)[0])
+
+
+def is_match_request_missing_job(text):
+    value = str(text or "")
+    if "所有岗位" in value or "所有开放岗位" in value:
+        return False
+    if not any(word in value for word in ["推荐候选人", "匹配候选人", "岗位匹配", "最佳候选人"]):
+        return False
+    if find_job_from_message(value):
+        return False
+    return "岗位" not in value or value.strip() in {"推荐候选人", "匹配候选人", "岗位匹配", "推荐最佳候选人"}
 
 
 def is_greeting_or_smalltalk(text):
@@ -5588,7 +5671,11 @@ def format_agent_history(history):
 
 
 def continue_pending_agent_action(user, text, pending_action, suggestions, history=None):
-    if not isinstance(pending_action, dict) or pending_action.get("type") != "create_job":
+    if not isinstance(pending_action, dict):
+        return free_agent_chat(text, suggestions, history=history)
+    if pending_action.get("type") == "agent_clarification":
+        return continue_agent_clarification(user, text, pending_action, suggestions, history=history)
+    if pending_action.get("type") != "create_job":
         return free_agent_chat(text, suggestions, history=history)
     if is_agent_cancel(text):
         return {
@@ -5607,6 +5694,53 @@ def continue_pending_agent_action(user, text, pending_action, suggestions, histo
         if value:
             payload[key] = value
     return job_draft_response(payload, suggestions, prefix="我已根据你的补充更新岗位草案。")
+
+
+def continue_agent_clarification(user, text, pending_action, suggestions, history=None):
+    if is_agent_cancel(text):
+        return {
+            "answer": "已取消上一步待补充任务，没有执行任何查询或写入。你可以重新描述一个新任务。",
+            "tool": "agent_clarification",
+            "result": {"cancelled": True, "pending": pending_action},
+            "pending_action": None,
+            "suggestions": suggestions,
+            "readonly": True,
+        }
+    original = str(pending_action.get("original_message") or "").strip()
+    combined = merge_agent_clarification_message(original, text, pending_action)
+    planner = build_agent_execution_plan(user, combined, None, history)
+    if should_run_agent_multi_tool_chain(planner, None, combined):
+        result = run_agent_multi_tool_chain(user, combined, planner, history=history)
+    else:
+        result = run_agent_tool(user, combined, None, history=history)
+    result = dict(result or {})
+    result["pending_action"] = result.get("pending_action")
+    if result.get("pending_action") == pending_action:
+        result["pending_action"] = None
+    if not result.get("pending_action"):
+        result["pending_action"] = None
+    if isinstance(result.get("result"), dict):
+        result["result"]["continued_from"] = {"original_message": original, "user_clarification": text, "combined_message": combined}
+    result["answer"] = "我已接上上一步任务继续执行。\n" + str(result.get("answer") or "")
+    return result
+
+
+def merge_agent_clarification_message(original, clarification, pending_action):
+    original = str(original or "").strip()
+    clarification = str(clarification or "").strip()
+    intent = (pending_action or {}).get("intent")
+    missing = set((pending_action or {}).get("missing") or [])
+    if not original:
+        return clarification
+    if "person" in missing:
+        if intent == "analyze_employee_resume":
+            return f"{original}，对象是{clarification}"
+        return f"{original}，姓名/对象是{clarification}"
+    if "job" in missing:
+        if "所有" in clarification:
+            return f"{original}，所有开放岗位"
+        return f"{original}，岗位是{clarification}"
+    return f"{original}；补充信息：{clarification}"
 
 
 def is_agent_confirm(text):

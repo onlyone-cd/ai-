@@ -1,6 +1,6 @@
 import re
 
-from .tag_library import has_category_context, label_map
+from .tag_library import evidence_terms_for, has_category_context, label_map, term_contexts
 
 RELATED_SETS = [
     ({"会计", "总账会计", "财务核算", "财务报表"}, 0.85),
@@ -103,6 +103,7 @@ def match_candidate(job_skill_tags, candidate_tags, years_required=None, candida
                     "candidate_score": score,
                     "factor": factor,
                     "match_type": match_type,
+                    "evidence": tag_evidence(candidate_tag["tag"], candidate_context),
                 }
         if best:
             used_candidate_indexes.add(best.pop("candidate_index"))
@@ -131,3 +132,18 @@ def match_candidate(job_skill_tags, candidate_tags, years_required=None, candida
         "skill_score": max(0, min(100, skill_score)),
         "experience_rate": None if experience_rate is None else round(experience_rate, 3),
     }
+
+
+def tag_evidence(tag, text):
+    labels = label_map()
+    label = labels.get(tag)
+    terms = evidence_terms_for(label) if label else (tag,)
+    snippets = []
+    for term in terms:
+        for context in term_contexts(term, text, radius=54):
+            cleaned = re.sub(r"\s+", " ", context).strip()
+            if cleaned and cleaned not in snippets:
+                snippets.append(cleaned)
+            if len(snippets) >= 2:
+                return snippets
+    return snippets

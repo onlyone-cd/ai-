@@ -10,7 +10,7 @@ body {
   margin: 0;
   color: #111827;
   background: #f5f7fb;
-  font-size: 13px;
+  font-size: 12px;
   font-family: Inter, "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
 }
@@ -36,7 +36,7 @@ textarea {
 
 @layer components {
   .app-content {
-    @apply min-h-[calc(100vh-4rem)];
+    @apply min-h-[calc(100vh-3rem)];
     background:
       radial-gradient(circle at top left, rgba(22, 119, 255, 0.10), transparent 34rem),
       linear-gradient(180deg, #f7faff 0%, #f5f7fb 42%, #f8fafc 100%);
@@ -60,10 +60,10 @@ textarea {
   }
 
   .ant-menu-dark .ant-menu-item {
-    @apply my-0.5 rounded-md text-slate-300;
-    height: 34px !important;
-    line-height: 34px !important;
-    padding-left: 14px !important;
+    @apply my-0 rounded-md text-slate-300;
+    height: 30px !important;
+    line-height: 30px !important;
+    padding-left: 12px !important;
     font-size: 12px !important;
   }
 
@@ -82,7 +82,7 @@ textarea {
   }
 
   .ant-card .ant-card-body {
-    @apply p-4;
+    @apply p-3;
   }
 
   .app-content form.rounded-lg,
@@ -134,11 +134,11 @@ textarea {
   }
 
   .empty-state {
-    @apply grid min-h-52 place-items-center rounded-lg border border-dashed border-line bg-white p-6 text-sm text-steel;
+    @apply grid min-h-40 place-items-center rounded-lg border border-dashed border-line bg-white p-4 text-xs text-steel;
   }
 
   .nav-button {
-    @apply flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-sm font-medium text-steel transition hover:bg-slate-100 hover:text-ink;
+    @apply flex w-full items-center gap-2 rounded-md px-2.5 py-1.5 text-xs font-medium text-steel transition hover:bg-slate-100 hover:text-ink;
   }
 
   .nav-button.active {
@@ -154,7 +154,7 @@ textarea {
   }
 
   .tab {
-    @apply rounded-md border border-line bg-white px-4 py-2 text-sm text-steel;
+    @apply rounded-md border border-line bg-white px-3 py-1.5 text-xs text-steel;
   }
 
   .tab.active {
@@ -162,13 +162,13 @@ textarea {
   }
 
   .input {
-    @apply w-full rounded-md border border-line bg-white px-2.5 py-1.5 text-sm outline-none transition placeholder:text-slate-400 hover:border-mint focus:border-mint focus:ring-2 focus:ring-mint/15;
-    min-height: 32px;
+    @apply w-full rounded-md border border-line bg-white px-2 py-1 text-xs outline-none transition placeholder:text-slate-400 hover:border-mint focus:border-mint focus:ring-2 focus:ring-mint/15;
+    min-height: 28px;
   }
 
   .select {
-    @apply rounded-md border border-line bg-white px-2.5 py-1.5 text-sm outline-none transition hover:border-mint focus:border-mint focus:ring-2 focus:ring-mint/15;
-    min-height: 32px;
+    @apply rounded-md border border-line bg-white px-2 py-1 text-xs outline-none transition hover:border-mint focus:border-mint focus:ring-2 focus:ring-mint/15;
+    min-height: 28px;
   }
 
   .field-label {
@@ -185,7 +185,7 @@ textarea {
   .toolbar h2,
   .design-card h2,
   .upload-head h2 {
-    @apply text-base font-semibold text-ink;
+    @apply text-sm font-semibold text-ink;
   }
 
   .app-content form > h2::after,
@@ -194,25 +194,25 @@ textarea {
     content: "";
     display: block;
     width: 28px;
-    height: 3px;
-    margin-top: 8px;
+    height: 2px;
+    margin-top: 5px;
     border-radius: 999px;
     background: #1677ff;
   }
 
   .primary-button {
-    @apply inline-flex items-center justify-center gap-2 rounded-md bg-mint px-2.5 py-1.5 text-sm font-semibold text-white shadow-sm transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-50;
+    @apply inline-flex items-center justify-center gap-1.5 rounded-md bg-mint px-2 py-1 text-xs font-semibold text-white shadow-sm transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-50;
     box-shadow: 0 6px 14px rgba(22, 119, 255, 0.24);
-    min-height: 32px;
+    min-height: 28px;
   }
 
   .secondary-button {
-    @apply inline-flex items-center justify-center gap-2 rounded-md border border-line bg-white px-2.5 py-1.5 text-sm font-semibold text-ink shadow-sm transition hover:border-mint hover:text-mint;
-    min-height: 32px;
+    @apply inline-flex items-center justify-center gap-1.5 rounded-md border border-line bg-white px-2 py-1 text-xs font-semibold text-ink shadow-sm transition hover:border-mint hover:text-mint;
+    min-height: 28px;
   }
 
   .icon-button {
-    @apply grid h-7 w-7 place-items-center rounded-md border border-line bg-white text-steel shadow-sm transition hover:border-slate-300 hover:bg-slate-50 hover:text-ink;
+    @apply grid h-6 w-6 place-items-center rounded-md border border-line bg-white text-steel shadow-sm transition hover:border-slate-300 hover:bg-slate-50 hover:text-ink;
   }
 
   .modal-backdrop {
@@ -275,12 +275,12 @@ textarea {
   }
 
   .toolbar {
-    @apply flex flex-col gap-2 rounded-lg border border-line bg-white p-2.5 shadow-panel sm:flex-row sm:items-center sm:justify-between;
+    @apply flex flex-col gap-2 rounded-lg border border-line bg-white p-2 shadow-panel sm:flex-row sm:items-center sm:justify-between;
     box-shadow: 0 10px 30px rgba(15, 23, 42, 0.07);
   }
 
   .row-card {
-    @apply flex items-center justify-between gap-3 rounded-lg border border-line bg-white p-2.5 shadow-panel transition hover:border-mint hover:shadow-md;
+    @apply flex items-center justify-between gap-2 rounded-lg border border-line bg-white p-2 shadow-panel transition hover:border-mint hover:shadow-md;
     box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
   }
 
@@ -307,7 +307,7 @@ textarea {
   }
 
   .badge {
-    @apply rounded-md bg-blue-50 px-1.5 py-0.5 text-xs font-semibold text-blue-700;
+    @apply rounded bg-blue-50 px-1.5 py-0.5 text-[11px] font-semibold text-blue-700;
   }
 
   .badge.muted {
@@ -323,7 +323,7 @@ textarea {
   }
 
   .chip {
-    @apply rounded-md border border-blue-100 bg-blue-50/60 px-1.5 py-0.5 text-xs text-blue-700;
+    @apply rounded border border-blue-100 bg-blue-50/60 px-1.5 py-0.5 text-[11px] text-blue-700;
   }
 
   .chip.muted {
@@ -331,7 +331,7 @@ textarea {
   }
 
   .data-panel {
-    @apply rounded-lg border border-line bg-white p-2.5 shadow-panel;
+    @apply rounded-lg border border-line bg-white p-2 shadow-panel;
     box-shadow: 0 10px 30px rgba(15, 23, 42, 0.06);
   }
 
@@ -348,13 +348,13 @@ textarea {
   }
 
   .data-list {
-    @apply mt-3 grid gap-2 overflow-auto pr-1;
-    max-height: min(58vh, 560px);
+    @apply mt-2 grid gap-1.5 overflow-auto pr-1;
+    max-height: min(64vh, 640px);
   }
 
   .data-row {
-    @apply flex items-center justify-between gap-2.5 rounded-md border border-line bg-white px-2.5 py-2 text-left transition hover:border-mint hover:bg-blue-50/20;
-    min-height: 54px;
+    @apply flex items-center justify-between gap-2 rounded-md border border-line bg-white px-2 py-1.5 text-left text-xs transition hover:border-mint hover:bg-blue-50/20;
+    min-height: 42px;
   }
 
   .data-row.active {
@@ -366,7 +366,7 @@ textarea {
   }
 
   .data-row-title h3 {
-    @apply min-w-0 truncate text-sm font-semibold text-ink;
+    @apply min-w-0 truncate text-xs font-semibold text-ink;
   }
 
   .data-row-meta {
@@ -382,7 +382,7 @@ textarea {
   }
 
   .skill-chip {
-    @apply inline-flex max-w-full items-center gap-1.5 rounded-md border border-blue-100 bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700;
+    @apply inline-flex max-w-full items-center gap-1 rounded-md border border-blue-100 bg-blue-50 px-2 py-0.5 text-[11px] font-medium text-blue-700;
   }
 
   .skill-chip span {
@@ -394,7 +394,7 @@ textarea {
   }
 
   .score-ring {
-    @apply grid h-14 w-14 shrink-0 place-items-center rounded-full border-4 border-mint bg-blue-50 text-lg font-bold text-mint;
+    @apply grid h-11 w-11 shrink-0 place-items-center rounded-full border-[3px] border-mint bg-blue-50 text-sm font-bold text-mint;
   }
 
   .resume-page {
@@ -735,25 +735,25 @@ textarea {
   }
 
   .pipeline-board {
-    @apply grid grid-flow-col gap-2.5 overflow-x-auto pb-2;
-    grid-auto-columns: minmax(230px, 250px);
+    @apply grid grid-flow-col gap-2 overflow-x-auto pb-2;
+    grid-auto-columns: minmax(190px, 220px);
     align-items: start;
     overscroll-behavior-x: contain;
   }
 
   .pipeline-column {
-    @apply rounded-lg border border-line bg-white p-2 shadow-panel;
+    @apply rounded-lg border border-line bg-white p-1.5 shadow-panel;
     min-width: 0;
     min-height: 16rem;
   }
 
   .pipeline-column-list {
-    @apply space-y-2 overflow-y-auto pr-1;
-    max-height: min(52vh, 460px);
+    @apply space-y-1.5 overflow-y-auto pr-1;
+    max-height: min(62vh, 620px);
   }
 
   .pipeline-card {
-    @apply rounded-md border border-line bg-white p-2 text-sm transition hover:border-mint hover:bg-blue-50/20;
+    @apply rounded-md border border-line bg-white p-1.5 text-xs transition hover:border-mint hover:bg-blue-50/20;
   }
 
   .pipeline-source-summary {
@@ -770,16 +770,16 @@ textarea {
   }
 
   .pipeline-card-actions {
-    @apply mt-2 grid grid-cols-3 gap-1.5;
+    @apply mt-1.5 grid grid-cols-3 gap-1;
   }
 
   .pipeline-card-actions .secondary-button {
-    @apply px-2 py-1.5 text-xs;
-    min-height: 32px;
+    @apply px-1.5 py-1 text-[11px];
+    min-height: 26px;
   }
 
   .pipeline-note-input {
-    min-height: 34px;
+    min-height: 28px;
   }
 
   .pipeline-column .chip {
@@ -789,25 +789,25 @@ textarea {
 
   @media (max-width: 640px) {
     .pipeline-board {
-      grid-auto-columns: minmax(230px, 82vw);
+      grid-auto-columns: minmax(210px, 82vw);
     }
   }
 
   .design-page {
-    @apply mx-auto max-w-[1280px] space-y-6;
+    @apply mx-auto max-w-[1360px] space-y-4;
   }
 
   .design-title h1 {
-    @apply text-3xl font-bold text-ink;
+    @apply text-xl font-bold text-ink;
     letter-spacing: 0;
   }
 
   .design-title p {
-    @apply mt-2 text-sm text-steel;
+    @apply mt-1 text-xs text-steel;
   }
 
   .design-card {
-    @apply rounded-lg border border-line bg-white p-4 shadow-panel;
+    @apply rounded-lg border border-line bg-white p-3 shadow-panel;
   }
 
   .boss-status-bar {

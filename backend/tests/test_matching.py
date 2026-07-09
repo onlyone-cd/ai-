@@ -54,6 +54,16 @@ def test_finance_system_tags_require_accounting_context_even_for_exact_match():
 
     assert developer["hits"] == []
     assert accountant["hits"][0]["match_type"] == "exact"
+    assert accountant["hits"][0]["evidence"]
+
+
+def test_match_hits_include_resume_evidence_context():
+    tags = [{"tag": "SolidWorks", "score": 4, "category": "设计/工程"}]
+
+    result = match_candidate("SolidWorks 5", tags, candidate_context="机械工程项目：使用 SolidWorks 完成三维建模和工程图输出。")
+
+    assert result["hits"][0]["candidate_tag"] == "SolidWorks"
+    assert "SolidWorks" in result["hits"][0]["evidence"][0]
 
 
 def test_rule_based_tags_require_context_for_finance_system_tools():

@@ -1902,6 +1902,10 @@ def pipeline_board_payload(latest, scope="all", job_id=None):
 
 
 def pipeline_source_payload(item):
+    note = item.note or ""
+    if any(word in note for word in ["取消", "删除", "回退"]):
+        interview_note = any(word in note for word in ["面试", "一面", "二面", "终面"])
+        return {"source_type": "manual", "source_label": "面试回退" if interview_note else "流程回退"}
     if item.stage in {"interview_first", "interview_second", "interview_final"}:
         assignment = (
             InterviewAssignment.query.filter_by(candidate_id=item.candidate_id, job_id=item.job_id, round=item.stage)
@@ -1910,14 +1914,13 @@ def pipeline_source_payload(item):
             .first()
         )
         if assignment:
-            return {"source_type": "interview", "source_label": "面试安排"}
+            return {"source_type": "interview", "source_label": "面试安排", "source_status": assignment.status, "source_id": assignment.id}
     if item.stage in {"offer", "onboarded"}:
         offer = OfferRecord.query.filter_by(candidate_id=item.candidate_id, job_id=item.job_id).order_by(OfferRecord.created_at.desc()).first()
         if offer:
-            return {"source_type": "offer", "source_label": "Offer"}
-    note = item.note or ""
+            return {"source_type": "offer", "source_label": "Offer", "source_status": offer.status, "source_id": offer.id}
     if "已安排" in note or "面试" in note or "轮次" in note:
-        return {"source_type": "interview", "source_label": "面试同步"}
+        return {"source_type": "interview", "source_label": "面试历史"}
     if "Offer" in note:
         return {"source_type": "offer", "source_label": "Offer"}
     if "入职" in note:

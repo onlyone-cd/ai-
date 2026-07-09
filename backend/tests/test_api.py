@@ -1481,6 +1481,7 @@ def test_interview_round_update_cancel_and_delete_sync_pipeline(client, admin_he
     board = client.get("/api/pipeline/board?job_id=1", headers=admin_headers).get_json()["data"]
     latest = [item for rows in board["columns"].values() for item in rows if item["candidate_id"] == 1 and item["job_id"] == 1][0]
     assert latest["stage"] == "interview_second"
+    assert latest["source_label"] == "面试回退"
 
     another = client.post(
         "/api/interview/assignments",

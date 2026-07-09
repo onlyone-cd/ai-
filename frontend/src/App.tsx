@@ -105,30 +105,30 @@ function App() {
   if (!user) return <Login onLogin={setUser} />;
 
   const navItems = [
-    { key: "candidates", icon: <Users size={17} />, label: "人才库" },
-    { key: "organization", icon: <Building2 size={17} />, label: "组织与内部人才" },
-    { key: "jobs", icon: <BriefcaseBusiness size={17} />, label: "岗位匹配" },
-    { key: "pipeline", icon: <ChevronRight size={17} />, label: "流程看板" },
-    { key: "interviews", icon: <CalendarDays size={17} />, label: "面试管理" },
-    { key: "offers", icon: <HandCoins size={17} />, label: "Offer 管理" },
-    { key: "boss", icon: <MessageSquareText size={17} />, label: "BOSS 闭环" },
-    { key: "bi", icon: <BarChart3 size={17} />, label: "BI 看板" },
-    { key: "agent", icon: <Bot size={17} />, label: "AI 助手" },
-    ...(user.role !== "interviewer" ? [{ key: "tasks", icon: <Database size={17} />, label: "后台任务" }] : []),
-    ...(user.role === "admin" ? [{ key: "audit", icon: <Clock3 size={17} />, label: "操作日志" }] : []),
-    ...(user.role === "admin" ? [{ key: "users", icon: <UserCog size={17} />, label: "用户管理" }] : [])
+    { key: "candidates", icon: <Users size={15} />, label: "人才库" },
+    { key: "organization", icon: <Building2 size={15} />, label: "组织人才" },
+    { key: "jobs", icon: <BriefcaseBusiness size={15} />, label: "岗位匹配" },
+    { key: "pipeline", icon: <ChevronRight size={15} />, label: "流程看板" },
+    { key: "interviews", icon: <CalendarDays size={15} />, label: "面试管理" },
+    { key: "offers", icon: <HandCoins size={15} />, label: "Offer" },
+    { key: "boss", icon: <MessageSquareText size={15} />, label: "BOSS" },
+    { key: "bi", icon: <BarChart3 size={15} />, label: "BI" },
+    { key: "agent", icon: <Bot size={15} />, label: "AI 助手" },
+    ...(user.role !== "interviewer" ? [{ key: "tasks", icon: <Database size={15} />, label: "任务" }] : []),
+    ...(user.role === "admin" ? [{ key: "audit", icon: <Clock3 size={15} />, label: "日志" }] : []),
+    ...(user.role === "admin" ? [{ key: "users", icon: <UserCog size={15} />, label: "用户" }] : [])
   ];
 
   return (
     <AntLayout className="min-h-screen bg-slate-50 text-ink">
-        <AntLayout.Sider width={176} className="fixed inset-y-0 left-0 z-10 hidden border-r border-slate-800 bg-slate-950 lg:block">
-        <div className="flex h-12 items-center gap-2 border-b border-white/10 px-3">
-          <div className="grid h-8 w-8 place-items-center rounded-md bg-white text-mint">
-            <Sparkles size={17} />
+        <AntLayout.Sider width={148} className="fixed inset-y-0 left-0 z-10 hidden border-r border-slate-800 bg-slate-950 lg:block">
+        <div className="flex h-10 items-center gap-2 border-b border-white/10 px-2.5">
+          <div className="grid h-7 w-7 place-items-center rounded-md bg-white text-mint">
+            <Sparkles size={15} />
           </div>
           <div>
-            <div className="text-sm font-semibold text-white">HireInsight</div>
-            <div className="text-xs text-slate-400">AI 招聘系统</div>
+            <div className="text-xs font-semibold text-white">HireInsight</div>
+            <div className="text-[11px] text-slate-400">AI 招聘</div>
           </div>
         </div>
         <AntMenu
@@ -141,11 +141,11 @@ function App() {
         />
       </AntLayout.Sider>
 
-      <AntLayout className="min-h-screen bg-slate-50 lg:pl-[176px]">
-        <AntLayout.Header className="sticky top-0 z-10 flex h-12 items-center justify-between border-b border-line bg-white/90 px-3 leading-normal backdrop-blur lg:px-4">
+      <AntLayout className="min-h-screen bg-slate-50 lg:pl-[148px]">
+        <AntLayout.Header className="sticky top-0 z-10 flex h-10 items-center justify-between border-b border-line bg-white/90 px-3 leading-normal backdrop-blur">
           <div>
-            <h1 className="text-base font-semibold">{titleFor(view)}</h1>
-            <p className="text-xs text-steel">规则口径：标签证据、匹配公式、经验档位、BOSS 半自动</p>
+            <h1 className="text-sm font-semibold">{titleFor(view)}</h1>
+            <p className="text-[11px] text-steel">标签证据 · AI 复核 · 流程同步</p>
           </div>
           <div className="flex items-center gap-3">
             <div className="hidden items-center gap-2 rounded-md border border-line px-3 py-2 text-xs sm:flex">
@@ -992,11 +992,13 @@ function JobsPage() {
                             : "规则匹配"}
                         {match.reason.ai_review.summary ? `：${match.reason.ai_review.summary}` : ""}
                       </p>
-                      {(match.reason.ai_review.strengths?.length || match.reason.ai_review.risks?.length || match.reason.ai_review.interview_focus?.length) ? (
+                      {(match.reason.ai_review.strengths?.length || match.reason.ai_review.risks?.length || match.reason.ai_review.interview_focus?.length || match.reason.ai_review.evidence?.length || match.reason.ai_review.rule_corrections?.length) ? (
                         <div className="mt-2 grid gap-2 md:grid-cols-3">
                           <p><span className="font-medium text-ink">优势</span>：{match.reason.ai_review.strengths?.slice(0, 3).join("、") || "暂无"}</p>
                           <p><span className="font-medium text-ink">风险</span>：{match.reason.ai_review.risks?.slice(0, 3).join("、") || "暂无"}</p>
                           <p><span className="font-medium text-ink">面试重点</span>：{match.reason.ai_review.interview_focus?.slice(0, 3).join("、") || "暂无"}</p>
+                          {match.reason.ai_review.evidence?.length ? <p><span className="font-medium text-ink">AI 证据</span>：{match.reason.ai_review.evidence.slice(0, 3).join("、")}</p> : null}
+                          {match.reason.ai_review.rule_corrections?.length ? <p><span className="font-medium text-ink">规则纠偏</span>：{match.reason.ai_review.rule_corrections.slice(0, 3).join("、")}</p> : null}
                         </div>
                       ) : null}
                     </div>
@@ -1023,6 +1025,15 @@ function JobsPage() {
                           </span>
                         ))}
                       </div>
+                      {match.reason.hits.some((hit) => hit.evidence?.length) && (
+                        <div className="mt-1 grid gap-1">
+                          {match.reason.hits.slice(0, 3).map((hit) => hit.evidence?.[0] ? (
+                            <p className="truncate text-[11px] text-steel" key={`${hit.jd_tag}-${hit.candidate_tag}-evidence`}>
+                              {hit.candidate_tag} 证据：{hit.evidence[0]}
+                            </p>
+                          ) : null)}
+                        </div>
+                      )}
                     </div>
                     <div>
                       <p className="text-xs font-medium text-steel">缺失标签</p>
@@ -1122,7 +1133,7 @@ function PipelinePage() {
   const [notes, setNotes] = useState<Record<number, string>>({});
   const [message, setMessage] = useState("");
   const [query, setQuery] = useState("");
-  const [sourceFilter, setSourceFilter] = useState("interview");
+  const [sourceFilter, setSourceFilter] = useState("all");
 
   useEffect(() => {
     api.jobs().then((data) => {
@@ -1209,7 +1220,7 @@ function PipelinePage() {
       <div className="toolbar">
         <div>
           <h2 className="font-semibold">流程看板</h2>
-          <p className="text-xs text-steel">{selectedJob ? `当前筛选岗位：${selectedJob.title}` : "默认显示全部招聘岗位"} · 默认只看面试安排 {visibleTotal} 人，完整流程 {totals} 人</p>
+          <p className="text-xs text-steel">{selectedJob ? `当前筛选岗位：${selectedJob.title}` : "默认显示全部招聘岗位"} · 当前显示 {visibleTotal} 人，完整流程 {totals} 人</p>
         </div>
         <select className="select" value={jobId ?? ""} onChange={(event) => setJobId(event.target.value ? Number(event.target.value) : null)}>
           <option value="">全部岗位</option>
@@ -1257,11 +1268,12 @@ function PipelinePage() {
                   <div className="pipeline-card" key={item.id}>
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0">
-                        <div className="truncate text-sm font-semibold">{item.candidate.name_masked}</div>
+                        <div className="truncate text-xs font-semibold">{item.candidate.name_masked}</div>
                         <div className="mt-0.5 truncate text-xs text-steel">{item.candidate.title} · {item.candidate.experience_analysis?.label || "经验未识别"}</div>
                         <div className="mt-0.5 truncate text-xs text-steel">{item.job?.title || `岗位 ${item.job_id}`}</div>
                         <div className="mt-1.5 flex flex-wrap gap-1">
                           <span className={`badge ${item.source_type === "interview" ? "" : "muted"}`}>{item.source_label || "手动流程"}</span>
+                          {item.source_status && <span className="badge muted">{item.source_status}</span>}
                           {item.updated_by && <span className="badge muted">{item.updated_by}</span>}
                         </div>
                       </div>

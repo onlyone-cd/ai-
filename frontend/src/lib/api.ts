@@ -148,6 +148,7 @@ export type MatchResult = {
       candidate_tag: string;
       candidate_score: number;
       match_type: "exact" | "related";
+      evidence?: string[];
     }[];
     missing_tags: string[];
     match_rate: number;
@@ -165,6 +166,7 @@ export type MatchResult = {
       risks?: string[];
       interview_focus?: string[];
       evidence?: string[];
+      rule_corrections?: string[];
       error?: string;
     };
   };
@@ -872,6 +874,8 @@ export type PipelineItem = {
   stage: string;
   source_type?: "interview" | "offer" | "onboarding" | "manual" | string;
   source_label?: string;
+  source_status?: string;
+  source_id?: number;
   note: string;
   updated_by?: string;
   ts?: string;

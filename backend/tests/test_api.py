@@ -13,7 +13,7 @@ from app import create_app, db
 from app.config import Config
 from app.auth import verify_password
 from app.llm_client import chat_json
-from app.models import AgentConversation, AgentMessage, AuditLog, BackgroundTask, BossDraft, BossSyncJob, Candidate, CandidateTag, EmployeeProfile, InterviewAssignment, InterviewFeedback, InterviewSpeechLog, Job, LLMUsage, Match, NotificationLog, OfferRecord, OrganizationUnit, PipelineStage, ResumeAttachment, User
+from app.models import AgentConversation, AgentMessage, AuditLog, BackgroundTask, BossDraft, BossSyncJob, Candidate, CandidateTag, EmployeeCompensation, EmployeeProfile, EmployeeRecommendation, InterviewAssignment, InterviewFeedback, InterviewSpeechLog, Job, LLMUsage, Match, NotificationLog, OfferRecord, OrganizationUnit, PipelineStage, ResumeAttachment, User
 from app.task_service import run_next_task
 
 
@@ -1263,6 +1263,70 @@ def test_batch_pipeline_adds_candidates_and_skips_duplicates(client, admin_heade
     assert duplicate.status_code == 200
     assert duplicate.get_json()["data"]["created"] == []
     assert duplicate.get_json()["data"]["skipped"] == [{"candidate_id": 2, "stage": "pending"}]
+
+
+def test_delete_employee_clears_recommendations_and_compensation(client, admin_headers):
+    employee = EmployeeProfile(owner_hr_id=1, employee_no="DEL-EMP", name="删除员工测试", current_title="Java", raw_text="Java")
+    db.session.add(employee)
+    db.session.flush()
+    db.session.add(EmployeeCompensation(employee_id=employee.id, salary_monthly_k=20, salary_months=13))
+    db.session.add(EmployeeRecommendation(employee_id=employee.id, recommendation_type="transfer", score=80, reason_json={}))
+    db.session.commit()
+
+    response = client.delete(f"/api/employees/{employee.id}", headers=admin_headers)
+
+    assert response.status_code == 200
+    assert db.session.get(EmployeeProfile, employee.id) is None
+    assert EmployeeRecommendation.query.filter_by(employee_id=employee.id).count() == 0
+    assert EmployeeCompensation.query.filter_by(employee_id=employee.id).count() == 0
+
+
+def test_delete_interview_clears_speech_logs(client, admin_headers):
+    assignment = InterviewAssignment(
+        candidate_id=1,
+        job_id=1,
+        interviewer_id=2,
+        round="interview_first",
+        scheduled_at=datetime.now(timezone.utc) + timedelta(days=1),
+        location="站内",
+        status="scheduled",
+        created_by=1,
+    )
+    db.session.add(assignment)
+    db.session.flush()
+    db.session.add(InterviewSpeechLog(assignment_id=assignment.id, operation="asr", provider="e2e", status="succeeded", transcript="测试"))
+    db.session.commit()
+
+    response = client.delete(f"/api/interview/assignments/{assignment.id}", headers=admin_headers)
+
+    assert response.status_code == 200
+    assert db.session.get(InterviewAssignment, assignment.id) is None
+    assert InterviewSpeechLog.query.filter_by(assignment_id=assignment.id).count() == 0
+
+
+def test_delete_candidate_and_job_clear_new_references(client, admin_headers):
+    target_candidate = Candidate(owner_hr_id=1, upload_batch_id="delete-candidate-ref", name_masked="删除候选人引用", title="Java", raw_text="Java", resume_json={}, source="upload")
+    employee = EmployeeProfile(owner_hr_id=1, employee_no="DEL-REC", name="推荐来源员工", current_title="Java", raw_text="Java")
+    job = Job(owner_hr_id=1, title="删除岗位引用", city="长沙", department="研发", job_code="DEL-JOB", jd_text="Java", jd_structured={}, status="active")
+    db.session.add_all([target_candidate, employee, job])
+    db.session.flush()
+    db.session.add(EmployeeRecommendation(employee_id=employee.id, recommendation_type="replacement", candidate_id=target_candidate.id, score=88, reason_json={}))
+    assignment = InterviewAssignment(candidate_id=1, job_id=job.id, interviewer_id=2, round="interview_first", scheduled_at=datetime.now(timezone.utc) + timedelta(days=1), status="scheduled", created_by=1)
+    db.session.add(assignment)
+    db.session.flush()
+    assignment_id = assignment.id
+    db.session.add(InterviewSpeechLog(assignment_id=assignment.id, operation="tts", provider="e2e", status="succeeded", text="测试"))
+    db.session.commit()
+
+    candidate_response = client.delete(f"/api/candidates/{target_candidate.id}", headers=admin_headers)
+    job_response = client.delete(f"/api/jobs/{job.id}", headers=admin_headers)
+
+    assert candidate_response.status_code == 200
+    assert job_response.status_code == 200
+    assert db.session.get(Candidate, target_candidate.id) is None
+    assert db.session.get(Job, job.id) is None
+    assert EmployeeRecommendation.query.filter_by(candidate_id=target_candidate.id).count() == 0
+    assert InterviewSpeechLog.query.filter_by(assignment_id=assignment_id).count() == 0
 
 
 def test_pipeline_history_returns_append_only_events(client, admin_headers):

@@ -1165,6 +1165,9 @@ def delete_employee(user, employee_id):
     employee = db.session.get(EmployeeProfile, employee_id)
     if not employee:
         return error("员工不存在", "NOT_FOUND", 404)
+    EmployeeRecommendation.query.filter_by(employee_id=employee_id).delete()
+    EmployeeAnalysis.query.filter_by(employee_id=employee_id).delete()
+    EmployeeCompensation.query.filter_by(employee_id=employee_id).delete()
     audit_log(user, "delete", "employee", employee.id, employee.name, {"candidate_id": employee.candidate_id})
     db.session.delete(employee)
     db.session.commit()
@@ -1504,12 +1507,14 @@ def delete_candidate(user, candidate_id):
     candidate = db.session.get(Candidate, candidate_id)
     if not candidate:
         return error("候选人不存在", "NOT_FOUND", 404)
+    EmployeeRecommendation.query.filter_by(candidate_id=candidate_id).delete()
     Match.query.filter_by(candidate_id=candidate_id).delete()
     PipelineStage.query.filter_by(candidate_id=candidate_id).delete()
     BossDraft.query.filter_by(candidate_id=candidate_id).delete()
     OfferRecord.query.filter_by(candidate_id=candidate_id).delete()
     assignment_ids = [item.id for item in InterviewAssignment.query.filter_by(candidate_id=candidate_id).all()]
     if assignment_ids:
+        InterviewSpeechLog.query.filter(InterviewSpeechLog.assignment_id.in_(assignment_ids)).delete(synchronize_session=False)
         InterviewFeedback.query.filter(InterviewFeedback.assignment_id.in_(assignment_ids)).delete(synchronize_session=False)
         InterviewAssignment.query.filter(InterviewAssignment.id.in_(assignment_ids)).delete(synchronize_session=False)
     audit_log(user, "delete", "candidate", candidate.id, candidate.name_masked)
@@ -1519,12 +1524,15 @@ def delete_candidate(user, candidate_id):
 
 
 def delete_job_relations(job_id):
+    EmployeeRecommendation.query.filter_by(target_job_id=job_id).delete()
+    EmployeeAnalysis.query.filter_by(job_id=job_id).delete()
     Match.query.filter_by(job_id=job_id).delete()
     PipelineStage.query.filter_by(job_id=job_id).delete()
     BossDraft.query.filter_by(job_id=job_id).delete()
     OfferRecord.query.filter_by(job_id=job_id).delete()
     assignment_ids = [item.id for item in InterviewAssignment.query.filter_by(job_id=job_id).all()]
     if assignment_ids:
+        InterviewSpeechLog.query.filter(InterviewSpeechLog.assignment_id.in_(assignment_ids)).delete(synchronize_session=False)
         InterviewFeedback.query.filter(InterviewFeedback.assignment_id.in_(assignment_ids)).delete(synchronize_session=False)
         InterviewAssignment.query.filter(InterviewAssignment.id.in_(assignment_ids)).delete(synchronize_session=False)
 
@@ -2326,6 +2334,7 @@ def delete_interview_assignment(user, assignment_id):
     assignment = db.session.get(InterviewAssignment, assignment_id)
     if not assignment:
         return error("面试安排不存在", "NOT_FOUND", 404)
+    InterviewSpeechLog.query.filter_by(assignment_id=assignment.id).delete()
     InterviewFeedback.query.filter_by(assignment_id=assignment.id).delete()
     if assignment.status == "scheduled":
         push_interview_pipeline(assignment, user.id, previous_interview_stage(assignment.round), f"{stageLabels_backend(assignment.round)}安排已删除，回退流程")

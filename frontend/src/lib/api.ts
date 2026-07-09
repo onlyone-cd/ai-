@@ -779,7 +779,10 @@ export const api = {
   matchJob: (jobId: number) => request<{ job: Job; items: MatchResult[] }>(`/jobs/${jobId}/match`, { method: "POST" }),
   batchPipeline: (jobId: number, payload: { candidate_ids?: number[]; candidate_id?: number; stage?: string; note?: string }) =>
     request<{ created: PipelineItem[]; skipped: { candidate_id: number; stage: string }[]; missing: number[] }>(`/jobs/${jobId}/batch-pipeline`, { method: "POST", body: JSON.stringify(payload) }),
-  pipeline: (jobId: number) => request<{ stages: string[]; columns: Record<string, PipelineItem[]> }>(`/pipeline/${jobId}/board`),
+  pipeline: (jobId?: number | null) =>
+    request<{ scope?: string; job_id?: number | null; total?: number; stages: string[]; stage_counts?: Record<string, number>; job_counts?: Record<string, number>; columns: Record<string, PipelineItem[]> }>(
+      jobId ? `/pipeline/${jobId}/board` : "/pipeline/board"
+    ),
   pipelineHistory: (jobId: number, candidateId: number) => request<{ items: PipelineItem[] }>(`/pipeline/${jobId}/history/${candidateId}`),
   movePipeline: (payload: { candidate_id: number; job_id: number; stage: string; note?: string }) =>
     request<PipelineItem>("/pipeline/move", { method: "POST", body: JSON.stringify(payload) }),
@@ -865,6 +868,7 @@ export type PipelineItem = {
   candidate_id: number;
   candidate: Candidate;
   job_id: number;
+  job?: Job;
   stage: string;
   note: string;
   updated_by?: string;

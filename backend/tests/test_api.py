@@ -1282,6 +1282,31 @@ def test_pipeline_history_returns_append_only_events(client, admin_headers):
     assert overview.get_json()["data"]["total"] >= 1
 
 
+def test_global_pipeline_board_can_show_all_jobs_and_filter_by_job(client, admin_headers):
+    job = Job(owner_hr_id=1, title="全局看板测试岗位", city="长沙", department="研发部", job_code="PIPELINE-GLOBAL", jd_text="测试 JD", jd_structured={}, status="active")
+    candidate = Candidate(owner_hr_id=1, upload_batch_id="pipeline-global", name_masked="全局看板候选人", title="Java", raw_text="Java 候选人", resume_json={}, source="upload")
+    db.session.add_all([job, candidate])
+    db.session.flush()
+    db.session.add(PipelineStage(candidate_id=candidate.id, job_id=job.id, stage="interview_first", updated_by=1, note="全局看板测试"))
+    db.session.commit()
+
+    global_response = client.get("/api/pipeline/board", headers=admin_headers)
+
+    assert global_response.status_code == 200
+    global_data = global_response.get_json()["data"]
+    assert global_data["scope"] == "all"
+    assert global_data["total"] >= 1
+    assert any(item["job"]["title"] == "全局看板测试岗位" for item in global_data["columns"]["interview_first"])
+
+    filtered_response = client.get(f"/api/pipeline/board?job_id={job.id}", headers=admin_headers)
+
+    assert filtered_response.status_code == 200
+    filtered_data = filtered_response.get_json()["data"]
+    assert filtered_data["scope"] == "job"
+    assert filtered_data["job_id"] == job.id
+    assert filtered_data["columns"]["interview_first"][0]["candidate"]["name_masked"] == "全局看板候选人"
+
+
 def test_pipeline_move_skips_duplicate_latest_stage(client, admin_headers):
     first = client.post(
         "/api/pipeline/move",

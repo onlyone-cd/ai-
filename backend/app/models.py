@@ -519,6 +519,7 @@ class PipelineStage(db.Model):
             "candidate_id": self.candidate_id,
             "candidate": self.candidate.to_dict(),
             "job_id": self.job_id,
+            "job": self.job.to_dict() if self.job else None,
             "stage": self.stage,
             "updated_by": self.user.name if self.user else "",
             "note": self.note,

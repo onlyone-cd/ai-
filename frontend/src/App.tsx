@@ -1100,29 +1100,27 @@ function RequirementList({ title, items }: { title: string; items: string[] }) {
 function PipelinePage() {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [jobId, setJobId] = useState<number | null>(null);
-  const [board, setBoard] = useState<{ stages: string[]; columns: Record<string, PipelineItem[]> } | null>(null);
+  const [board, setBoard] = useState<{ scope?: string; job_id?: number | null; total?: number; stages: string[]; stage_counts?: Record<string, number>; job_counts?: Record<string, number>; columns: Record<string, PipelineItem[]> } | null>(null);
   const [historyTarget, setHistoryTarget] = useState<PipelineItem | null>(null);
   const [history, setHistory] = useState<PipelineItem[]>([]);
   const [notes, setNotes] = useState<Record<number, string>>({});
   const [message, setMessage] = useState("");
+  const [query, setQuery] = useState("");
 
   useEffect(() => {
     api.jobs().then((data) => {
       setJobs(data.items);
-      setJobId(data.items[0]?.id ?? null);
+      setJobId(null);
     });
   }, []);
 
   useEffect(() => {
-    if (jobId) {
-      api.pipeline(jobId).then(setBoard);
-      setHistoryTarget(null);
-      setHistory([]);
-    }
+    api.pipeline(jobId).then(setBoard);
+    setHistoryTarget(null);
+    setHistory([]);
   }, [jobId]);
 
   async function loadBoard(silent = false) {
-    if (!jobId) return;
     setBoard(await api.pipeline(jobId));
     if (!silent) notify("success", "流程看板已刷新");
   }
@@ -1151,21 +1149,48 @@ function PipelinePage() {
     return [...forward, "rejected"].filter((value, idx, array) => value !== stage && array.indexOf(value) === idx);
   }
 
-  const totals = board?.stages.reduce((sum, stage) => sum + (board.columns[stage]?.length || 0), 0) || 0;
+  function visibleItems(stage: string) {
+    const keyword = query.trim().toLowerCase();
+    return (board?.columns[stage] || []).filter((item) => {
+      if (!keyword) return true;
+      return [
+        item.candidate.name_masked,
+        item.candidate.title,
+        item.job?.title,
+        item.job?.department,
+        item.job?.city,
+        stageLabels[item.stage] || item.stage,
+        item.note,
+        item.updated_by
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase()
+        .includes(keyword);
+    });
+  }
+
+  const totals = board?.total ?? (board?.stages.reduce((sum, stage) => sum + (board.columns[stage]?.length || 0), 0) || 0);
+  const visibleTotal = board?.stages.reduce((sum, stage) => sum + visibleItems(stage).length, 0) || 0;
   const selectedJob = jobs.find((job) => job.id === jobId);
 
   return (
     <section className="space-y-5">
       <div className="toolbar">
         <div>
-          <h2 className="font-semibold">{selectedJob?.title || "流程看板"}</h2>
-          <p className="text-xs text-steel">当前流程候选人 {totals} 人，阶段变更会保留历史记录</p>
+          <h2 className="font-semibold">流程看板</h2>
+          <p className="text-xs text-steel">{selectedJob ? `当前筛选岗位：${selectedJob.title}` : "默认显示全部岗位"} · 流程候选人 {totals} 人，当前筛选 {visibleTotal} 人</p>
         </div>
-        <select className="select" value={jobId ?? ""} onChange={(event) => setJobId(Number(event.target.value))}>
+        <select className="select" value={jobId ?? ""} onChange={(event) => setJobId(event.target.value ? Number(event.target.value) : null)}>
+          <option value="">全部岗位</option>
           {jobs.map((job) => <option value={job.id} key={job.id}>{job.title}</option>)}
         </select>
         <div className="flex flex-wrap gap-2">
-          <button className="secondary-button" onClick={() => loadBoard()} disabled={!jobId}>
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-3 top-2.5 text-steel" size={17} />
+            <input className="input w-56 pl-9" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索候选人、岗位、备注" />
+          </div>
+          <button className="secondary-button" onClick={() => loadBoard()}>
             <RefreshCw size={17} />
             刷新
           </button>
@@ -1177,20 +1202,21 @@ function PipelinePage() {
       </div>
       {message && <div className="rounded-md bg-blue-50 px-3 py-2 text-sm text-blue-700">{message}</div>}
       <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_360px]">
-        <div className="grid gap-3 overflow-x-auto pb-2 xl:grid-cols-4">
+        <div className="pipeline-board">
           {board?.stages.map((stage) => (
-            <div key={stage} className="min-h-72 rounded-lg border border-line bg-white p-3 shadow-panel">
+            <div key={stage} className="pipeline-column">
               <div className="mb-3 flex items-center justify-between">
                 <h3 className="text-sm font-semibold">{stageLabels[stage]}</h3>
-                <span className="badge muted">{board.columns[stage]?.length || 0}</span>
+                <span className="badge muted">{visibleItems(stage).length}</span>
               </div>
               <div className="space-y-3">
-                {(board.columns[stage] || []).map((item) => (
+                {visibleItems(stage).map((item) => (
                   <div className="rounded-md border border-line p-3" key={item.id}>
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0">
                         <div className="font-medium">{item.candidate.name_masked}</div>
                         <div className="text-xs text-steel">{item.candidate.title} · {item.candidate.experience_analysis?.label || "经验未识别"}</div>
+                        <div className="mt-1 text-xs text-steel">{item.job?.title || `岗位 ${item.job_id}`}</div>
                       </div>
                       <button className="icon-button h-8 w-8" title="流程历史" onClick={() => showHistory(item)}>
                         <Clock3 size={15} />
@@ -1212,6 +1238,7 @@ function PipelinePage() {
                     </div>
                   </div>
                 ))}
+                {visibleItems(stage).length === 0 && <div className="rounded-md border border-dashed border-line bg-slate-50 px-3 py-6 text-center text-xs text-steel">暂无候选人</div>}
               </div>
             </div>
           ))}
@@ -1236,7 +1263,7 @@ function PipelineHistoryPanel({ target, history, onClose }: { target: PipelineIt
       <div className="flex items-start justify-between gap-3">
         <div>
           <h3 className="font-semibold">{target.candidate.name_masked}</h3>
-          <p className="mt-1 text-xs text-steel">{target.candidate.title}</p>
+          <p className="mt-1 text-xs text-steel">{target.candidate.title} · {target.job?.title || `岗位 ${target.job_id}`}</p>
         </div>
         <button className="secondary-button" onClick={onClose}>关闭</button>
       </div>

@@ -732,6 +732,14 @@ textarea {
     @apply rounded-md border border-line bg-slate-50 px-2.5 py-1.5 font-medium transition hover:border-mint hover:text-ink;
   }
 
+  .pipeline-board {
+    @apply grid auto-cols-[minmax(280px,1fr)] grid-flow-col gap-3 overflow-x-auto pb-2 xl:auto-cols-fr;
+  }
+
+  .pipeline-column {
+    @apply min-h-72 rounded-lg border border-line bg-white p-3 shadow-panel;
+  }
+
   .design-page {
     @apply mx-auto max-w-[1280px] space-y-6;
   }

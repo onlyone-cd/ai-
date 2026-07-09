@@ -1858,10 +1858,33 @@ def batch_pipeline(user, job_id):
 @login_required
 def pipeline_board(user, job_id):
     latest = latest_pipeline_items(job_id)
+    return ok(pipeline_board_payload(latest, scope="job", job_id=job_id))
+
+
+@api.get("/pipeline/board")
+@login_required
+@roles_required("admin", "manager", "recruiter")
+def pipeline_global_board(user):
+    job_id = request.args.get("job_id", type=int)
+    latest = latest_pipeline_items(job_id if job_id else None)
+    return ok(pipeline_board_payload(latest, scope="job" if job_id else "all", job_id=job_id))
+
+
+def pipeline_board_payload(latest, scope="all", job_id=None):
     columns = {stage: [] for stage in STAGES}
     for item in latest:
         columns.setdefault(item.stage, []).append(item.to_dict())
-    return ok({"stages": STAGES, "columns": columns})
+    by_job = Counter(item.job.title if item.job else str(item.job_id) for item in latest)
+    by_stage = Counter(item.stage for item in latest)
+    return {
+        "scope": scope,
+        "job_id": job_id,
+        "total": len(latest),
+        "stages": STAGES,
+        "stage_counts": {stage: by_stage.get(stage, 0) for stage in STAGES},
+        "job_counts": dict(by_job),
+        "columns": columns,
+    }
 
 
 @api.get("/pipeline/<int:job_id>/history/<int:candidate_id>")

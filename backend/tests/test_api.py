@@ -1180,9 +1180,12 @@ def test_job_ai_generate_records_llm_context(client, admin_headers, app, monkeyp
     app.config["DEEPSEEK_API_KEY"] = "test-key"
     monkeypatch.setattr("urllib.request.urlopen", lambda request, timeout: FakeResponse())
 
-    response = client.post("/api/jobs/ai-generate?deepseek=1", headers=admin_headers, json={"title": "Java 后端工程师"})
+    response = client.post("/api/jobs/ai-generate", headers=admin_headers, json={"title": "Java 后端工程师"})
 
     assert response.status_code == 200
+    data = response.get_json()["data"]
+    assert data["source"] == "deepseek"
+    assert "Spring Boot" in data["skill_tags_raw"]
     usage = LLMUsage.query.order_by(LLMUsage.id.desc()).first()
     assert usage is not None
     assert usage.source == "job"

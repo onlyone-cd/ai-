@@ -3411,7 +3411,8 @@ def ai_job_payload(payload, generate=False):
         "skill_tags_raw": skill_tags_raw,
         "source": "local",
     }
-    if request.args.get("deepseek") == "1" and llm_available():
+    prefer_deepseek = request.args.get("deepseek", "1") != "0"
+    if prefer_deepseek and llm_available():
         try:
             data = chat_json(
                 [

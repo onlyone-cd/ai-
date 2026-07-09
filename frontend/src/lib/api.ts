@@ -723,9 +723,9 @@ export const api = {
   createJob: (payload: Partial<Job> & { skill_tags_raw: string }) =>
     request<Job>("/jobs", { method: "POST", body: JSON.stringify(payload) }),
   generateJobJd: (payload: Partial<Job> & { skill_tags_raw?: string }) =>
-    request<{ jd_text: string; skill_tags_raw: string; structured: Job["jd_structured"]; source: string }>("/jobs/ai-generate", { method: "POST", body: JSON.stringify(payload) }),
+    request<{ jd_text: string; skill_tags_raw: string; structured: Job["jd_structured"]; source: string }>("/jobs/ai-generate?deepseek=1", { method: "POST", body: JSON.stringify(payload) }),
   calibrateJobJd: (payload: Partial<Job> & { skill_tags_raw?: string }) =>
-    request<{ jd_text: string; skill_tags_raw: string; structured: Job["jd_structured"]; source: string }>("/jobs/ai-calibrate", { method: "POST", body: JSON.stringify(payload) }),
+    request<{ jd_text: string; skill_tags_raw: string; structured: Job["jd_structured"]; source: string }>("/jobs/ai-calibrate?deepseek=1", { method: "POST", body: JSON.stringify(payload) }),
   updateJob: (id: number, payload: Partial<Job> & { skill_tags_raw?: string }) =>
     request<Job>(`/jobs/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
   closeJob: (id: number) => request<Job>(`/jobs/${id}/close`, { method: "POST" }),

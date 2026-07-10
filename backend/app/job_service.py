@@ -4,6 +4,7 @@ from . import db
 from .llm_client import LLMError, chat_json, llm_available
 from .matching import match_candidate, parse_skill_tags
 from .models import Candidate, Match
+from .settings_service import get_matching_weights
 
 SKILL_KEYWORDS = [
     "总账会计",
@@ -116,6 +117,7 @@ def infer_requirement_lines(text, markers):
 def preview_matches(job, limit=None):
     results = []
     structured = ensure_jd_structured(job)
+    weights = get_matching_weights()
     for candidate in Candidate.query.all():
         reason = match_candidate(
             structured.get("skill_tags_raw"),
@@ -123,10 +125,11 @@ def preview_matches(job, limit=None):
             years_required=structured.get("years_required"),
             candidate_years=(candidate.resume_json or {}).get("experience_analysis", {}).get("years"),
             candidate_context=" ".join([candidate.title or "", candidate.raw_text or ""]),
+            weights=weights,
         )
         reason["rule_score"] = reason["score"]
         reason["final_score"] = reason["score"]
-        reason["score_formula"] = "preview=rule_score; persisted_match=rule_score*35%+ai_score*65% when AI review succeeds"
+        reason["score_formula"] = f"preview=rule_score; persisted_match=rule_score*{weights['rule']}%+ai_score*{weights['ai']}% when AI review succeeds"
         results.append(
             {
                 "job_id": job.id,
@@ -231,7 +234,8 @@ def mark_ai_unavailable(items, summary):
 
 def mark_rule_pending(item):
     rule_score = int(item["reason"].get("rule_score", item["score"]) or 0)
-    pending_score = round(rule_score * 0.35)
+    weights = get_matching_weights()
+    pending_score = round(rule_score * int(weights.get("pending_rule", weights.get("rule", 35))) / 100)
     item["reason"]["ai_review"] = {
         "source": "rule_pending",
         "summary": f"未进入本次 AI 复核批次，当前仅按规则分 35% 折算展示；系统会优先补充复核最终前 {FINAL_TOP_AI_REVIEW_LIMIT} 位候选人。",
@@ -248,16 +252,17 @@ def db_candidate(candidate_id):
 def apply_ai_review(job, candidate, item):
     reason = item["reason"]
     rule_score = int(item["score"])
+    weights = get_matching_weights()
     try:
         review = request_ai_match_review(job, candidate, reason)
         ai_score = clamp_score(review.get("score"), rule_score)
-        final_score = round(rule_score * 0.35 + ai_score * 0.65)
+        final_score = round(rule_score * int(weights.get("rule", 35)) / 100 + ai_score * int(weights.get("ai", 65)) / 100)
         review["source"] = "deepseek"
         reason["ai_review"] = normalize_ai_review(review)
         reason["ai_score"] = ai_score
         reason["final_score"] = final_score
         reason["rule_score"] = rule_score
-        reason["score_formula"] = "final_score=round(rule_score*35% + ai_score*65%); no pre-filter before AI review"
+        reason["score_formula"] = f"final_score=round(rule_score*{weights.get('rule', 35)}% + ai_score*{weights.get('ai', 65)}%); no pre-filter before AI review"
         item["score"] = final_score
     except LLMError as exc:
         reason["ai_review"] = {"source": "failed", "summary": llm_failure_summary(exc), "error": str(exc)[:300]}

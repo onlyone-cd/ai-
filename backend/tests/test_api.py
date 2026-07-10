@@ -154,6 +154,44 @@ def test_llm_status_does_not_expose_api_key(client, admin_headers):
     assert {"enabled", "available", "provider", "model", "timeout_seconds", "max_retries"} <= set(data)
 
 
+def test_system_settings_manage_ai_and_matching_weights(client, admin_headers):
+    response = client.get("/api/settings", headers=admin_headers)
+
+    assert response.status_code == 200
+    data = response.get_json()["data"]
+    assert data["matching_weights"] == {
+        "skill_match": 75,
+        "capability": 25,
+        "skill_overall": 85,
+        "experience": 15,
+        "rule": 35,
+        "ai": 65,
+        "pending_rule": 35,
+    }
+    assert "api_key" not in data["ai"]
+
+    updated_ai = client.patch(
+        "/api/settings/ai",
+        headers=admin_headers,
+        json={"mode": "ai", "provider": "deepseek", "base_url": "https://api.deepseek.com/v1/chat/completions", "model": "deepseek-chat", "api_key": "sk-test-secret", "temperature": 0.2},
+    )
+    assert updated_ai.status_code == 200
+    assert updated_ai.get_json()["data"]["api_key_configured"] is True
+    assert "sk-test-secret" not in json.dumps(updated_ai.get_json()["data"])
+
+    weights = client.patch("/api/settings/matching-weights", headers=admin_headers, json={"skill_match": 60, "capability": 40, "rule": 50, "ai": 50})
+    assert weights.status_code == 200
+    payload = weights.get_json()["data"]
+    assert payload["skill_match"] == 60
+    assert payload["capability"] == 40
+    assert payload["rule"] == 50
+    assert payload["ai"] == 50
+
+    auto = client.post("/api/settings/matching-weights/auto", headers=admin_headers, json={"profile": "strict"})
+    assert auto.status_code == 200
+    assert auto.get_json()["data"]["ai"] == 70
+
+
 def test_system_readiness_reports_config_without_secrets(client, admin_headers):
     response = client.get("/api/system/readiness", headers=admin_headers)
 

@@ -172,6 +172,32 @@ export type MatchResult = {
   };
 };
 
+export type AiSettings = {
+  mode: string;
+  provider: string;
+  base_url: string;
+  model: string;
+  temperature: number;
+  api_key_configured?: boolean;
+  api_key_masked?: string;
+};
+
+export type MatchingWeights = {
+  skill_match: number;
+  capability: number;
+  skill_overall: number;
+  experience: number;
+  rule: number;
+  ai: number;
+  pending_rule: number;
+};
+
+export type SystemSettings = {
+  ai: AiSettings;
+  matching_weights: MatchingWeights;
+  current_algorithm: Record<string, string>;
+};
+
 export type InterviewAssignment = {
   id: number;
   candidate_id: number;
@@ -797,6 +823,14 @@ export const api = {
   deleteJob: (id: number) => request<{ deleted: number }>(`/jobs/${id}`, { method: "DELETE" }),
   matchPreview: (jobId: number, limit = 5) => request<{ job: Job; items: MatchResult[] }>(`/jobs/${jobId}/match-preview?limit=${limit}`),
   matchJob: (jobId: number) => request<{ job: Job; items: MatchResult[] }>(`/jobs/${jobId}/match`, { method: "POST" }),
+  settings: () => request<SystemSettings>("/settings"),
+  updateAiSettings: (payload: Partial<AiSettings> & { api_key?: string }) =>
+    request<AiSettings>("/settings/ai", { method: "PATCH", body: JSON.stringify(payload) }),
+  updateMatchingWeights: (payload: Partial<MatchingWeights>) =>
+    request<MatchingWeights>("/settings/matching-weights", { method: "PATCH", body: JSON.stringify(payload) }),
+  autoMatchingWeights: (profile: "strict" | "balanced" | "growth" = "balanced") =>
+    request<MatchingWeights>("/settings/matching-weights/auto", { method: "POST", body: JSON.stringify({ profile }) }),
+  testAiSettings: () => request<Record<string, unknown>>("/settings/ai/test", { method: "POST" }),
   batchPipeline: (jobId: number, payload: { candidate_ids?: number[]; candidate_id?: number; stage?: string; note?: string }) =>
     request<{ created: PipelineItem[]; skipped: { candidate_id: number; stage: string }[]; missing: number[] }>(`/jobs/${jobId}/batch-pipeline`, { method: "POST", body: JSON.stringify(payload) }),
   pipeline: (jobId?: number | null) =>

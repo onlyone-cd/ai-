@@ -28,6 +28,7 @@ from .ops_service import build_data_quality_report, build_deploy_gate_report, li
 from .rbac import ROLES, role_permissions
 from .resume_service import ARCHIVE_EXTENSIONS, parse_and_save_archive, parse_and_save_resume, parse_and_save_text, reparse_candidate, rescan_attachment, resume_upload_dir
 from .responses import error, ok
+from .settings_service import auto_matching_weights, get_ai_config, get_matching_weights, save_ai_config, save_matching_weights
 from .tag_library import label_map, load_labels
 from .task_service import enqueue_task, retry_task, run_task
 
@@ -74,6 +75,76 @@ def permissions(user):
 @roles_required("admin", "manager")
 def system_llm_status(user):
     return ok(llm_status())
+
+
+@api.get("/settings")
+@login_required
+@roles_required("admin", "manager")
+def get_system_settings(user):
+    return ok(
+        {
+            "ai": get_ai_config(public=True),
+            "matching_weights": get_matching_weights(),
+            "current_algorithm": {
+                "rule_internal": "skill_score=skill_match%*技能命中率 + capability%*技能熟练度；有年限要求时再按 skill_overall/experience 加权。",
+                "final": "AI可用时 final_score=rule%*规则分 + ai%*AI完整简历复核分；AI不可用时保留规则分。",
+            },
+        }
+    )
+
+
+@api.patch("/settings/ai")
+@login_required
+@roles_required("admin")
+def update_ai_settings(user):
+    payload = request.get_json(silent=True) or {}
+    data = save_ai_config(payload, user)
+    audit_log(user, "update", "system_setting", None, "AI配置", {"provider": data.get("provider"), "model": data.get("model"), "mode": data.get("mode")})
+    db.session.commit()
+    return ok(data, "AI配置已保存")
+
+
+@api.patch("/settings/matching-weights")
+@login_required
+@roles_required("admin", "manager")
+def update_matching_weight_settings(user):
+    payload = request.get_json(silent=True) or {}
+    data = save_matching_weights(payload, user)
+    audit_log(user, "update", "system_setting", None, "匹配权重", data)
+    db.session.commit()
+    return ok(data, "匹配权重已保存")
+
+
+@api.post("/settings/matching-weights/auto")
+@login_required
+@roles_required("admin", "manager")
+def auto_config_matching_weights(user):
+    payload = request.get_json(silent=True) or {}
+    data = save_matching_weights(auto_matching_weights(payload.get("profile") or "balanced"), user)
+    audit_log(user, "auto_config", "system_setting", None, "匹配权重", data)
+    db.session.commit()
+    return ok(data, "匹配权重已自动配置")
+
+
+@api.post("/settings/ai/test")
+@login_required
+@roles_required("admin")
+def test_ai_settings(user):
+    status = llm_status()
+    if not status.get("available"):
+        return error("AI配置不可用，请检查服务商、Base URL、模型和 API Key", "AI_UNAVAILABLE", 400, status)
+    try:
+        chat_json(
+            [
+                {"role": "system", "content": "你是系统连通性测试助手，只输出 JSON。"},
+                {"role": "user", "content": "返回 {\"ok\":true,\"message\":\"connected\"}"},
+            ],
+            source="settings",
+            tool_name="ai_connection_test",
+        )
+    except LLMError as exc:
+        return error(f"AI连接测试失败：{exc}", "AI_TEST_FAILED", 400, status)
+    return ok(status, "AI连接正常")
 
 
 @api.get("/system/readiness")
@@ -3488,6 +3559,7 @@ def preview_match_for_candidate(job, candidate):
         years_required=structured.get("years_required"),
         candidate_years=(candidate.resume_json or {}).get("experience_analysis", {}).get("years"),
         candidate_context=" ".join([candidate.title or "", candidate.raw_text or ""]),
+        weights=get_matching_weights(),
     )
 
 
@@ -5270,6 +5342,7 @@ def analyze_candidate_resume_from_agent(user, candidate, text, suggestions, hist
             years_required=structured.get("years_required"),
             candidate_years=(candidate.resume_json or {}).get("experience_analysis", {}).get("years"),
             candidate_context=" ".join([candidate.title or "", candidate.raw_text or "", (candidate.resume_json or {}).get("summary") or ""]),
+            weights=get_matching_weights(),
         )
         if reason["score"] >= 80:
             reason["summary"] = "候选人简历与该岗位 JD 匹配度较高，可优先推荐进入流程。"
@@ -5494,6 +5567,7 @@ def match_employee_to_job_for_agent(employee, job, inferred_tags):
         years_required=structured.get("years_required"),
         candidate_years=(employee.resume_json or {}).get("experience_analysis", {}).get("years"),
         candidate_context=" ".join([employee.current_title or "", employee.raw_text or "", (employee.resume_json or {}).get("summary") or ""]),
+        weights=get_matching_weights(),
     )
     if reason["score"] >= 80:
         reason["summary"] = "员工简历与该岗位 JD 匹配度较高，可优先作为调岗或继任候选。"
@@ -7167,6 +7241,7 @@ def match_employee_to_job(employee, job):
         years_required=structured.get("years_required"),
         candidate_years=(employee.resume_json or {}).get("experience_analysis", {}).get("years"),
         candidate_context=" ".join([employee.current_title or "", employee.raw_text or ""]),
+        weights=get_matching_weights(),
     )
     if reason["score"] >= 85:
         summary = "员工能力与岗位要求高度匹配，可作为核心人才关注。"

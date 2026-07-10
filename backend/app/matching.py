@@ -74,7 +74,16 @@ def has_domain_context(jd_tag, candidate_tag, candidate_context):
     return has_category_context(category, candidate_context)
 
 
-def match_candidate(job_skill_tags, candidate_tags, years_required=None, candidate_years=None, candidate_context=""):
+DEFAULT_WEIGHTS = {
+    "skill_match": 75,
+    "capability": 25,
+    "skill_overall": 85,
+    "experience": 15,
+}
+
+
+def match_candidate(job_skill_tags, candidate_tags, years_required=None, candidate_years=None, candidate_context="", weights=None):
+    weights = {**DEFAULT_WEIGHTS, **(weights or {})}
     jd_tags = parse_skill_tags(job_skill_tags)
     total_weight = sum(item["weight"] for item in jd_tags) or 1
     matched_weight = 0.0
@@ -115,18 +124,19 @@ def match_candidate(job_skill_tags, candidate_tags, years_required=None, candida
 
     match_rate = matched_weight / total_weight
     capability_rate = capability_weight / total_weight
-    skill_score = round(match_rate * 75 + capability_rate * 25)
+    skill_score = round(match_rate * int(weights.get("skill_match", 75)) + capability_rate * int(weights.get("capability", 25)))
     experience_rate = None
     score = skill_score
     if years_required:
         candidate_years = float(candidate_years or 0)
         experience_rate = min(candidate_years / float(years_required), 1.0)
-        score = round(skill_score * 0.85 + experience_rate * 15)
+        score = round(skill_score * int(weights.get("skill_overall", 85)) / 100 + experience_rate * int(weights.get("experience", 15)))
     return {
         "score": max(0, min(100, score)),
         "hits": hits,
         "missing_tags": missing,
-        "formula": "skill_score=round(match_rate * 75 + capability_rate * 25); final=skill_score*0.85+experience_fit*15 when years_required exists",
+        "formula": f"skill_score=round(match_rate*{weights.get('skill_match', 75)} + capability_rate*{weights.get('capability', 25)}); final=skill_score*{weights.get('skill_overall', 85)}%+experience_fit*{weights.get('experience', 15)} when years_required exists",
+        "weights": weights,
         "match_rate": round(match_rate, 3),
         "capability_rate": round(capability_rate, 3),
         "skill_score": max(0, min(100, skill_score)),

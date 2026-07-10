@@ -12,16 +12,18 @@ class LLMError(RuntimeError):
 
 
 def llm_available():
-    return bool(current_app.config.get("LLM_ENABLED") and current_app.config.get("DEEPSEEK_API_KEY"))
+    runtime = runtime_config()
+    return bool(runtime["enabled"] and runtime["api_key"])
 
 
 def llm_status():
+    runtime = runtime_config()
     return {
-        "enabled": bool(current_app.config.get("LLM_ENABLED")),
+        "enabled": bool(runtime["enabled"]),
         "available": llm_available(),
-        "provider": current_app.config.get("LLM_PROVIDER"),
-        "model": current_app.config.get("LLM_MODEL"),
-        "api_url": current_app.config.get("LLM_API_URL"),
+        "provider": runtime["provider"],
+        "model": runtime["model"],
+        "api_url": runtime["api_url"],
         "timeout_seconds": int(current_app.config.get("LLM_TIMEOUT_SECONDS", 45)),
         "max_retries": int(current_app.config.get("LLM_MAX_RETRIES", 1)),
     }
@@ -31,22 +33,23 @@ def chat_json(messages, temperature=0.1, timeout=None, source="", tool_name=""):
     if not llm_available():
         raise LLMError("LLM 未启用或缺少 API Key")
 
+    runtime = runtime_config()
     timeout = int(timeout or current_app.config.get("LLM_TIMEOUT_SECONDS", 45))
     max_retries = max(0, int(current_app.config.get("LLM_MAX_RETRIES", 1)))
     backoff = max(0.0, float(current_app.config.get("LLM_RETRY_BACKOFF_SECONDS", 0.5)))
     started_at = time.monotonic()
     request_id = getattr(g, "request_id", "") if has_request_context() else ""
     payload = {
-        "model": current_app.config["LLM_MODEL"],
+        "model": runtime["model"],
         "messages": messages,
-        "temperature": temperature,
+        "temperature": runtime.get("temperature", temperature),
         "response_format": {"type": "json_object"},
     }
     request = urllib.request.Request(
-        current_app.config["LLM_API_URL"],
+        runtime["api_url"],
         data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
         headers={
-            "Authorization": f"Bearer {current_app.config['DEEPSEEK_API_KEY']}",
+            "Authorization": f"Bearer {runtime['api_key']}",
             "Content-Type": "application/json",
         },
         method="POST",
@@ -62,8 +65,8 @@ def chat_json(messages, temperature=0.1, timeout=None, source="", tool_name=""):
             successful_attempt = attempt + 1
             current_app.logger.info(
                 "LLM call succeeded provider=%s model=%s attempt=%s duration_ms=%s request_id=%s",
-                current_app.config.get("LLM_PROVIDER"),
-                current_app.config.get("LLM_MODEL"),
+                runtime.get("provider"),
+                runtime.get("model"),
                 attempt + 1,
                 duration_ms,
                 request_id,
@@ -113,10 +116,11 @@ def record_llm_usage(messages, response_body, success, duration_ms, attempts, st
         from .models import LLMUsage
 
         usage = extract_usage(messages, response_body)
+        runtime = runtime_config()
         record = LLMUsage(
-            provider=str(current_app.config.get("LLM_PROVIDER") or ""),
-            model=str(current_app.config.get("LLM_MODEL") or ""),
-            endpoint=str(current_app.config.get("LLM_API_URL") or "")[:255],
+            provider=str(runtime.get("provider") or ""),
+            model=str(runtime.get("model") or ""),
+            endpoint=str(runtime.get("api_url") or "")[:255],
             source=str(source or default_source())[:80],
             tool_name=str(tool_name or "")[:120] or None,
             api_path=active_api_path(),
@@ -188,3 +192,19 @@ def default_source():
     if "/jobs/" in path:
         return "job"
     return "api"
+
+
+def runtime_config():
+    try:
+        from .settings_service import ai_runtime_config
+
+        return ai_runtime_config()
+    except Exception:
+        return {
+            "enabled": bool(current_app.config.get("LLM_ENABLED")),
+            "provider": current_app.config.get("LLM_PROVIDER"),
+            "model": current_app.config.get("LLM_MODEL"),
+            "api_url": current_app.config.get("LLM_API_URL"),
+            "api_key": current_app.config.get("DEEPSEEK_API_KEY"),
+            "temperature": 0.1,
+        }

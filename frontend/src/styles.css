@@ -52,7 +52,7 @@ textarea {
   }
 
   .ant-layout-sider {
-    background: linear-gradient(180deg, #0b1220 0%, #101828 100%) !important;
+    background: #020617 !important;
   }
 
   .ant-menu-dark {
@@ -60,11 +60,12 @@ textarea {
   }
 
   .ant-menu-dark .ant-menu-item {
-    @apply my-0 rounded-md text-slate-300;
-    height: 30px !important;
-    line-height: 30px !important;
-    padding-left: 12px !important;
-    font-size: 12px !important;
+    @apply my-1.5 rounded-lg text-slate-300;
+    height: 40px !important;
+    line-height: 40px !important;
+    padding-left: 18px !important;
+    font-size: 14px !important;
+    font-weight: 500;
   }
 
   .ant-menu-dark .ant-menu-item-selected {
@@ -74,6 +75,23 @@ textarea {
 
   .ant-menu-dark .ant-menu-item-selected svg {
     color: #ffffff;
+  }
+
+  .app-sider .ant-menu {
+    padding: 10px 12px !important;
+  }
+
+  .app-sider .ant-menu-item .ant-menu-title-content {
+    margin-left: 12px !important;
+  }
+
+  .app-sider .ant-menu-item svg {
+    color: #a8b0c2;
+  }
+
+  .app-sider .ant-menu-item:hover {
+    background: rgba(255, 255, 255, 0.08) !important;
+    color: #ffffff !important;
   }
 
   .ant-card {
@@ -173,6 +191,22 @@ textarea {
 
   .field-label {
     @apply mb-1.5 block text-xs font-semibold text-steel;
+  }
+
+  .settings-grid {
+    @apply grid gap-4 xl:grid-cols-[1.25fr_0.9fr];
+  }
+
+  .settings-page .design-card {
+    @apply p-5;
+  }
+
+  .settings-note {
+    @apply rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-6 text-amber-800;
+  }
+
+  .settings-weight-row {
+    @apply grid grid-cols-[1fr_150px] items-center gap-3 text-sm font-medium text-ink;
   }
 
   .app-content h1,

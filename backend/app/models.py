@@ -28,6 +28,30 @@ class User(db.Model):
         return {"id": self.id, "username": self.username, "name": self.name, "role": self.role, "active": self.active}
 
 
+class SystemSetting(db.Model):
+    __table_args__ = (
+        db.Index("ix_system_setting_group", "group"),
+    )
+
+    key = db.Column(db.String(80), primary_key=True)
+    group = db.Column(db.String(40), nullable=False, default="system")
+    value = db.Column(db.JSON, nullable=False, default=dict)
+    updated_by = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
+    updated_at = db.Column(db.DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+    user = db.relationship("User")
+
+    def to_dict(self):
+        return {
+            "key": self.key,
+            "group": self.group,
+            "value": self.value or {},
+            "updated_by": self.updated_by,
+            "updated_by_name": self.user.name if self.user else "",
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
 class Candidate(db.Model):
     __table_args__ = (
         db.Index("ix_candidate_source_created_at", "source", "created_at"),

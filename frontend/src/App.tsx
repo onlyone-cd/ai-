@@ -24,6 +24,7 @@ import {
   RefreshCw,
   Search,
   SendHorizontal,
+  Settings,
   ShieldCheck,
   Sparkles,
   Trash2,
@@ -34,7 +35,7 @@ import {
   Users,
   X
 } from "lucide-react";
-import { api, AgentConversation, AgentMessage, AgentResponse, AiInterviewPlan, AuditLog, BackgroundTask, BiOverview, BossInboxItem, Candidate, clearToken, DataIntegrity, EmployeeAnalysis, EmployeeProfile, EmployeeRecommendation, InterviewAssignment, InterviewFeedback, InterviewMessage, InterviewSpeechStatus, Job, LLMUsageSummary, MatchResult, notify, OfferRecord, OpsBackupStatus, OpsDataQuality, OpsDeployGates, OrganizationUnit, PipelineItem, PublicInterviewRoom, setToken, SkillTag, User } from "./lib/api";
+import { api, AgentConversation, AgentMessage, AgentResponse, AiInterviewPlan, AiSettings, AuditLog, BackgroundTask, BiOverview, BossInboxItem, Candidate, clearToken, DataIntegrity, EmployeeAnalysis, EmployeeProfile, EmployeeRecommendation, InterviewAssignment, InterviewFeedback, InterviewMessage, InterviewSpeechStatus, Job, LLMUsageSummary, MatchingWeights, MatchResult, notify, OfferRecord, OpsBackupStatus, OpsDataQuality, OpsDeployGates, OrganizationUnit, PipelineItem, PublicInterviewRoom, setToken, SkillTag, SystemSettings, User } from "./lib/api";
 
 const stageLabels: Record<string, string> = {
   pending: "待处理",
@@ -56,7 +57,7 @@ const offerStatusLabels: Record<string, string> = {
   cancelled: "已取消"
 };
 
-type View = "candidates" | "organization" | "internal" | "jobs" | "pipeline" | "interviews" | "offers" | "boss" | "bi" | "agent" | "tasks" | "audit" | "users";
+type View = "candidates" | "organization" | "internal" | "jobs" | "pipeline" | "interviews" | "offers" | "boss" | "bi" | "agent" | "settings" | "tasks" | "audit" | "users";
 
 async function copyTextToClipboard(text: string) {
   const value = String(text || "");
@@ -136,29 +137,30 @@ function App() {
 
   const navItems = [
     { key: "candidates", icon: <Users size={15} />, label: "人才库" },
-    { key: "organization", icon: <Building2 size={15} />, label: "组织人才" },
+    { key: "organization", icon: <Building2 size={15} />, label: "组织与内部人才" },
     { key: "jobs", icon: <BriefcaseBusiness size={15} />, label: "岗位匹配" },
     { key: "pipeline", icon: <ChevronRight size={15} />, label: "流程看板" },
     { key: "interviews", icon: <CalendarDays size={15} />, label: "面试管理" },
-    { key: "offers", icon: <HandCoins size={15} />, label: "Offer" },
-    { key: "boss", icon: <MessageSquareText size={15} />, label: "BOSS" },
-    { key: "bi", icon: <BarChart3 size={15} />, label: "BI" },
+    { key: "offers", icon: <HandCoins size={15} />, label: "Offer 管理" },
+    { key: "boss", icon: <MessageSquareText size={15} />, label: "BOSS 闭环" },
+    { key: "bi", icon: <BarChart3 size={15} />, label: "BI 看板" },
     { key: "agent", icon: <Bot size={15} />, label: "AI 助手" },
-    ...(user.role !== "interviewer" ? [{ key: "tasks", icon: <Database size={15} />, label: "任务" }] : []),
-    ...(user.role === "admin" ? [{ key: "audit", icon: <Clock3 size={15} />, label: "日志" }] : []),
-    ...(user.role === "admin" ? [{ key: "users", icon: <UserCog size={15} />, label: "用户" }] : [])
+    { key: "settings", icon: <Settings size={15} />, label: "系统设置" },
+    ...(user.role !== "interviewer" ? [{ key: "tasks", icon: <Database size={15} />, label: "后台任务" }] : []),
+    ...(user.role === "admin" ? [{ key: "audit", icon: <Clock3 size={15} />, label: "操作日志" }] : []),
+    ...(user.role === "admin" ? [{ key: "users", icon: <UserCog size={15} />, label: "用户管理" }] : [])
   ];
 
   return (
     <AntLayout className="min-h-screen bg-slate-50 text-ink">
-        <AntLayout.Sider width={148} className="fixed inset-y-0 left-0 z-10 hidden border-r border-slate-800 bg-slate-950 lg:block">
-        <div className="flex h-10 items-center gap-2 border-b border-white/10 px-2.5">
-          <div className="grid h-7 w-7 place-items-center rounded-md bg-white text-mint">
+      <AntLayout.Sider width={252} className="app-sider fixed inset-y-0 left-0 z-10 hidden border-r border-white/10 bg-slate-950 lg:block">
+        <div className="flex h-14 items-center gap-3 border-b border-white/10 px-4">
+          <div className="grid h-8 w-8 place-items-center rounded-md bg-white text-mint">
             <Sparkles size={15} />
           </div>
           <div>
-            <div className="text-xs font-semibold text-white">HireInsight</div>
-            <div className="text-[11px] text-slate-400">AI 招聘</div>
+            <div className="text-sm font-semibold text-white">HireInsight</div>
+            <div className="text-xs text-slate-400">AI 招聘系统</div>
           </div>
         </div>
         <AntMenu
@@ -171,7 +173,7 @@ function App() {
         />
       </AntLayout.Sider>
 
-      <AntLayout className="min-h-screen bg-slate-50 lg:pl-[148px]">
+      <AntLayout className="min-h-screen bg-slate-50 lg:pl-[252px]">
         <AntLayout.Header className="sticky top-0 z-10 flex h-10 items-center justify-between border-b border-line bg-white/90 px-3 leading-normal backdrop-blur">
           <div>
             <h1 className="text-sm font-semibold">{titleFor(view)}</h1>
@@ -206,6 +208,7 @@ function App() {
           {view === "boss" && <BossPage />}
           {view === "bi" && <BiPage />}
           {view === "agent" && <AgentPage />}
+          {view === "settings" && <SettingsPage />}
           {view === "tasks" && <TasksPage setView={setView} />}
           {view === "audit" && <AuditLogsPage />}
           {view === "users" && <UsersPage currentUser={user} />}
@@ -5241,8 +5244,156 @@ function parseInterviewDimensions(comment: string) {
   });
 }
 
+function SettingsPage() {
+  const [settings, setSettings] = useState<SystemSettings | null>(null);
+  const [aiForm, setAiForm] = useState<Partial<AiSettings> & { api_key?: string }>({});
+  const [weights, setWeights] = useState<MatchingWeights>({
+    skill_match: 75,
+    capability: 25,
+    skill_overall: 85,
+    experience: 15,
+    rule: 35,
+    ai: 65,
+    pending_rule: 35
+  });
+  const [message, setMessage] = useState("");
+
+  useEffect(() => {
+    api.settings().then((data) => {
+      setSettings(data);
+      setAiForm(data.ai);
+      setWeights(data.matching_weights);
+    });
+  }, []);
+
+  function setWeight(key: keyof MatchingWeights, value: string) {
+    setWeights({ ...weights, [key]: Number(value || 0) });
+  }
+
+  async function saveAi(event: React.FormEvent) {
+    event.preventDefault();
+    const data = await api.updateAiSettings(aiForm);
+    setAiForm({ ...data, api_key: "" });
+    setSettings(settings ? { ...settings, ai: data } : settings);
+    setMessage("AI配置已保存");
+  }
+
+  async function testAi() {
+    await api.testAiSettings();
+    setMessage("AI连接正常");
+  }
+
+  async function saveWeights(event?: React.FormEvent) {
+    event?.preventDefault();
+    const data = await api.updateMatchingWeights(weights);
+    setWeights(data);
+    setSettings(settings ? { ...settings, matching_weights: data } : settings);
+    setMessage("匹配权重已保存，下一次岗位匹配会按新权重计算");
+  }
+
+  async function autoWeights(profile: "strict" | "balanced" | "growth") {
+    const data = await api.autoMatchingWeights(profile);
+    setWeights(data);
+    setSettings(settings ? { ...settings, matching_weights: data } : settings);
+    setMessage("匹配权重已自动配置");
+  }
+
+  if (!settings) {
+    return <section className="design-page"><div className="empty-state">正在加载系统设置</div></section>;
+  }
+
+  return (
+    <section className="design-page settings-page space-y-4">
+      <div className="toolbar">
+        <div>
+          <h2>系统设置</h2>
+          <p>AI配置、匹配权重和自动配置策略。</p>
+        </div>
+        {message && <span className="badge good">{message}</span>}
+      </div>
+      <div className="settings-grid">
+        <form className="design-card" onSubmit={saveAi}>
+          <h2>AI配置</h2>
+          <div className="mt-4 grid gap-3 md:grid-cols-2">
+            <Field label="AI模式">
+              <select className="select w-full" value={aiForm.mode || "ai"} onChange={(event) => setAiForm({ ...aiForm, mode: event.target.value })}>
+                <option value="ai">真实AI模式</option>
+                <option value="local_rules">本地规则模式</option>
+              </select>
+            </Field>
+            <Field label="服务商">
+              <select className="select w-full" value={aiForm.provider || "deepseek"} onChange={(event) => setAiForm({ ...aiForm, provider: event.target.value })}>
+                <option value="deepseek">DeepSeek</option>
+                <option value="openai">OpenAI兼容</option>
+                <option value="local">本地模型</option>
+              </select>
+            </Field>
+            <Field label="Base URL">
+              <input className="input" value={aiForm.base_url || ""} onChange={(event) => setAiForm({ ...aiForm, base_url: event.target.value })} />
+            </Field>
+            <Field label="模型名称">
+              <input className="input" value={aiForm.model || ""} onChange={(event) => setAiForm({ ...aiForm, model: event.target.value })} />
+            </Field>
+            <Field label={`API Key${aiForm.api_key_configured ? ` · ${aiForm.api_key_masked}` : ""}`}>
+              <input className="input" type="password" placeholder={aiForm.api_key_configured ? "已配置，留空则不修改" : "请输入 API Key"} value={aiForm.api_key || ""} onChange={(event) => setAiForm({ ...aiForm, api_key: event.target.value })} />
+            </Field>
+            <Field label="Temperature">
+              <input className="input" type="number" min="0" max="2" step="0.1" value={aiForm.temperature ?? 0.1} onChange={(event) => setAiForm({ ...aiForm, temperature: Number(event.target.value) })} />
+            </Field>
+          </div>
+          <div className="settings-note mt-4">真实AI模式会把 JD 和简历摘要发送到配置的模型服务；调用失败时系统会自动回退到本地规则。</div>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <button className="primary-button" type="submit">保存AI配置</button>
+            <button className="secondary-button" type="button" onClick={testAi}>测试连接</button>
+          </div>
+        </form>
+
+        <form className="design-card" onSubmit={saveWeights}>
+          <h2>匹配权重</h2>
+          <div className="mt-4 grid gap-3">
+            <WeightInput label="技能命中" value={weights.skill_match} onChange={(value) => setWeight("skill_match", value)} />
+            <WeightInput label="熟练度" value={weights.capability} onChange={(value) => setWeight("capability", value)} />
+            <WeightInput label="技能综合" value={weights.skill_overall} onChange={(value) => setWeight("skill_overall", value)} />
+            <WeightInput label="年限经验" value={weights.experience} onChange={(value) => setWeight("experience", value)} />
+            <WeightInput label="规则分" value={weights.rule} onChange={(value) => setWeight("rule", value)} />
+            <WeightInput label="AI复核分" value={weights.ai} onChange={(value) => setWeight("ai", value)} />
+            <WeightInput label="未复核展示折算" value={weights.pending_rule} onChange={(value) => setWeight("pending_rule", value)} />
+          </div>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <button className="primary-button" type="submit">保存权重</button>
+            <button className="secondary-button" type="button" onClick={() => autoWeights("strict")}>严格岗位型</button>
+            <button className="secondary-button" type="button" onClick={() => autoWeights("balanced")}>平衡默认</button>
+            <button className="secondary-button" type="button" onClick={() => autoWeights("growth")}>潜力成长型</button>
+          </div>
+          <div className="settings-note mt-4">
+            当前规则：技能命中 {weights.skill_match}% + 熟练度 {weights.capability}%；有年限时技能综合 {weights.skill_overall}% + 年限经验 {weights.experience}%；AI复核后规则 {weights.rule}% + AI {weights.ai}%。
+          </div>
+        </form>
+      </div>
+    </section>
+  );
+}
+
+function Field({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <label>
+      <span className="field-label">{label}</span>
+      {children}
+    </label>
+  );
+}
+
+function WeightInput({ label, value, onChange }: { label: string; value: number; onChange: (value: string) => void }) {
+  return (
+    <label className="settings-weight-row">
+      <span>{label}</span>
+      <input className="input" type="number" min="0" max="100" value={value} onChange={(event) => onChange(event.target.value)} />
+    </label>
+  );
+}
+
 function MobileTabs({ view, setView, isAdmin, canUseTasks }: { view: View; setView: (view: View) => void; isAdmin: boolean; canUseTasks: boolean }) {
-  const tabs: [View, string][] = [["candidates", "人才"], ["organization", "组织与内部人才"], ["jobs", "岗位"], ["pipeline", "流程"], ["interviews", "面试"], ["offers", "Offer"], ["boss", "BOSS"], ["bi", "BI"], ["agent", "AI"]];
+  const tabs: [View, string][] = [["candidates", "人才"], ["organization", "组织与内部人才"], ["jobs", "岗位"], ["pipeline", "流程"], ["interviews", "面试"], ["offers", "Offer"], ["boss", "BOSS"], ["bi", "BI"], ["agent", "AI"], ["settings", "系统设置"]];
   if (canUseTasks) tabs.push(["tasks", "任务"]);
   if (isAdmin) {
     tabs.push(["audit", "日志"]);
@@ -5289,6 +5440,7 @@ function titleFor(view: View) {
     boss: "BOSS 半自动闭环",
     bi: "BI 看板",
     agent: "AI 助手",
+    settings: "系统设置",
     tasks: "后台任务",
     audit: "操作日志",
     users: "用户管理"

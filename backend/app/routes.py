@@ -2682,7 +2682,7 @@ def bi_overview(user):
         {
             "period_days": days,
             "total_candidates": len(candidates),
-            "active_jobs": Job.query.filter_by(status="active").count(),
+            "active_jobs": active_recruiting_job_count(),
             "source_quality": dict(sources),
             "pipeline_funnel": {stage: pipeline.get(stage, 0) for stage in STAGES},
             "experience_stats": experience_stats(candidates),
@@ -6239,7 +6239,7 @@ def bi_snapshot():
     offers = Counter(offer.status for offer in OfferRecord.query.all())
     return {
         "total_candidates": len(candidates),
-        "active_jobs": Job.query.filter_by(status="active").count(),
+        "active_jobs": active_recruiting_job_count(),
         "pipeline_funnel": {stage: pipeline.get(stage, 0) for stage in STAGES},
         "offer_status": {status: offers.get(status, 0) for status in sorted(OFFER_STATUSES)},
         "experience_stats": experience_stats(candidates),
@@ -6251,6 +6251,10 @@ def experience_stats(candidates):
     labels = {"student": "在校生", "fresh": "应届毕业", "lt1": "1 年以下", "1-3": "1-3 年", "3-5": "3-5 年", "5-10": "5-10 年", "gt10": "10 年以上"}
     return [{"key": key, "label": labels[key], "count": stats.get(key, 0)} for key in labels]
 
+
+
+def active_recruiting_job_count():
+    return apply_job_scope(Job.query.filter_by(status="active"), "recruiting").count()
 
 def latest_pipeline_items(job_id=None, since=None, include_internal=False):
     query = PipelineStage.query

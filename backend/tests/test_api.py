@@ -274,6 +274,21 @@ def test_ops_data_quality_excludes_internal_jobs_from_recruiting_skill_issue(cli
     assert "内部架构师" not in sample_names
 
 
+def test_bi_overview_counts_only_recruiting_active_jobs(client, admin_headers):
+    admin_id = client.get("/api/auth/me", headers=admin_headers).get_json()["data"]["id"]
+    recruiting_job = Job(owner_hr_id=admin_id, title="BI招聘岗位", city="长沙", department="招聘", job_code="BI-OPEN", jd_text="招聘岗位", jd_structured={"skills": [{"tag": "Java", "weight": 5}], "skill_tags_raw": "Java 5"}, status="active")
+    internal_job = Job(owner_hr_id=admin_id, title="BI内部岗位", city="长沙", department="内部", job_code="INTERNAL-BI", jd_text="内部任职岗位", jd_structured={"source": "internal_employee_import"}, status="active")
+    db.session.add_all([recruiting_job, internal_job])
+    db.session.commit()
+
+    response = client.get("/api/bi/overview", headers=admin_headers)
+
+    assert response.status_code == 200
+    data = response.get_json()["data"]
+    active_recruiting_jobs = [job for job in Job.query.filter_by(status="active").all() if not str(job.job_code or "").startswith("INTERNAL-")]
+    assert data["active_jobs"] == len(active_recruiting_jobs)
+    assert data["active_jobs"] < Job.query.filter_by(status="active").count()
+
 def test_ops_deploy_gates_reports_release_blockers_without_secrets(client, admin_headers):
     response = client.get("/api/ops/deploy-gates", headers=admin_headers)
 

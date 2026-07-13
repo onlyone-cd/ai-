@@ -65,7 +65,9 @@ def create_app(config_object=None):
             return None
         limit = int(app.config.get("RATE_LIMIT_PER_MINUTE", 120))
         now = time()
-        key = f"{request.remote_addr or 'unknown'}:{request.path}"
+        route = request.url_rule.rule if request.url_rule else request.path
+        key = f"{request.remote_addr or 'unknown'}:{route}"
+        prune_rate_buckets(now, int(app.config.get("RATE_LIMIT_MAX_BUCKETS", 10000)))
         bucket = _rate_buckets[key]
         while bucket and now - bucket[0] > 60:
             bucket.popleft()
@@ -146,6 +148,18 @@ def ensure_sqlite_schema():
 def configure_logging(app):
     logging.basicConfig(level=getattr(logging, str(app.config.get("LOG_LEVEL", "INFO")).upper(), logging.INFO))
 
+
+def prune_rate_buckets(now, max_buckets):
+    if len(_rate_buckets) <= max_buckets:
+        return
+    for key in list(_rate_buckets):
+        bucket = _rate_buckets[key]
+        while bucket and now - bucket[0] > 60:
+            bucket.popleft()
+        if not bucket:
+            _rate_buckets.pop(key, None)
+    while len(_rate_buckets) > max_buckets:
+        _rate_buckets.pop(next(iter(_rate_buckets)), None)
 
 def write_access_log(app, response):
     if not app.config.get("ACCESS_LOG_ENABLED", True):

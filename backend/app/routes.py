@@ -1413,12 +1413,13 @@ def employee_report(user, employee_id):
 @login_required
 @roles_required("admin", "manager", "recruiter")
 def list_candidates(user):
-    query = Candidate.query.order_by(Candidate.created_at.desc())
+    query = visible_candidate_query(user).order_by(Candidate.created_at.desc())
+    all_visible_candidates = query.all()
     experience_level = request.args.get("experience_level")
     if experience_level and experience_level != "all":
         filtered = [
             candidate
-            for candidate in query.all()
+            for candidate in all_visible_candidates
             if candidate.resume_json.get("experience_analysis", {}).get("level") == experience_level
         ]
         candidates, meta = paginate_items(filtered)
@@ -1427,12 +1428,11 @@ def list_candidates(user):
     return ok(
         {
             "items": [candidate.to_dict() for candidate in candidates],
-            "experience_stats": experience_stats(candidates),
+            "experience_stats": experience_stats(all_visible_candidates),
             "visible_scope": user.role,
             **meta,
         }
     )
-
 
 @api.get("/candidates/<int:candidate_id>")
 @login_required
@@ -1441,6 +1441,8 @@ def get_candidate(user, candidate_id):
     candidate = db.session.get(Candidate, candidate_id)
     if not candidate:
         return error("候选人不存在", "NOT_FOUND", 404)
+    if not can_access_candidate(user, candidate):
+        return error("无权访问该候选人", "FORBIDDEN", 403)
     audit_log(user, "view", "candidate", candidate.id, candidate.name_masked, {"scope": "detail"})
     db.session.commit()
     return ok(candidate.to_dict(detail=True))
@@ -1451,6 +1453,8 @@ def get_candidate(user, candidate_id):
 @roles_required("admin", "manager", "recruiter")
 def list_resume_attachments(user):
     query = ResumeAttachment.query.order_by(ResumeAttachment.created_at.desc())
+    if user.role == "recruiter":
+        query = query.filter_by(owner_hr_id=user.id)
     candidate_id = request.args.get("candidate_id", type=int)
     scan_status = str(request.args.get("scan_status") or "").strip()
     source = str(request.args.get("source") or "").strip()
@@ -1471,11 +1475,12 @@ def list_candidate_attachments(user, candidate_id):
     candidate = db.session.get(Candidate, candidate_id)
     if not candidate:
         return error("候选人不存在", "NOT_FOUND", 404)
+    if not can_access_candidate(user, candidate):
+        return error("无权访问该候选人附件", "FORBIDDEN", 403)
     attachments, meta = paginate_query(ResumeAttachment.query.filter_by(candidate_id=candidate.id).order_by(ResumeAttachment.created_at.desc()))
     audit_log(user, "view", "resume_attachment", candidate.id, candidate.name_masked, {"scope": "candidate_attachments"})
     db.session.commit()
     return ok({"items": [attachment.to_dict() for attachment in attachments], **meta})
-
 
 @api.get("/resume/attachments/<int:attachment_id>")
 @login_required
@@ -1484,10 +1489,11 @@ def get_resume_attachment(user, attachment_id):
     attachment = db.session.get(ResumeAttachment, attachment_id)
     if not attachment:
         return error("简历附件不存在", "NOT_FOUND", 404)
+    if not can_access_attachment(user, attachment):
+        return error("无权访问该附件", "FORBIDDEN", 403)
     audit_log(user, "view", "resume_attachment", attachment.id, attachment.original_filename)
     db.session.commit()
     return ok(attachment.to_dict())
-
 
 @api.post("/resume/attachments/<int:attachment_id>/scan")
 @login_required
@@ -1509,6 +1515,8 @@ def export_candidate_resume(user, candidate_id):
     candidate = db.session.get(Candidate, candidate_id)
     if not candidate:
         return error("候选人不存在", "NOT_FOUND", 404)
+    if not can_access_candidate(user, candidate):
+        return error("无权导出该候选人简历", "FORBIDDEN", 403)
     audit_log(user, "export", "candidate", candidate.id, candidate.name_masked, {"kind": "resume_txt", "filename": f"candidate-{candidate.id}-resume.txt"})
     db.session.commit()
     return Response(
@@ -1517,7 +1525,6 @@ def export_candidate_resume(user, candidate_id):
         headers={"Content-Disposition": f"attachment; filename=candidate-{candidate.id}-resume.txt"},
     )
 
-
 @api.patch("/candidates/<int:candidate_id>")
 @login_required
 @roles_required("admin", "manager", "recruiter")
@@ -1525,6 +1532,8 @@ def update_candidate(user, candidate_id):
     candidate = db.session.get(Candidate, candidate_id)
     if not candidate:
         return error("候选人不存在", "NOT_FOUND", 404)
+    if not can_access_candidate(user, candidate):
+        return error("无权修改该候选人", "FORBIDDEN", 403)
     payload = request.get_json(force=True)
     for field in ["name_masked", "email_masked", "phone_masked", "title", "city"]:
         if field in payload:
@@ -1546,6 +1555,8 @@ def replace_candidate_tags(user, candidate_id):
     candidate = db.session.get(Candidate, candidate_id)
     if not candidate:
         return error("候选人不存在", "NOT_FOUND", 404)
+    if not can_access_candidate(user, candidate):
+        return error("无权修改该候选人", "FORBIDDEN", 403)
     labels = label_map()
     items = request.get_json(force=True).get("tags") or []
     cleaned_by_tag = {}
@@ -1578,6 +1589,8 @@ def delete_candidate(user, candidate_id):
     candidate = db.session.get(Candidate, candidate_id)
     if not candidate:
         return error("候选人不存在", "NOT_FOUND", 404)
+    if not can_access_candidate(user, candidate):
+        return error("无权删除该候选人", "FORBIDDEN", 403)
     EmployeeRecommendation.query.filter_by(candidate_id=candidate_id).delete()
     Match.query.filter_by(candidate_id=candidate_id).delete()
     PipelineStage.query.filter_by(candidate_id=candidate_id).delete()
@@ -1677,6 +1690,8 @@ def retry_parse_resume(user, candidate_id):
     candidate = db.session.get(Candidate, candidate_id)
     if not candidate:
         return error("候选人不存在", "NOT_FOUND", 404)
+    if not can_access_candidate(user, candidate):
+        return error("无权重解析该候选人简历", "FORBIDDEN", 403)
     if request.args.get("async") in {"1", "true", "yes"}:
         task = enqueue_task("resume_retry_parse", {"candidate_id": candidate.id}, created_by=user.id)
         audit_log(user, "enqueue", "background_task", task.id, task.task_type, {"candidate_id": candidate.id})
@@ -1692,9 +1707,9 @@ def retry_parse_resume(user, candidate_id):
         return error("简历重解析失败", "PARSE_FAILED", 500, {"reason": str(exc)})
     return ok({"candidate": candidate.to_dict(detail=True)}, "简历已重新解析")
 
-
 @api.get("/jobs")
 @login_required
+@roles_required("admin", "manager", "recruiter")
 def list_jobs(user):
     scope = str(request.args.get("scope") or "recruiting").strip().lower()
     query = apply_job_scope(Job.query, scope).order_by(Job.created_at.desc())
@@ -1707,6 +1722,7 @@ def list_jobs(user):
 
 @api.get("/jobs/<int:job_id>")
 @login_required
+@roles_required("admin", "manager", "recruiter")
 def get_job(user, job_id):
     job = db.session.get(Job, job_id)
     if not job:
@@ -1716,7 +1732,10 @@ def get_job(user, job_id):
     job.jd_structured = ensure_jd_structured(job)
     db.session.commit()
     data = job.to_dict()
-    data["match_count"] = Match.query.filter_by(job_id=job.id).count()
+    match_query = Match.query.filter_by(job_id=job.id)
+    if user.role == "recruiter":
+        match_query = match_query.join(Candidate).filter(Candidate.owner_hr_id == user.id)
+    data["match_count"] = match_query.count()
     data["pipeline_count"] = PipelineStage.query.filter_by(job_id=job.id).count()
     return ok(data)
 
@@ -1837,6 +1856,7 @@ def delete_job(user, job_id):
 
 @api.get("/jobs/<int:job_id>/match-preview")
 @login_required
+@roles_required("admin", "manager", "recruiter")
 def match_preview(user, job_id):
     job = db.session.get(Job, job_id)
     if not job:
@@ -1846,11 +1866,12 @@ def match_preview(user, job_id):
     job.jd_structured = ensure_jd_structured(job)
     db.session.commit()
     limit = request.args.get("limit", type=int)
-    return ok({"job": job.to_dict(), "items": preview_matches(job, limit=limit)})
+    return ok({"job": job.to_dict(), "items": preview_matches(job, limit=limit, candidates=visible_candidate_query(user).all())})
 
 
 @api.post("/jobs/<int:job_id>/match")
 @login_required
+@roles_required("admin", "manager", "recruiter")
 def run_job_match(user, job_id):
     job = db.session.get(Job, job_id)
     if not job:
@@ -1861,7 +1882,7 @@ def run_job_match(user, job_id):
     db.session.commit()
     if job.status != "active":
         return error("关闭岗位不能执行匹配，请先恢复岗位", "JOB_CLOSED", 409)
-    results = persist_matches(db, job)
+    results = persist_matches(db, job, candidates=visible_candidate_query(user).all())
     emit_notification_event(
         user,
         "job_matched",
@@ -1904,6 +1925,8 @@ def batch_pipeline(user, job_id):
         if not candidate:
             missing.append(candidate_id)
             continue
+        if not can_access_candidate(user, candidate):
+            return error("无权推进该候选人流程", "FORBIDDEN", 403)
         latest = latest_pipeline_item(job_id, candidate_id)
         if latest and latest.stage != "rejected":
             skipped.append({"candidate_id": candidate_id, "stage": latest.stage})
@@ -2018,8 +2041,12 @@ def move_pipeline(user):
     stage = payload.get("stage")
     if stage not in STAGES:
         return error("流程阶段不合法")
-    if not db.session.get(Candidate, payload.get("candidate_id")) or not db.session.get(Job, payload.get("job_id")):
+    candidate = db.session.get(Candidate, payload.get("candidate_id"))
+    job = db.session.get(Job, payload.get("job_id"))
+    if not candidate or not job:
         return error("候选人或岗位不存在", "NOT_FOUND", 404)
+    if not can_access_candidate(user, candidate):
+        return error("无权推进该候选人流程", "FORBIDDEN", 403)
     latest = latest_pipeline_item(payload.get("job_id"), payload.get("candidate_id"))
     if latest and latest.stage == stage:
         return ok(latest.to_dict(), "候选人已在该流程阶段")
@@ -3726,6 +3753,24 @@ def agent_tool_catalog():
         {"name": "chat", "description": "自由问答、联网趋势分析、能力说明和下一步引导"},
     ]
 
+
+def visible_candidate_query(user):
+    query = Candidate.query
+    if user.role == "recruiter":
+        query = query.filter_by(owner_hr_id=user.id)
+    return query
+
+
+def can_access_candidate(user, candidate):
+    if not candidate:
+        return False
+    return user.role in {"admin", "manager"} or candidate.owner_hr_id == user.id
+
+
+def can_access_attachment(user, attachment):
+    if not attachment:
+        return False
+    return user.role in {"admin", "manager"} or attachment.owner_hr_id == user.id
 
 def with_permissions(user):
     data = user.to_dict()
@@ -7677,6 +7722,7 @@ def record_login_failure(key):
 def public_interview_rate_limit(token):
     limit = max(1, int(current_app.config.get("PUBLIC_INTERVIEW_MAX_REQUESTS_PER_MINUTE", 60)))
     now = time()
+    prune_public_interview_buckets(now, int(current_app.config.get("PUBLIC_INTERVIEW_RATE_LIMIT_MAX_BUCKETS", 10000)))
     token_fingerprint = hashlib.sha256(str(token or "").encode("utf-8")).hexdigest()[:16]
     key = f"{token_fingerprint}|{request.remote_addr or 'unknown'}"
     bucket = PUBLIC_INTERVIEW_REQUESTS.setdefault(key, [])
@@ -7687,6 +7733,18 @@ def public_interview_rate_limit(token):
     bucket.append(now)
     return None
 
+
+def prune_public_interview_buckets(now, max_buckets):
+    if len(PUBLIC_INTERVIEW_REQUESTS) <= max_buckets:
+        return
+    for key in list(PUBLIC_INTERVIEW_REQUESTS):
+        bucket = [item for item in PUBLIC_INTERVIEW_REQUESTS[key] if now - item < 60]
+        if bucket:
+            PUBLIC_INTERVIEW_REQUESTS[key] = bucket
+        else:
+            PUBLIC_INTERVIEW_REQUESTS.pop(key, None)
+    while len(PUBLIC_INTERVIEW_REQUESTS) > max_buckets:
+        PUBLIC_INTERVIEW_REQUESTS.pop(next(iter(PUBLIC_INTERVIEW_REQUESTS)), None)
 
 def validate_public_interview_payload(payload, complete=False):
     payload = payload or {}

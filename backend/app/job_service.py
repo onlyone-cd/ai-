@@ -114,11 +114,11 @@ def infer_requirement_lines(text, markers):
     return [line for line in lines if any(marker in line for marker in markers)][:8]
 
 
-def preview_matches(job, limit=None):
+def preview_matches(job, limit=None, candidates=None):
     results = []
     structured = ensure_jd_structured(job)
     weights = get_matching_weights()
-    for candidate in Candidate.query.all():
+    for candidate in (candidates if candidates is not None else Candidate.query.all()):
         reason = match_candidate(
             structured.get("skill_tags_raw"),
             [tag.to_dict() for tag in candidate.tags],
@@ -149,10 +149,16 @@ FINAL_TOP_AI_REVIEW_LIMIT = 5
 MAX_AI_REVIEW_CALLS = 8
 
 
-def persist_matches(db, job, ai_review_limit=DEFAULT_AI_REVIEW_LIMIT, match_limit=DEFAULT_MATCH_LIMIT):
+def persist_matches(db, job, ai_review_limit=DEFAULT_AI_REVIEW_LIMIT, match_limit=DEFAULT_MATCH_LIMIT, candidates=None):
     results = []
-    Match.query.filter_by(job_id=job.id).delete()
-    preview_items = preview_matches(job, limit=match_limit)
+    candidate_items = list(candidates) if candidates is not None else None
+    if candidate_items is None:
+        Match.query.filter_by(job_id=job.id).delete()
+    else:
+        candidate_ids = [candidate.id for candidate in candidate_items]
+        if candidate_ids:
+            Match.query.filter(Match.job_id == job.id, Match.candidate_id.in_(candidate_ids)).delete(synchronize_session=False)
+    preview_items = preview_matches(job, limit=match_limit, candidates=candidate_items)
     reviewed_items = ai_review_matches(job, preview_items, limit=ai_review_limit)
     for item in reviewed_items:
         match = Match(job_id=job.id, candidate_id=item["candidate_id"], score=item["score"], reason=item["reason"])
@@ -162,7 +168,6 @@ def persist_matches(db, job, ai_review_limit=DEFAULT_AI_REVIEW_LIMIT, match_limi
     db.session.commit()
     results.sort(key=lambda item: item["score"], reverse=True)
     return results
-
 
 def ai_review_matches(job, items, limit=None):
     if not llm_available():

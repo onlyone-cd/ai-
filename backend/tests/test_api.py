@@ -996,6 +996,7 @@ def test_list_endpoints_return_pagination_meta(client, admin_headers):
     assert candidate_data["limit"] == 2
     assert candidate_data["offset"] == 1
     assert candidate_data["has_more"] is True
+    assert sum(item["count"] for item in candidate_data["experience_stats"]) == candidate_data["total"]
 
     jobs = client.get("/api/jobs?limit=1", headers=admin_headers)
     assert jobs.status_code == 200
@@ -1057,7 +1058,17 @@ def test_sensitive_candidate_and_export_permissions(client, admin_headers, recru
     login = client.post("/api/auth/login", json={"username": "interviewer_only", "password": "Pass1234"})
     interviewer_headers = {"Authorization": f"Bearer {login.get_json()['data']['token']}"}
 
-    assert client.get("/api/candidates", headers=recruiter_headers).status_code == 200
+    recruiter_candidates = client.get("/api/candidates", headers=recruiter_headers)
+    assert recruiter_candidates.status_code == 200
+    recruiter_candidate_ids = {item["id"] for item in recruiter_candidates.get_json()["data"]["items"]}
+    assert 3 not in recruiter_candidate_ids
+    assert client.get("/api/candidates/3", headers=recruiter_headers).status_code == 403
+    assert client.patch("/api/candidates/3", headers=recruiter_headers, json={"city": "上海"}).status_code == 403
+    assert client.put("/api/candidates/3/tags", headers=recruiter_headers, json={"tags": [{"tag": "Python", "score": 3}]}).status_code == 403
+    assert client.delete("/api/candidates/3", headers=recruiter_headers).status_code == 403
+    assert client.get("/api/candidates/3/resume.txt", headers=recruiter_headers).status_code == 403
+    match_preview = client.get("/api/jobs/1/match-preview", headers=recruiter_headers).get_json()["data"]["items"]
+    assert 3 not in {item["candidate_id"] for item in match_preview}
     assert client.get("/api/candidates/1", headers=interviewer_headers).status_code == 403
     assert client.get("/api/candidates/1/resume.txt", headers=interviewer_headers).status_code == 403
 
@@ -1065,7 +1076,6 @@ def test_sensitive_candidate_and_export_permissions(client, admin_headers, recru
     admin_export = client.get("/api/exports/candidates.csv", headers=admin_headers)
     assert recruiter_export.status_code == 403
     assert admin_export.status_code == 200
-
 
 def test_employee_salary_is_masked_for_recruiter(client, admin_headers, recruiter_headers):
     created = client.post(
@@ -1097,6 +1107,9 @@ def test_sensitive_module_permissions_for_interviewer(client, admin_headers, rec
     interviewer_headers = {"Authorization": f"Bearer {login.get_json()['data']['token']}"}
 
     protected_gets = [
+        "/api/jobs",
+        "/api/jobs/1",
+        "/api/jobs/1/match-preview",
         "/api/offers",
         "/api/offers/1",
         "/api/offers/1/letter.txt",
@@ -1114,13 +1127,15 @@ def test_sensitive_module_permissions_for_interviewer(client, admin_headers, rec
         response = client.get(path, headers=interviewer_headers)
         assert response.status_code == 403, path
 
+    match = client.post("/api/jobs/1/match", headers=interviewer_headers)
+    assert match.status_code == 403
+
     chat = client.post("/api/agent/chat", headers=interviewer_headers, json={"message": "现在人才库有多少人"})
     assert chat.status_code == 403
 
     assert client.get("/api/bi/overview", headers=recruiter_headers).status_code == 200
     assert client.get("/api/boss/status", headers=recruiter_headers).status_code == 200
     assert client.get("/api/agent/tools", headers=recruiter_headers).status_code == 200
-
 
 def test_accounting_job_matches_accounting_candidate_first(client, admin_headers):
     jobs = client.get("/api/jobs", headers=admin_headers).get_json()["data"]["items"]

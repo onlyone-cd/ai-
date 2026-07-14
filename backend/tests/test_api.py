@@ -709,6 +709,55 @@ def test_internal_talent_organization_employee_analysis_and_recommendations(clie
     assert compensation["salary_annual_k"] == 372
     assert compensation["source"] == "import"
 
+    transfer_unit = client.post(
+        "/api/organization/units",
+        headers=admin_headers,
+        json={"parent_id": root["id"], "name": "平台架构部", "unit_type": "department"},
+    ).get_json()["data"]
+    transfer_job = client.post(
+        "/api/jobs",
+        headers=admin_headers,
+        json={
+            "title": "内部平台架构师",
+            "city": "长沙",
+            "department": "平台架构部",
+            "status": "active",
+            "jd_text": "负责 Java 微服务平台架构，薪资 25-35K，要求 Spring Boot、MySQL、Redis、Kubernetes。",
+            "skill_tags_raw": "Java 5\nSpring Boot 5\nMySQL 4\nRedis 4\nKubernetes 3",
+        },
+    ).get_json()["data"]
+    patched = client.patch(
+        f"/api/employees/{employee['id']}",
+        headers=admin_headers,
+        json={
+            "organization_unit_id": transfer_unit["id"],
+            "current_job_id": transfer_job["id"],
+            "level": "P7",
+            "salary_monthly_k": 28,
+            "salary_months": 13,
+        },
+    )
+    assert patched.status_code == 200
+    patched_employee = patched.get_json()["data"]
+    assert patched_employee["organization_unit"]["name"] == "平台架构部"
+    assert patched_employee["department"] == "平台架构部"
+    assert patched_employee["current_job"]["title"] == "内部平台架构师"
+    assert patched_employee["current_title"] == "内部平台架构师"
+    assert patched_employee["compensation"]["salary_monthly_k"] == 28
+
+    resume_file = BytesIO("姓名：内部员工简历\n电话：13800007777\n邮箱：internal-resume@example.com\n6 年 Java 后端与平台架构经验，熟悉 Spring Boot、MySQL、Redis、Kubernetes。".encode("utf-8"))
+    resume_upload = client.post(
+        f"/api/employees/{employee['id']}/resume",
+        headers=admin_headers,
+        data={"file": (resume_file, "employee-resume.txt")},
+        content_type="multipart/form-data",
+    )
+    assert resume_upload.status_code == 200
+    resume_employee = resume_upload.get_json()["data"]
+    assert resume_employee["candidate_id"]
+    assert "Kubernetes" in resume_employee["raw_text"]
+    assert resume_employee["parse_status"] == "ok"
+
     assert AuditLog.query.filter_by(target_type="employee", target_id=employee["id"]).count() >= 2
 
 

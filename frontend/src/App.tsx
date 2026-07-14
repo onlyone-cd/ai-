@@ -4392,11 +4392,37 @@ function EmployeeDetailPage({ employee, onBack, onChanged, backLabel = "返回�
   const [analysis, setAnalysis] = useState<EmployeeAnalysis | null>(employee.analyses?.[0] || null);
   const [transfer, setTransfer] = useState<EmployeeRecommendation[]>([]);
   const [replacement, setReplacement] = useState<EmployeeRecommendation[]>([]);
+  const [editOpen, setEditOpen] = useState(false);
+  const [units, setUnits] = useState<OrganizationUnit[]>([]);
+  const [jobs, setJobs] = useState<Job[]>([]);
+  const [editForm, setEditForm] = useState({
+    name: employee.name || "",
+    employee_no: employee.employee_no || "",
+    phone: employee.phone || "",
+    email: employee.email || "",
+    organization_unit_id: employee.organization_unit_id || 0,
+    current_job_id: employee.current_job_id || 0,
+    current_title: employee.current_title || "",
+    level: employee.level || "",
+    city: employee.city || "",
+    employment_status: employee.employment_status || "active",
+    hire_date: employee.hire_date || "",
+    birth_date: employee.birth_date || "",
+    education: employee.education || "",
+    graduation_school: employee.graduation_school || "",
+    graduation_date: employee.graduation_date || "",
+    manager_name: employee.manager_name || "",
+    salary_monthly_k: employee.compensation?.salary_monthly_k ? String(employee.compensation.salary_monthly_k) : "",
+    salary_annual_k: employee.compensation?.salary_annual_k ? String(employee.compensation.salary_annual_k) : "",
+    salary_months: employee.compensation?.salary_months ? String(employee.compensation.salary_months) : "12",
+    bonus_k: employee.compensation?.bonus_k ? String(employee.compensation.bonus_k) : ""
+  });
   const [busy, setBusy] = useState(false);
   const resume = detail.resume_json || detail.candidate?.resume_json || {};
   const experiences = resumeArray(resume, "experience");
   const projects = resumeArray(resume, "projects");
   const education = resumeArray(resume, "education");
+  const flatUnits = useMemo(() => flattenOrganizationUnits(units), [units]);
 
   useEffect(() => {
     api.getEmployee(employee.id).then((data) => {
@@ -4405,14 +4431,90 @@ function EmployeeDetailPage({ employee, onBack, onChanged, backLabel = "返回�
     });
   }, [employee.id]);
 
+  async function reloadDetail() {
+    const fresh = await api.getEmployee(detail.id);
+    setDetail(fresh);
+    setAnalysis(fresh.analyses?.[0] || null);
+    onChanged(fresh);
+    return fresh;
+  }
+
+  async function openEdit() {
+    const [tree, jobData, fresh] = await Promise.all([
+      api.organizationTree(),
+      api.jobs({ scope: "all" }),
+      api.getEmployee(detail.id)
+    ]);
+    setUnits(tree.items);
+    setJobs(jobData.items);
+    setDetail(fresh);
+    setEditForm({
+      name: fresh.name || "",
+      employee_no: fresh.employee_no || "",
+      phone: fresh.phone || "",
+      email: fresh.email || "",
+      organization_unit_id: fresh.organization_unit_id || 0,
+      current_job_id: fresh.current_job_id || 0,
+      current_title: fresh.current_title || "",
+      level: fresh.level || "",
+      city: fresh.city || "",
+      employment_status: fresh.employment_status || "active",
+      hire_date: fresh.hire_date || "",
+      birth_date: fresh.birth_date || "",
+      education: fresh.education || "",
+      graduation_school: fresh.graduation_school || "",
+      graduation_date: fresh.graduation_date || "",
+      manager_name: fresh.manager_name || "",
+      salary_monthly_k: fresh.compensation?.salary_monthly_k ? String(fresh.compensation.salary_monthly_k) : "",
+      salary_annual_k: fresh.compensation?.salary_annual_k ? String(fresh.compensation.salary_annual_k) : "",
+      salary_months: fresh.compensation?.salary_months ? String(fresh.compensation.salary_months) : "12",
+      bonus_k: fresh.compensation?.bonus_k ? String(fresh.compensation.bonus_k) : ""
+    });
+    setEditOpen(true);
+  }
+
+  async function saveEmployeeEdit(event: React.FormEvent) {
+    event.preventDefault();
+    setBusy(true);
+    try {
+      const updated = await api.updateEmployee(detail.id, {
+        ...editForm,
+        organization_unit_id: editForm.organization_unit_id || null,
+        current_job_id: editForm.current_job_id || null
+      });
+      setDetail(updated);
+      setAnalysis(updated.analyses?.[0] || null);
+      onChanged(updated);
+      setEditOpen(false);
+      notify("success", "员工岗位、部门和薪资已更新");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function uploadSingleResume(files: FileList | null) {
+    const file = files?.[0];
+    if (!file) return;
+    setBusy(true);
+    try {
+      const updated = await api.uploadEmployeeResume(detail.id, file);
+      setDetail(updated);
+      setAnalysis(updated.analyses?.[0] || null);
+      setTransfer([]);
+      setReplacement([]);
+      onChanged(updated);
+      notify("success", "员工简历已解析，标签和档案已更新");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function runAnalysis() {
     setBusy(true);
     try {
       const data = await api.analyzeEmployeeCurrentJob(detail.id);
       setAnalysis(data);
-      const fresh = await api.getEmployee(detail.id);
-      setDetail(fresh);
-      onChanged(fresh);
+      await reloadDetail();
     } finally {
       setBusy(false);
     }
@@ -4446,6 +4548,15 @@ function EmployeeDetailPage({ employee, onBack, onChanged, backLabel = "返回�
             <ArrowLeft size={17} />
             {backLabel}
           </button>
+          <button className="secondary-button" onClick={openEdit}>
+            <UserCog size={17} />
+            编辑岗位/薪资/部门
+          </button>
+          <label className={`secondary-button cursor-pointer ${busy ? "opacity-60" : ""}`}>
+            <Upload size={17} />
+            上传员工简历
+            <input className="hidden" type="file" accept=".txt,.md,.docx,.pdf" disabled={busy} onChange={(event) => uploadSingleResume(event.target.files)} />
+          </label>
           <button className="primary-button" onClick={runAnalysis} disabled={busy}>
             <Sparkles size={17} />
             当前岗位/薪资分析
@@ -4484,6 +4595,62 @@ function EmployeeDetailPage({ employee, onBack, onChanged, backLabel = "返回�
           </div>
         </div>
       </div>
+
+      {editOpen && (
+        <div className="modal-backdrop" onClick={() => setEditOpen(false)}>
+          <form className="modal-panel max-w-3xl" onSubmit={saveEmployeeEdit} onClick={(event) => event.stopPropagation()}>
+            <div className="modal-head">
+              <div>
+                <h2 className="font-semibold">编辑员工档案</h2>
+                <p>维护员工当前岗位、部门、薪资和基础信息；保存后会用于调岗匹配与薪资合理性分析。</p>
+              </div>
+              <button className="icon-button" type="button" onClick={() => setEditOpen(false)}>
+                <X size={16} />
+              </button>
+            </div>
+            <div className="mt-4 grid gap-3 md:grid-cols-2">
+              <input className="input" placeholder="姓名" value={editForm.name} onChange={(event) => setEditForm({ ...editForm, name: event.target.value })} />
+              <input className="input" placeholder="员工编号" value={editForm.employee_no} onChange={(event) => setEditForm({ ...editForm, employee_no: event.target.value })} />
+              <input className="input" placeholder="手机号" value={editForm.phone} onChange={(event) => setEditForm({ ...editForm, phone: event.target.value })} />
+              <input className="input" placeholder="邮箱" value={editForm.email} onChange={(event) => setEditForm({ ...editForm, email: event.target.value })} />
+              <select className="select w-full" value={editForm.organization_unit_id} onChange={(event) => setEditForm({ ...editForm, organization_unit_id: Number(event.target.value) })}>
+                <option value={0}>未分配部门</option>
+                {flatUnits.map((unit) => <option key={unit.id} value={unit.id}>{"　".repeat(unit.depth)}{unit.name}</option>)}
+              </select>
+              <select className="select w-full" value={editForm.current_job_id} onChange={(event) => setEditForm({ ...editForm, current_job_id: Number(event.target.value) })}>
+                <option value={0}>不绑定岗位，仅填写岗位名称</option>
+                {jobs.map((job) => <option key={job.id} value={job.id}>{job.title} · {job.department || "未填部门"}</option>)}
+              </select>
+              <input className="input" placeholder="当前岗位/职位" value={editForm.current_title} onChange={(event) => setEditForm({ ...editForm, current_title: event.target.value })} />
+              <input className="input" placeholder="职级" value={editForm.level} onChange={(event) => setEditForm({ ...editForm, level: event.target.value })} />
+              <input className="input" placeholder="城市" value={editForm.city} onChange={(event) => setEditForm({ ...editForm, city: event.target.value })} />
+              <select className="select w-full" value={editForm.employment_status} onChange={(event) => setEditForm({ ...editForm, employment_status: event.target.value })}>
+                <option value="active">在职</option>
+                <option value="transfer">调岗中</option>
+                <option value="leaving">待离职</option>
+                <option value="departed">离职</option>
+              </select>
+              <input className="input" type="date" value={editForm.hire_date} onChange={(event) => setEditForm({ ...editForm, hire_date: event.target.value })} />
+              <input className="input" type="date" value={editForm.birth_date} onChange={(event) => setEditForm({ ...editForm, birth_date: event.target.value })} />
+              <input className="input" placeholder="学历" value={editForm.education} onChange={(event) => setEditForm({ ...editForm, education: event.target.value })} />
+              <input className="input" placeholder="毕业院校" value={editForm.graduation_school} onChange={(event) => setEditForm({ ...editForm, graduation_school: event.target.value })} />
+              <input className="input" type="date" value={editForm.graduation_date} onChange={(event) => setEditForm({ ...editForm, graduation_date: event.target.value })} />
+              <input className="input" placeholder="直属主管" value={editForm.manager_name} onChange={(event) => setEditForm({ ...editForm, manager_name: event.target.value })} />
+              <input className="input" placeholder="月薪 K" value={editForm.salary_monthly_k} onChange={(event) => setEditForm({ ...editForm, salary_monthly_k: event.target.value })} />
+              <input className="input" placeholder="年包 K" value={editForm.salary_annual_k} onChange={(event) => setEditForm({ ...editForm, salary_annual_k: event.target.value })} />
+              <input className="input" placeholder="薪资月数" value={editForm.salary_months} onChange={(event) => setEditForm({ ...editForm, salary_months: event.target.value })} />
+              <input className="input" placeholder="奖金 K" value={editForm.bonus_k} onChange={(event) => setEditForm({ ...editForm, bonus_k: event.target.value })} />
+            </div>
+            <div className="mt-4 flex justify-end gap-2">
+              <button className="secondary-button" type="button" onClick={() => setEditOpen(false)}>取消</button>
+              <button className="primary-button" disabled={busy} type="submit">
+                <Check size={17} />
+                保存员工档案
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
 
       <div className="resume-layout">
         <main className="resume-main">

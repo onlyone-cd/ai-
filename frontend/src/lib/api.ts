@@ -791,6 +791,11 @@ export const api = {
     request<EmployeeProfile>("/employees/from-candidate", { method: "POST", body: JSON.stringify(payload) }),
   updateEmployee: (id: number, payload: Partial<EmployeeProfile> & { salary_monthly_k?: string | number; salary_annual_k?: string | number; salary_months?: string | number; bonus_k?: string | number }) =>
     request<EmployeeProfile>(`/employees/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
+  uploadEmployeeResume: (id: number, file: File) => {
+    const formData = new FormData();
+    formData.append("file", file);
+    return upload<EmployeeProfile>(`/employees/${id}/resume`, formData);
+  },
   importEmployees: (file: File) => {
     const formData = new FormData();
     formData.append("file", file);

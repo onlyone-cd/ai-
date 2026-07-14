@@ -1179,6 +1179,31 @@ def get_employee(user, employee_id):
     return ok(employee_payload(employee, user, detail=True))
 
 
+@api.post("/employees/<int:employee_id>/resume")
+@login_required
+@roles_required("admin", "manager", "recruiter")
+def upload_employee_resume(user, employee_id):
+    employee = db.session.get(EmployeeProfile, employee_id)
+    if not employee:
+        return error("员工不存在", "NOT_FOUND", 404)
+    file = request.files.get("file")
+    if not file:
+        return error("请上传该员工的简历文件")
+    try:
+        batch, candidate = parse_and_save_resume(file, user)
+    except ValueError as exc:
+        return error(str(exc))
+    existing = EmployeeProfile.query.filter(EmployeeProfile.candidate_id == candidate.id, EmployeeProfile.id != employee.id).first()
+    if existing:
+        return error(f"该简历已关联员工 {existing.name}，请确认是否上传错人", "EMPLOYEE_RESUME_DUPLICATE", 409)
+    sync_employee_resume_from_candidate(employee, candidate)
+    EmployeeAnalysis.query.filter_by(employee_id=employee.id).delete()
+    EmployeeRecommendation.query.filter_by(employee_id=employee.id).delete()
+    audit_log(user, "upload", "employee_resume", employee.id, employee.name, {"candidate_id": candidate.id, "batch_id": batch.id})
+    db.session.commit()
+    return ok(employee_payload(employee, user, detail=True), "员工简历已解析并更新档案")
+
+
 @api.post("/employees/from-candidate")
 @login_required
 @roles_required("admin", "manager", "recruiter")
@@ -1212,9 +1237,26 @@ def update_employee(user, employee_id):
     for field in ["employee_no", "name", "phone", "email", "department", "current_title", "level", "city", "employment_status", "manager_name", "education", "graduation_school"]:
         if field in payload:
             setattr(employee, field, str(payload.get(field) or "").strip())
-    for field in ["organization_unit_id", "current_job_id"]:
-        if field in payload:
-            setattr(employee, field, payload.get(field) or None)
+    if "organization_unit_id" in payload:
+        unit_id = payload.get("organization_unit_id") or None
+        if unit_id:
+            unit = db.session.get(OrganizationUnit, int(unit_id))
+            if not unit:
+                return error("组织不存在", "NOT_FOUND", 404)
+            employee.organization_unit_id = unit.id
+            employee.department = unit.name
+        else:
+            employee.organization_unit_id = None
+    if "current_job_id" in payload:
+        job_id = payload.get("current_job_id") or None
+        if job_id:
+            job = db.session.get(Job, int(job_id))
+            if not job:
+                return error("岗位不存在", "NOT_FOUND", 404)
+            employee.current_job_id = job.id
+            employee.current_title = job.title
+        else:
+            employee.current_job_id = None
     if "hire_date" in payload:
         employee.hire_date = parse_date(payload.get("hire_date"))
     if "birth_date" in payload:
@@ -7220,6 +7262,42 @@ def employee_from_candidate_record(candidate, user, unit, job=None, payload=None
     db.session.add(employee)
     db.session.flush()
     return employee, True
+
+
+def sync_employee_resume_from_candidate(employee, candidate):
+    employee.candidate_id = candidate.id
+    employee.raw_text = candidate.raw_text or employee.raw_text or ""
+    employee.resume_json = candidate.resume_json or employee.resume_json or {}
+    employee.parse_status = candidate.parse_status or "ok"
+    if not employee.phone and candidate.phone_masked:
+        employee.phone = candidate.phone_masked
+    if not employee.email and candidate.email_masked:
+        employee.email = candidate.email_masked
+    if (not employee.city or employee.city == "未知") and candidate.city and candidate.city != "未知":
+        employee.city = candidate.city
+    if candidate.title and (not employee.current_title or employee.current_title in {"员工", "内部员工", "未知岗位", "未维护"}):
+        employee.current_title = candidate.title
+    education = first_resume_education(candidate.resume_json or {})
+    if education:
+        school = education.get("school") or education.get("name") or education.get("institution")
+        degree = education.get("degree") or education.get("education")
+        end_date = education.get("end") or education.get("graduation_date")
+        if school and not employee.graduation_school:
+            employee.graduation_school = str(school).strip()
+        if degree and not employee.education:
+            employee.education = str(degree).strip()
+        if end_date and not employee.graduation_date:
+            employee.graduation_date = parse_date(end_date)
+    employee.updated_at = datetime.now(timezone.utc)
+    return employee
+
+
+def first_resume_education(resume_json):
+    education = (resume_json or {}).get("education") or []
+    if isinstance(education, list) and education:
+        first = education[0]
+        return first if isinstance(first, dict) else {"school": str(first)}
+    return {}
 
 
 def parse_organization_xlsx(stream):

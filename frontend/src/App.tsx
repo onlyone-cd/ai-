@@ -2786,16 +2786,31 @@ function TasksPage({ setView }: { setView: (view: View) => void }) {
   const [tasks, setTasks] = useState<BackgroundTask[]>([]);
   const [counts, setCounts] = useState<Record<string, number>>({});
   const [status, setStatus] = useState("all");
+  const [taskTotal, setTaskTotal] = useState(0);
+  const [taskLimit, setTaskLimit] = useState(20);
+  const [taskOffset, setTaskOffset] = useState(0);
+  const [lastUpdatedAt, setLastUpdatedAt] = useState("");
+  const [autoRefresh, setAutoRefresh] = useState(true);
+  const [loadingTasks, setLoadingTasks] = useState(false);
   const [busyId, setBusyId] = useState<number | null>(null);
   const [opsStatus, setOpsStatus] = useState<OpsBackupStatus | null>(null);
   const [dataQuality, setDataQuality] = useState<OpsDataQuality | null>(null);
   const [deployGates, setDeployGates] = useState<OpsDeployGates | null>(null);
   const [opsBusy, setOpsBusy] = useState(false);
 
-  async function load(nextStatus = status) {
-    const data = await api.tasks(nextStatus);
-    setTasks(data.items);
-    setCounts(data.status_counts || {});
+  async function load(nextStatus = status, nextOffset = taskOffset, nextLimit = taskLimit, silent = false) {
+    if (!silent) setLoadingTasks(true);
+    try {
+      const data = await api.tasks({ status: nextStatus, offset: nextOffset, limit: nextLimit });
+      setTasks(data.items);
+      setCounts(data.status_counts || {});
+      setTaskTotal(data.total);
+      setTaskLimit(data.limit);
+      setTaskOffset(data.offset);
+      setLastUpdatedAt(new Date().toLocaleTimeString("zh-CN", { hour12: false }));
+    } finally {
+      if (!silent) setLoadingTasks(false);
+    }
   }
 
   async function loadOps() {
@@ -2806,15 +2821,29 @@ function TasksPage({ setView }: { setView: (view: View) => void }) {
   }
 
   useEffect(() => {
-    load(status);
+    load(status, 0, taskLimit);
     loadOps();
   }, [status]);
+
+  useEffect(() => {
+    if (!autoRefresh) return;
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === "visible") {
+        load(status, taskOffset, taskLimit, true).catch(() => undefined);
+      }
+    }, 3000);
+    return () => window.clearInterval(timer);
+  }, [autoRefresh, status, taskOffset, taskLimit]);
+
+  async function changeTaskPage(nextOffset: number, nextLimit = taskLimit) {
+    await load(status, nextOffset, nextLimit);
+  }
 
   async function retry(task: BackgroundTask) {
     setBusyId(task.id);
     try {
       await api.retryTask(task.id);
-      await load();
+      await load(status, taskOffset, taskLimit);
     } finally {
       setBusyId(null);
     }
@@ -2824,7 +2853,7 @@ function TasksPage({ setView }: { setView: (view: View) => void }) {
     setBusyId(task.id);
     try {
       await api.runTask(task.id);
-      await load(status);
+      await load(status, taskOffset, taskLimit);
     } finally {
       setBusyId(null);
     }
@@ -2834,14 +2863,13 @@ function TasksPage({ setView }: { setView: (view: View) => void }) {
     setOpsBusy(true);
     try {
       await api.createBackupExport();
-      await Promise.all([load(), loadOps()]);
+      await Promise.all([load(status, 0, taskLimit), loadOps()]);
     } finally {
       setOpsBusy(false);
     }
   }
 
   const statuses = ["all", "queued", "running", "succeeded", "failed"];
-  const pagedTasks = useClientPagination(tasks, 20);
   const totalRows = opsStatus ? Object.values(opsStatus.counts || {}).reduce((sum, value) => sum + Number(value || 0), 0) : 0;
   const moduleTarget: Record<string, View> = {
     "人才库": "candidates",
@@ -2860,9 +2888,13 @@ function TasksPage({ setView }: { setView: (view: View) => void }) {
           <select className="select" value={status} onChange={(event) => setStatus(event.target.value)}>
             {statuses.map((item) => <option value={item} key={item}>{taskStatusLabel(item)}{item !== "all" ? ` · ${counts[item] || 0}` : ""}</option>)}
           </select>
-          <button className="secondary-button" onClick={() => load()}>
+          <button className="secondary-button" onClick={() => setAutoRefresh((value) => !value)}>
+            <Clock3 size={17} />
+            {autoRefresh ? "实时刷新中" : "开启实时刷新"}
+          </button>
+          <button className="secondary-button" onClick={() => load(status, taskOffset, taskLimit)} disabled={loadingTasks}>
             <RefreshCw size={17} />
-            刷新
+            {loadingTasks ? "刷新中" : "刷新"}
           </button>
         </div>
       </div>
@@ -3015,8 +3047,20 @@ function TasksPage({ setView }: { setView: (view: View) => void }) {
       </div>
 
       <div className="data-panel">
+        <div className="data-panel-head">
+          <div>
+            <h2>任务队列</h2>
+            <p>每 3 秒自动同步最新状态；最近刷新 {lastUpdatedAt || "-"}。</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <span className="badge muted">排队 {counts.queued || 0}</span>
+            <span className="badge muted">运行 {counts.running || 0}</span>
+            <span className="badge success">完成 {counts.succeeded || 0}</span>
+            <span className="badge danger">失败 {counts.failed || 0}</span>
+          </div>
+        </div>
         <div className="data-list">
-        {pagedTasks.items.map((task) => (
+        {tasks.map((task) => (
           <div className="data-row flex-col items-start" key={task.id}>
             <div className="flex w-full flex-wrap items-start justify-between gap-3">
               <div className="min-w-0">
@@ -3051,7 +3095,7 @@ function TasksPage({ setView }: { setView: (view: View) => void }) {
         ))}
         {tasks.length === 0 && <EmptyState icon={<Database size={22} />} text="暂无后台任务" />}
         </div>
-        <PaginationControls total={tasks.length} limit={pagedTasks.limit} offset={pagedTasks.offset} onChange={pagedTasks.onChange} />
+        <PaginationControls total={taskTotal} limit={taskLimit} offset={taskOffset} onChange={changeTaskPage} />
       </div>
     </section>
   );

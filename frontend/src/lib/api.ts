@@ -733,7 +733,8 @@ export const api = {
   notificationLogs: (params?: { status?: string; event_type?: string; channel_id?: number }) => request<{ items: NotificationLog[] }>(`/notifications/logs${queryString(params)}`),
   sendTestNotification: (payload: { channel_id?: number; recipient?: string; subject?: string; content?: string }) =>
     request<{ log: NotificationLog }>("/notifications/send-test", { method: "POST", body: JSON.stringify(payload) }),
-  tasks: (status = "all") => request<{ items: BackgroundTask[]; status_counts: Record<string, number> }>(`/tasks?status=${status}`),
+  tasks: (params?: { status?: string; limit?: number; offset?: number; task_type?: string }) =>
+    request<{ items: BackgroundTask[]; status_counts: Record<string, number> } & PaginationMeta>(`/tasks${queryString({ status: params?.status || "all", limit: params?.limit, offset: params?.offset, task_type: params?.task_type, _ts: Date.now() })}`),
   retryTask: (id: number) => request<BackgroundTask>(`/tasks/${id}/retry`, { method: "POST" }),
   runTask: (id: number) => request<BackgroundTask>(`/tasks/${id}/run`, { method: "POST" }),
   opsBackupStatus: () => request<OpsBackupStatus>("/ops/backup/status"),

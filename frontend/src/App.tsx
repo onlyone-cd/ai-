@@ -4666,6 +4666,26 @@ function EmployeeDetailPage({ employee, onBack, onChanged, backLabel = "返回�
               <div className="mt-4 grid gap-2">
                 {(analysis.analysis.actions || []).map((action, index) => <div className="rounded-md bg-mint/10 px-3 py-2 text-sm text-ink" key={index}>{action}</div>)}
               </div>
+              {analysis.analysis.ai_review?.source === "deepseek" && (
+                <div className="mt-4 grid gap-3 md:grid-cols-2">
+                  <div className="rounded-md border border-line p-3">
+                    <p className="text-xs font-semibold text-steel">AI 证据链</p>
+                    <div className="mt-2 space-y-2">
+                      {(analysis.analysis.ai_review.evidence || []).slice(0, 5).map((item, index) => (
+                        <p className="text-sm text-ink" key={index}>• {item}</p>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="rounded-md border border-line p-3">
+                    <p className="text-xs font-semibold text-steel">规则修正与风险</p>
+                    <div className="mt-2 space-y-2">
+                      {[...(analysis.analysis.ai_review.rule_corrections || []), ...(analysis.analysis.ai_review.risks || [])].slice(0, 5).map((item, index) => (
+                        <p className="text-sm text-ink" key={index}>• {item}</p>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 

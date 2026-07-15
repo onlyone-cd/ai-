@@ -20,7 +20,7 @@ from sqlalchemy.exc import IntegrityError
 
 from . import db, production_config_checks
 from .auth import hash_password, issue_token, login_required, roles_required, validate_password_strength, verify_password
-from .job_service import ai_review_matches, build_jd_structured, ensure_jd_structured, persist_matches, preview_matches
+from .job_service import ai_review_matches, build_jd_structured, clamp_score, ensure_jd_structured, list_of_text, llm_failure_summary, persist_matches, preview_matches, truncate_text
 from .llm_client import LLMError, chat_json, llm_available, llm_status
 from .matching import match_candidate, parse_skill_tags
 from .models import AgentConversation, AgentMessage, AuditLog, BackgroundTask, BossAccount, BossDraft, BossSyncItem, BossSyncJob, Candidate, CandidateTag, EmployeeAnalysis, EmployeeCompensation, EmployeeProfile, EmployeeRecommendation, InterviewAssignment, InterviewFeedback, InterviewSpeechLog, Job, LLMUsage, Match, NotificationChannel, NotificationEvent, NotificationLog, OfferRecord, OrganizationUnit, PipelineStage, ResumeAttachment, UploadBatch, User, utcnow, years_between
@@ -1363,12 +1363,35 @@ def recommend_employee_transfer(user, employee_id):
     if not employee:
         return error("员工不存在", "NOT_FOUND", 404)
     EmployeeRecommendation.query.filter_by(employee_id=employee.id, recommendation_type="transfer").delete()
-    items = []
+    candidate_reasons = []
     for job in apply_job_scope(Job.query.filter_by(status="active"), "internal").order_by(Job.created_at.desc()).all():
         if job.id == employee.current_job_id:
             continue
         reason = match_employee_to_job(employee, job)
-        if reason["score"] < 50:
+        if reason["score"] < 40:
+            continue
+        candidate_reasons.append({"job": job, "reason": reason})
+    candidate_reasons.sort(key=lambda item: item["reason"]["score"], reverse=True)
+    items = []
+    for index, item in enumerate(candidate_reasons[:20]):
+        job = item["job"]
+        reason = item["reason"]
+        salary = analyze_employee_salary_for_job(employee, job, reason["score"])
+        if index < 5:
+            ai_review = apply_employee_ai_review(employee, job, reason, salary)
+            reason["ai_review"] = ai_review
+            reason["ai_score"] = ai_review.get("score")
+            reason["rule_score"] = ai_review.get("rule_score", reason["score"])
+            reason["final_score"] = ai_review.get("final_score", reason["score"])
+            reason["score_formula"] = ai_review.get("score_formula")
+            reason["salary"] = merge_employee_ai_salary(salary, ai_review)
+            reason["score"] = reason["final_score"]
+        else:
+            reason["ai_review"] = {"source": "rule_pending", "summary": "未进入本次调岗 AI 复核批次，当前为规则初排结果。"}
+            reason["rule_score"] = reason["score"]
+            reason["final_score"] = reason["score"]
+            reason["salary"] = salary
+        if reason["final_score"] < 40:
             continue
         recommendation = EmployeeRecommendation(employee_id=employee.id, recommendation_type="transfer", target_job_id=job.id, score=reason["score"], reason_json=reason)
         db.session.add(recommendation)
@@ -7383,8 +7406,11 @@ def match_employee_to_job(employee, job):
 
 
 def analyze_employee_salary(employee, match_score):
+    return analyze_employee_salary_for_job(employee, employee.current_job, match_score)
+
+
+def analyze_employee_salary_for_job(employee, job, match_score):
     compensation = employee.latest_compensation()
-    job = employee.current_job
     salary_range = (ensure_jd_structured(job).get("salary_range") if job else None) or None
     if not compensation or not compensation.salary_monthly_k:
         return {"score": 0, "status": "unknown", "label": "薪资数据不足", "summary": "员工未维护薪资，暂不能判断薪资合理性。"}
@@ -7413,35 +7439,161 @@ def analyze_employee_salary(employee, match_score):
 
 def analyze_employee_against_job(employee, job):
     fit = match_employee_to_job(employee, job)
-    salary = analyze_employee_salary(employee, fit["score"])
-    if fit["score"] >= 80 and salary["status"] == "low":
+    salary = analyze_employee_salary_for_job(employee, job, fit["score"])
+    ai_review = apply_employee_ai_review(employee, job, fit, salary)
+    match_score = ai_review.get("final_score", fit["score"])
+    salary = merge_employee_ai_salary(salary, ai_review)
+    if match_score >= 80 and salary["status"] == "low":
         risk = "retention"
-    elif fit["score"] < 50:
+    elif match_score < 50:
         risk = "job_mismatch"
-    elif fit["score"] < 60 and salary["status"] == "high":
+    elif match_score < 60 and salary["status"] == "high":
         risk = "cost_mismatch"
     else:
         risk = "normal"
+    fit["ai_review"] = ai_review
+    fit["ai_score"] = ai_review.get("score")
+    fit["rule_score"] = ai_review.get("rule_score", fit["score"])
+    fit["final_score"] = match_score
+    fit["score_formula"] = ai_review.get("score_formula")
     payload = {
-        "summary": f"{fit['summary']} {salary['summary']}",
+        "summary": ai_review.get("summary") or f"{fit['summary']} {salary['summary']}",
         "job_fit": fit,
         "salary": salary,
-        "actions": employee_analysis_actions(fit["score"], salary["status"], risk),
+        "actions": employee_analysis_actions(match_score, salary["status"], risk, ai_review),
+        "ai_review": ai_review,
     }
     return EmployeeAnalysis(
         employee_id=employee.id,
         job_id=job.id if job else None,
-        match_score=fit["score"],
+        match_score=match_score,
         salary_score=salary["score"],
         salary_status=salary["status"],
         risk_level=risk,
         analysis_json=payload,
-        source="rules",
+        source=ai_review.get("source") if ai_review.get("source") == "deepseek" else "rules",
     )
 
 
-def employee_analysis_actions(match_score, salary_status, risk):
+def apply_employee_ai_review(employee, job, fit, salary):
+    rule_score = int(fit.get("score") or 0)
+    if not job:
+        return {"source": "disabled", "summary": "员工未绑定岗位，无法进行 AI 深度复核。", "rule_score": rule_score, "final_score": rule_score, "score": None}
+    if not llm_available():
+        return {
+            "source": "disabled",
+            "summary": "DeepSeek 未启用，当前为规则匹配 + 薪资区间分析。",
+            "rule_score": rule_score,
+            "final_score": rule_score,
+            "score": None,
+            "evidence": [],
+            "rule_corrections": [],
+        }
+    weights = get_matching_weights()
+    try:
+        review = request_employee_ai_review(employee, job, fit, salary)
+        ai_score = clamp_score(review.get("score"), rule_score)
+        final_score = round(rule_score * int(weights.get("rule", 35)) / 100 + ai_score * int(weights.get("ai", 65)) / 100)
+        normalized = normalize_employee_ai_review(review, salary)
+        normalized["source"] = "deepseek"
+        normalized["score"] = ai_score
+        normalized["rule_score"] = rule_score
+        normalized["final_score"] = final_score
+        normalized["score_formula"] = f"final_score=round(rule_score*{weights.get('rule', 35)}% + ai_score*{weights.get('ai', 65)}%); employee_ai_review=JD+完整简历+薪资"
+        return normalized
+    except LLMError as exc:
+        return {
+            "source": "failed",
+            "summary": llm_failure_summary(exc),
+            "error": str(exc)[:300],
+            "rule_score": rule_score,
+            "final_score": rule_score,
+            "score": None,
+            "evidence": [],
+            "rule_corrections": [],
+        }
+
+
+def request_employee_ai_review(employee, job, fit, salary):
+    structured = ensure_jd_structured(job)
+    compensation = employee.latest_compensation()
+    salary_text = "未维护"
+    if compensation and compensation.salary_monthly_k:
+        salary_text = f"{compensation.salary_monthly_k:g}K * {compensation.salary_months}薪"
+    elif compensation and compensation.salary_annual_k:
+        salary_text = f"年包 {compensation.salary_annual_k:g}K"
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "你是公司内部人才盘点和薪酬匹配顾问。请同时阅读岗位 JD、员工完整简历、规则标签命中、当前薪资和岗位薪资区间，"
+                "判断员工是否适合当前岗位或目标调岗岗位，并判断薪资是否合理。不能只看关键词，必须给出简历原文证据、JD 对齐点、薪资风险和规则误判修正。"
+                "输出 JSON：{\"score\":0-100,\"recommendation\":\"强烈匹配/匹配/可培养/不匹配\","
+                "\"summary\":\"\",\"strengths\":[\"\"],\"risks\":[\"\"],\"evidence\":[\"\"],\"rule_corrections\":[\"\"],"
+                "\"salary\":{\"score\":0-100,\"status\":\"low/high/reasonable/unknown\",\"summary\":\"\"},\"actions\":[\"\"]}。"
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"员工：{employee.name} / {employee.current_title} / {employee.organization_unit.name if employee.organization_unit else employee.department or ''}\n"
+                f"员工标签：{[tag.to_dict() for tag in employee.tags()]}\n"
+                f"当前薪资：{salary_text}\n"
+                f"岗位：{job.title}\n"
+                f"岗位部门：{job.department or ''}\n"
+                f"岗位 JD：\n{truncate_text(job.jd_text, 5000)}\n\n"
+                f"JD 结构化要求：{structured}\n"
+                f"规则匹配结果：{fit}\n"
+                f"规则薪资分析：{salary}\n\n"
+                f"员工完整简历：\n{truncate_text(employee.raw_text or (employee.resume_json or {}).get('summary') or '', 8000)}"
+            ),
+        },
+    ]
+    return chat_json(messages, temperature=0.1, timeout=10, source="employee_analysis", tool_name="employee_ai_review")
+
+
+def normalize_employee_ai_review(review, salary):
+    salary_review = review.get("salary") if isinstance(review.get("salary"), dict) else {}
+    return {
+        "source": review.get("source") or "deepseek",
+        "score": clamp_score(review.get("score"), 0),
+        "recommendation": str(review.get("recommendation") or ""),
+        "summary": str(review.get("summary") or ""),
+        "strengths": list_of_text(review.get("strengths"))[:5],
+        "risks": list_of_text(review.get("risks"))[:5],
+        "evidence": list_of_text(review.get("evidence"))[:6],
+        "rule_corrections": list_of_text(review.get("rule_corrections"))[:5],
+        "actions": list_of_text(review.get("actions"))[:5],
+        "salary": {
+            "score": clamp_score(salary_review.get("score"), salary.get("score", 0)),
+            "status": normalize_salary_status(salary_review.get("status"), salary.get("status")),
+            "summary": str(salary_review.get("summary") or salary.get("summary") or ""),
+        },
+    }
+
+
+def normalize_salary_status(value, fallback):
+    status = str(value or "").strip().lower()
+    if status in {"low", "high", "reasonable", "unknown"}:
+        return status
+    return fallback or "unknown"
+
+
+def merge_employee_ai_salary(salary, ai_review):
+    if ai_review.get("source") != "deepseek":
+        return salary
+    ai_salary = ai_review.get("salary") or {}
+    merged = dict(salary)
+    merged["score"] = clamp_score(ai_salary.get("score"), salary.get("score", 0))
+    merged["status"] = normalize_salary_status(ai_salary.get("status"), salary.get("status"))
+    if ai_salary.get("summary"):
+        merged["summary"] = ai_salary["summary"]
+    return merged
+
+
+def employee_analysis_actions(match_score, salary_status, risk, ai_review=None):
     actions = []
+    ai_review = ai_review or {}
     if match_score >= 85:
         actions.append("列入高匹配人才池，可作为关键岗位继任或保留对象。")
     elif match_score < 50:
@@ -7454,6 +7606,7 @@ def employee_analysis_actions(match_score, salary_status, risk):
         actions.append("建议复核薪资与岗位产出是否匹配。")
     if risk == "retention":
         actions.append("建议主管或 HRBP 主动沟通保留意愿。")
+    actions.extend(list_of_text(ai_review.get("actions"))[:3])
     return actions
 
 

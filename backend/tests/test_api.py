@@ -567,7 +567,7 @@ def test_user_password_must_be_strong(client, admin_headers):
     assert updated.get_json()["code"] == "WEAK_PASSWORD"
 
 
-def test_internal_talent_organization_employee_analysis_and_recommendations(client, admin_headers):
+def test_internal_talent_organization_employee_analysis_and_recommendations(client, admin_headers, app, monkeypatch):
     tree = client.get("/api/organization/tree", headers=admin_headers)
     assert tree.status_code == 200
     root = tree.get_json()["data"]["items"][0]
@@ -658,11 +658,38 @@ def test_internal_talent_organization_employee_analysis_and_recommendations(clie
     assert department_employees.status_code == 200
     assert department_employees.get_json()["data"]["items"][0]["id"] == employee["id"]
 
+    app.config["LLM_ENABLED"] = True
+    app.config["DEEPSEEK_API_KEY"] = "test-key"
+    ai_calls = []
+
+    def fake_employee_chat_json(messages, **kwargs):
+        ai_calls.append({"messages": messages, "kwargs": kwargs})
+        assert "员工完整简历" in messages[-1]["content"]
+        assert "规则薪资分析" in messages[-1]["content"]
+        return {
+            "score": 88,
+            "recommendation": "匹配",
+            "summary": "AI 阅读完整简历和 JD 后判断，员工与 Java 后端岗位匹配，薪资偏低需要复核。",
+            "strengths": ["Java 后端经验与 JD 对齐"],
+            "risks": ["薪资低于岗位区间下限"],
+            "evidence": ["简历中出现 Spring Boot、MySQL、Redis 项目经验"],
+            "rule_corrections": ["规则标签命中有效，未发现明显噪音"],
+            "salary": {"score": 72, "status": "low", "summary": "当前 18K 低于 20-30K 岗位区间。"},
+            "actions": ["建议 HRBP 复核薪资并制定保留方案"],
+        }
+
+    monkeypatch.setattr("app.routes.chat_json", fake_employee_chat_json)
+
     analysis = client.post(f"/api/employees/{employee['id']}/analyze-current-job", headers=admin_headers)
     assert analysis.status_code == 200
     analysis_data = analysis.get_json()["data"]
-    assert analysis_data["match_score"] >= 50
+    assert analysis_data["match_score"] >= 88
     assert analysis_data["salary_status"] == "low"
+    assert analysis_data["salary_score"] == 72
+    assert analysis_data["source"] == "deepseek"
+    assert analysis_data["analysis"]["ai_review"]["source"] == "deepseek"
+    assert analysis_data["analysis"]["ai_review"]["score"] == 88
+    assert analysis_data["analysis"]["ai_review"]["evidence"]
 
     batch_analysis = client.post("/api/employees/batch-analyze", headers=admin_headers, json={"organization_unit_id": unit["id"]})
     assert batch_analysis.status_code == 200
@@ -673,6 +700,7 @@ def test_internal_talent_organization_employee_analysis_and_recommendations(clie
     transfer = client.post(f"/api/employees/{employee['id']}/recommend-transfer", headers=admin_headers)
     assert transfer.status_code == 200
     assert "items" in transfer.get_json()["data"]
+    assert ai_calls
 
     replacement = client.post(f"/api/employees/{employee['id']}/recommend-replacement", headers=admin_headers)
     assert replacement.status_code == 200

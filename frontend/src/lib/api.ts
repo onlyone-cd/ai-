@@ -120,6 +120,17 @@ export type EmployeeAnalysis = {
     job_fit?: MatchResult["reason"] & { score: number; summary?: string };
     salary?: Record<string, unknown>;
     actions?: string[];
+    ai_review?: {
+      source?: string;
+      score?: number | null;
+      recommendation?: string;
+      summary?: string;
+      strengths?: string[];
+      risks?: string[];
+      evidence?: string[];
+      rule_corrections?: string[];
+      salary?: Record<string, unknown>;
+    };
   };
   source: string;
   created_at?: string;

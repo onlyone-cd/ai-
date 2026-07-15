@@ -1413,15 +1413,35 @@ def recommend_employee_replacement(user, employee_id):
     if not employee.current_job:
         return error("员工未绑定当前岗位，无法推荐替补")
     EmployeeRecommendation.query.filter_by(employee_id=employee.id, recommendation_type="replacement").delete()
-    items = []
-    for item in preview_matches(employee.current_job, limit=20):
+    preview_items = []
+    for item in preview_matches(employee.current_job, limit=40):
         if item["candidate_id"] == employee.candidate_id:
             continue
         candidate = db.session.get(Candidate, item["candidate_id"])
         if not candidate or EmployeeProfile.query.filter_by(candidate_id=item["candidate_id"]).first():
             continue
+        item["reason"]["replacement_context"] = {
+            "employee_id": employee.id,
+            "employee_name": employee.name,
+            "employee_title": employee.current_title,
+            "job_id": employee.current_job_id,
+            "job_title": employee.current_job.title if employee.current_job else employee.current_title,
+        }
+        preview_items.append(item)
+        if len(preview_items) >= 20:
+            break
+    reviewed_items = ai_review_matches(employee.current_job, preview_items, limit=5)
+    items = []
+    for item in reviewed_items:
+        candidate = db.session.get(Candidate, item["candidate_id"])
+        if not candidate:
+            continue
         reason = item["reason"]
-        reason["summary"] = "候选人与员工当前岗位 JD 匹配，可作为离职替补候选。"
+        ai_review = reason.get("ai_review") or {}
+        if ai_review.get("source") == "deepseek" and ai_review.get("summary"):
+            reason["summary"] = f"AI 已阅读离职员工岗位 JD 与候选人完整简历：{ai_review['summary']}"
+        else:
+            reason["summary"] = "候选人与员工当前岗位 JD 匹配，可作为离职替补候选。"
         recommendation = EmployeeRecommendation(employee_id=employee.id, recommendation_type="replacement", candidate_id=candidate.id, score=item["score"], reason_json=reason)
         db.session.add(recommendation)
         db.session.flush()

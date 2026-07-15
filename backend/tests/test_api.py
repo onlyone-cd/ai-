@@ -702,9 +702,37 @@ def test_internal_talent_organization_employee_analysis_and_recommendations(clie
     assert "items" in transfer.get_json()["data"]
     assert ai_calls
 
+    client.post(
+        "/api/boss/candidates/batch-import",
+        headers=admin_headers,
+        json={"items": [{"external_id": "replacement-java", "raw_text": "姓名：替补候选人\n电话：13800008888\n5 年 Java 后端开发经验，熟悉 Spring Boot、MySQL、Redis，负责核心业务系统稳定性。"}]},
+    )
+    replacement_ai_calls = []
+
+    def fake_replacement_chat_json(messages, **kwargs):
+        replacement_ai_calls.append({"messages": messages, "kwargs": kwargs})
+        assert "候选人完整简历" in messages[-1]["content"]
+        assert "岗位 JD" in messages[-1]["content"]
+        return {
+            "score": 86,
+            "recommendation": "推荐",
+            "summary": "候选人与离职员工当前岗位 JD 匹配，可作为替补重点沟通。",
+            "strengths": ["Java 后端经验匹配"],
+            "risks": ["需复核业务复杂度"],
+            "interview_focus": ["核心系统稳定性职责"],
+            "evidence": ["简历中有 Spring Boot、MySQL、Redis 项目经验"],
+            "rule_corrections": ["规则命中与简历证据一致"],
+        }
+
+    monkeypatch.setattr("app.job_service.chat_json", fake_replacement_chat_json)
+
     replacement = client.post(f"/api/employees/{employee['id']}/recommend-replacement", headers=admin_headers)
     assert replacement.status_code == 200
-    assert "items" in replacement.get_json()["data"]
+    replacement_items = replacement.get_json()["data"]["items"]
+    assert replacement_items
+    assert replacement_ai_calls
+    assert any(item["reason"]["ai_review"]["source"] == "deepseek" for item in replacement_items)
+    assert "replacement_context" in replacement_items[0]["reason"]
 
     detail = client.get(f"/api/employees/{employee['id']}", headers=admin_headers)
     assert detail.status_code == 200

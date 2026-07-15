@@ -2784,6 +2784,23 @@ def test_failed_background_task_can_be_retried(client, admin_headers):
     assert data["error"] is None
 
 
+def test_failed_background_tasks_can_be_retried_in_batch(client, admin_headers):
+    first = BackgroundTask(task_type="resume_retry_parse", status="failed", payload={"candidate_id": 999999}, attempts=1, max_attempts=3, created_by=1, error="候选人不存在")
+    second = BackgroundTask(task_type="backup_export", status="failed", payload={}, attempts=1, max_attempts=1, created_by=1, error="备份失败")
+    db.session.add_all([first, second])
+    db.session.commit()
+
+    response = client.post("/api/tasks/retry-batch", headers=admin_headers, json={"task_ids": [first.id, second.id]})
+
+    assert response.status_code == 200
+    data = response.get_json()["data"]
+    assert data["retried_count"] == 1
+    assert data["skipped_count"] == 1
+    assert data["retried"][0]["id"] == first.id
+    assert data["skipped"][0]["id"] == second.id
+    assert db.session.get(BackgroundTask, first.id).status == "queued"
+
+
 def test_boss_cookie_verify_ai_screen_and_draft_actions(client, admin_headers):
     bind = client.post(
         "/api/boss/login/browser-cookie",

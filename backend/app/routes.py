@@ -516,6 +516,31 @@ def retry_background_task(user, task_id):
     return ok(task.to_dict(), "后台任务已重新排队")
 
 
+@api.post("/tasks/retry-batch")
+@login_required
+@roles_required("admin", "manager", "recruiter")
+def retry_background_tasks_batch(user):
+    payload = request.get_json(silent=True) or {}
+    task_ids = [int(task_id) for task_id in payload.get("task_ids") or [] if str(task_id).isdigit()]
+    if not task_ids:
+        return error("请选择需要重试的任务", "NO_TASK_SELECTED", 400)
+    tasks = BackgroundTask.query.filter(BackgroundTask.id.in_(task_ids)).order_by(BackgroundTask.id.asc()).all()
+    retried = []
+    skipped = []
+    for task in tasks:
+        if user.role == "recruiter" and task.created_by != user.id:
+            skipped.append({"id": task.id, "reason": "无权重试该任务"})
+            continue
+        try:
+            retry_task(task)
+            retried.append(task.to_dict())
+            audit_log(user, "retry", "background_task", task.id, task.task_type, {"batch": True})
+        except ValueError as exc:
+            skipped.append({"id": task.id, "reason": str(exc)})
+    db.session.commit()
+    return ok({"retried": retried, "skipped": skipped, "retried_count": len(retried), "skipped_count": len(skipped)}, "批量重试已处理")
+
+
 @api.post("/tasks/<int:task_id>/run")
 @login_required
 @roles_required("admin", "manager", "recruiter")

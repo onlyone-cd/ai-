@@ -735,7 +735,9 @@ export const api = {
     request<{ log: NotificationLog }>("/notifications/send-test", { method: "POST", body: JSON.stringify(payload) }),
   tasks: (params?: { status?: string; limit?: number; offset?: number; task_type?: string }) =>
     request<{ items: BackgroundTask[]; status_counts: Record<string, number> } & PaginationMeta>(`/tasks${queryString({ status: params?.status || "all", limit: params?.limit, offset: params?.offset, task_type: params?.task_type, _ts: Date.now() })}`),
+  getTask: (id: number) => request<BackgroundTask>(`/tasks/${id}`),
   retryTask: (id: number) => request<BackgroundTask>(`/tasks/${id}/retry`, { method: "POST" }),
+  retryTasks: (taskIds: number[]) => request<{ retried: BackgroundTask[]; skipped: { id: number; reason: string }[]; retried_count: number; skipped_count: number }>("/tasks/retry-batch", { method: "POST", body: JSON.stringify({ task_ids: taskIds }) }),
   runTask: (id: number) => request<BackgroundTask>(`/tasks/${id}/run`, { method: "POST" }),
   opsBackupStatus: () => request<OpsBackupStatus>("/ops/backup/status"),
   opsDataQuality: () => request<OpsDataQuality>("/ops/data-quality"),

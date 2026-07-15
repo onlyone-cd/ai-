@@ -2793,6 +2793,8 @@ function TasksPage({ setView }: { setView: (view: View) => void }) {
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [loadingTasks, setLoadingTasks] = useState(false);
   const [busyId, setBusyId] = useState<number | null>(null);
+  const [selectedTaskIds, setSelectedTaskIds] = useState<Set<number>>(() => new Set());
+  const [selectedTask, setSelectedTask] = useState<BackgroundTask | null>(null);
   const [opsStatus, setOpsStatus] = useState<OpsBackupStatus | null>(null);
   const [dataQuality, setDataQuality] = useState<OpsDataQuality | null>(null);
   const [deployGates, setDeployGates] = useState<OpsDeployGates | null>(null);
@@ -2808,6 +2810,11 @@ function TasksPage({ setView }: { setView: (view: View) => void }) {
       setTaskLimit(data.limit);
       setTaskOffset(data.offset);
       setLastUpdatedAt(new Date().toLocaleTimeString("zh-CN", { hour12: false }));
+      setSelectedTaskIds((current) => new Set([...current].filter((id) => data.items.some((task) => task.id === id))));
+      if (selectedTask) {
+        const fresh = data.items.find((task) => task.id === selectedTask.id);
+        if (fresh) setSelectedTask(fresh);
+      }
     } finally {
       if (!silent) setLoadingTasks(false);
     }
@@ -2847,6 +2854,40 @@ function TasksPage({ setView }: { setView: (view: View) => void }) {
     } finally {
       setBusyId(null);
     }
+  }
+
+  async function batchRetry() {
+    const ids = [...selectedTaskIds];
+    if (!ids.length) {
+      notify("error", "请先选择失败任务");
+      return;
+    }
+    setOpsBusy(true);
+    try {
+      await api.retryTasks(ids);
+      setSelectedTaskIds(new Set());
+      await load(status, taskOffset, taskLimit);
+    } finally {
+      setOpsBusy(false);
+    }
+  }
+
+  async function openTaskDetail(task: BackgroundTask) {
+    const data = await api.getTask(task.id);
+    setSelectedTask(data);
+  }
+
+  function toggleTaskSelected(task: BackgroundTask, checked: boolean) {
+    setSelectedTaskIds((current) => {
+      const next = new Set(current);
+      if (checked) next.add(task.id);
+      else next.delete(task.id);
+      return next;
+    });
+  }
+
+  function openTaskSource(task: BackgroundTask) {
+    setView(taskSourceView(task));
   }
 
   async function runTaskNow(task: BackgroundTask) {
@@ -2895,6 +2936,10 @@ function TasksPage({ setView }: { setView: (view: View) => void }) {
           <button className="secondary-button" onClick={() => load(status, taskOffset, taskLimit)} disabled={loadingTasks}>
             <RefreshCw size={17} />
             {loadingTasks ? "刷新中" : "刷新"}
+          </button>
+          <button className="secondary-button" onClick={batchRetry} disabled={opsBusy || selectedTaskIds.size === 0}>
+            <RefreshCw size={17} />
+            批量重试 {selectedTaskIds.size || ""}
           </button>
         </div>
       </div>
@@ -3059,22 +3104,50 @@ function TasksPage({ setView }: { setView: (view: View) => void }) {
             <span className="badge danger">失败 {counts.failed || 0}</span>
           </div>
         </div>
+        <div className="mb-3 grid gap-2 md:grid-cols-3">
+          {taskNextSteps(counts).map((step) => (
+            <div className="rounded-md border border-line bg-white px-3 py-2 text-sm" key={step.title}>
+              <div className="font-semibold text-ink">{step.title}</div>
+              <p className="mt-1 text-xs text-steel">{step.detail}</p>
+            </div>
+          ))}
+        </div>
         <div className="data-list">
         {tasks.map((task) => (
           <div className="data-row flex-col items-start" key={task.id}>
             <div className="flex w-full flex-wrap items-start justify-between gap-3">
-              <div className="min-w-0">
+              <div className="flex min-w-0 flex-1 gap-3">
+                <input
+                  aria-label="选择任务"
+                  checked={selectedTaskIds.has(task.id)}
+                  className="mt-1"
+                  disabled={task.status !== "failed"}
+                  type="checkbox"
+                  onChange={(event) => toggleTaskSelected(task, event.target.checked)}
+                />
+                <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
                   <h3 className="font-semibold">#{task.id} {taskTypeLabel(task.task_type)}</h3>
                   <span className={`badge ${task.status === "failed" ? "danger" : task.status === "succeeded" ? "success" : "muted"}`}>{taskStatusLabel(task.status)}</span>
+                  <span className={`badge ${taskFailureInfo(task).tone}`}>{taskFailureInfo(task).label}</span>
                   <span className="badge muted">尝试 {task.attempts}/{task.max_attempts}</span>
                 </div>
                 <p className="mt-1 text-sm text-steel">
                   {task.creator_name || "系统"} · 创建 {task.created_at ? formatDateTime(task.created_at) : "-"}
                   {task.finished_at ? ` · 完成 ${formatDateTime(task.finished_at)}` : ""}
                 </p>
+                <p className="mt-1 text-xs text-steel">下一步：{taskNextAction(task)}</p>
+                </div>
               </div>
               <div className="flex flex-wrap gap-2">
+                <button className="secondary-button" type="button" onClick={() => openTaskDetail(task)}>
+                  <FileText size={17} />
+                  详情
+                </button>
+                <button className="secondary-button" type="button" onClick={() => openTaskSource(task)}>
+                  <ArrowLeft size={17} />
+                  来源
+                </button>
                 {task.status === "queued" && (
                   <button className="primary-button" disabled={busyId === task.id} onClick={() => runTaskNow(task)}>
                     <RefreshCw size={17} />
@@ -3097,6 +3170,45 @@ function TasksPage({ setView }: { setView: (view: View) => void }) {
         </div>
         <PaginationControls total={taskTotal} limit={taskLimit} offset={taskOffset} onChange={changeTaskPage} />
       </div>
+
+      {selectedTask && (
+        <div className="modal-backdrop" onClick={() => setSelectedTask(null)}>
+          <div className="modal-panel max-w-3xl" onClick={(event) => event.stopPropagation()}>
+            <div className="modal-head">
+              <div>
+                <h2 className="font-semibold">任务详情 #{selectedTask.id}</h2>
+                <p>{taskTypeLabel(selectedTask.task_type)} · {taskStatusLabel(selectedTask.status)} · {taskFailureInfo(selectedTask).label}</p>
+              </div>
+              <button className="icon-button" type="button" onClick={() => setSelectedTask(null)}>
+                <X size={16} />
+              </button>
+            </div>
+            <div className="mt-4 grid gap-3 md:grid-cols-2">
+              <InfoItem label="创建人" value={selectedTask.creator_name || "系统"} />
+              <InfoItem label="下一步" value={taskNextAction(selectedTask)} />
+              <InfoItem label="创建时间" value={formatDateTime(selectedTask.created_at || "") || "-"} />
+              <InfoItem label="更新时间" value={formatDateTime(selectedTask.updated_at || "") || "-"} />
+              <InfoItem label="开始时间" value={formatDateTime(selectedTask.started_at || "") || "-"} />
+              <InfoItem label="完成时间" value={formatDateTime(selectedTask.finished_at || "") || "-"} />
+            </div>
+            {selectedTask.error && <div className="mt-4 rounded-md bg-red-50 p-3 text-sm text-red-700">{selectedTask.error}</div>}
+            <div className="mt-4 grid gap-3 md:grid-cols-2">
+              <div>
+                <h3 className="font-semibold">任务参数</h3>
+                <pre className="mt-2 max-h-72 overflow-auto rounded-md bg-slate-950 p-3 text-xs text-white">{JSON.stringify(selectedTask.payload || {}, null, 2)}</pre>
+              </div>
+              <div>
+                <h3 className="font-semibold">执行结果</h3>
+                <pre className="mt-2 max-h-72 overflow-auto rounded-md bg-slate-950 p-3 text-xs text-white">{JSON.stringify(selectedTask.result || {}, null, 2)}</pre>
+              </div>
+            </div>
+            <div className="mt-4 flex flex-wrap justify-end gap-2">
+              <button className="secondary-button" type="button" onClick={() => openTaskSource(selectedTask)}>打开来源模块</button>
+              {selectedTask.status === "failed" && <button className="primary-button" type="button" onClick={() => retry(selectedTask)}>重新排队</button>}
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   );
 }
@@ -5710,6 +5822,71 @@ function taskTypeLabel(type: string) {
   return {
     resume_retry_parse: "简历重新解析"
   }[type] || type;
+}
+
+function taskFailureInfo(task: BackgroundTask): { label: string; tone: string } {
+  if (task.status === "queued") return { label: "等待执行", tone: "muted" };
+  if (task.status === "running") return { label: "正在处理", tone: "muted" };
+  if (task.status === "succeeded") return { label: "正常完成", tone: "success" };
+  const text = `${task.error || ""} ${JSON.stringify(task.result || {})}`.toLowerCase();
+  if (text.includes("不存在") || text.includes("not found")) return { label: "数据缺失", tone: "danger" };
+  if (text.includes("api key") || text.includes("401") || text.includes("unauthorized")) return { label: "AI 配置错误", tone: "danger" };
+  if (text.includes("余额") || text.includes("402") || text.includes("balance")) return { label: "AI 余额不足", tone: "danger" };
+  if (text.includes("timeout") || text.includes("timed out") || text.includes("超时")) return { label: "执行超时", tone: "danger" };
+  if (text.includes("解析") || text.includes("parse")) return { label: "解析失败", tone: "danger" };
+  return { label: "未知失败", tone: "danger" };
+}
+
+function taskNextAction(task: BackgroundTask) {
+  if (task.status === "queued") return "等待后台 Worker 自动执行，或点击立即执行。";
+  if (task.status === "running") return "保持页面打开即可自动刷新，完成后会同步结果。";
+  if (task.status === "succeeded") return taskSourceAction(task);
+  const failure = taskFailureInfo(task).label;
+  if (failure === "数据缺失") return "打开来源模块确认关联数据是否已删除，再决定是否重新创建任务。";
+  if (failure === "AI 配置错误" || failure === "AI 余额不足") return "进入系统设置检查 DeepSeek 配置或账户余额，修复后批量重试。";
+  if (failure === "执行超时") return "可直接重新排队；如多次超时，建议拆分批量任务。";
+  if (failure === "解析失败") return "打开人才库查看原始简历附件，必要时重新上传后再解析。";
+  return "查看详情中的错误日志，修复原因后重新排队。";
+}
+
+function taskSourceAction(task: BackgroundTask) {
+  if (task.task_type === "resume_retry_parse") return "打开人才库查看解析后的简历标签和结构化内容。";
+  if (task.task_type === "backup_export") return "在上线运维的最近备份包中确认备份文件。";
+  return "打开来源模块查看业务结果。";
+}
+
+function taskSourceView(task: BackgroundTask): View {
+  if (task.task_type === "resume_retry_parse") return "candidates";
+  if (task.task_type === "backup_export") return "tasks";
+  if (String(task.task_type).includes("boss")) return "boss";
+  if (String(task.task_type).includes("interview")) return "interviews";
+  if (String(task.task_type).includes("employee")) return "organization";
+  return "tasks";
+}
+
+function taskNextSteps(counts: Record<string, number>) {
+  const failed = Number(counts.failed || 0);
+  const running = Number(counts.running || 0);
+  const queued = Number(counts.queued || 0);
+  if (failed > 0) {
+    return [
+      { title: "先处理失败任务", detail: "勾选失败任务后可批量重试；先点详情看失败分级和错误日志。" },
+      { title: "修复来源数据", detail: "解析失败去人才库，AI 错误去系统设置，备份错误看上线运维。" },
+      { title: "重试后观察", detail: "页面会自动刷新，状态从排队、执行中到已完成会实时变化。" },
+    ];
+  }
+  if (running > 0 || queued > 0) {
+    return [
+      { title: "等待队列完成", detail: "后台 Worker 正在处理任务，保持自动刷新即可。" },
+      { title: "必要时立即执行", detail: "排队任务可以手动立即执行，用于验证单个任务是否正常。" },
+      { title: "完成后看来源", detail: "任务成功后点击来源，检查解析、备份或同步结果。" },
+    ];
+  }
+  return [
+    { title: "当前队列正常", detail: "暂无待处理任务，可以从简历解析、备份、BOSS 同步等模块创建新任务。" },
+    { title: "定期巡检", detail: "上线运维和数据质量仍在本页，可作为生产检查入口。" },
+    { title: "继续优化", detail: "后续可接入更详细的 Worker 日志和任务耗时趋势。" },
+  ];
 }
 
 function auditTargetLabel(target: string) {

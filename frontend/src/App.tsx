@@ -4549,6 +4549,7 @@ function EmployeeDetailPage({ employee, onBack, onChanged, backLabel = "返回�
   const [transfer, setTransfer] = useState<EmployeeRecommendation[]>([]);
   const [replacement, setReplacement] = useState<EmployeeRecommendation[]>([]);
   const [editOpen, setEditOpen] = useState(false);
+  const [workbenchTab, setWorkbenchTab] = useState<"analysis" | "transfer" | "replacement">("analysis");
   const [units, setUnits] = useState<OrganizationUnit[]>([]);
   const [jobs, setJobs] = useState<Job[]>([]);
   const [editForm, setEditForm] = useState({
@@ -4668,6 +4669,7 @@ function EmployeeDetailPage({ employee, onBack, onChanged, backLabel = "返回�
   async function runAnalysis() {
     setBusy(true);
     try {
+      setWorkbenchTab("analysis");
       const data = await api.analyzeEmployeeCurrentJob(detail.id);
       setAnalysis(data);
       await reloadDetail();
@@ -4679,6 +4681,7 @@ function EmployeeDetailPage({ employee, onBack, onChanged, backLabel = "返回�
   async function loadTransfer() {
     setBusy(true);
     try {
+      setWorkbenchTab("transfer");
       const data = await api.recommendEmployeeTransfer(detail.id);
       setTransfer(data.items);
     } finally {
@@ -4689,6 +4692,7 @@ function EmployeeDetailPage({ employee, onBack, onChanged, backLabel = "返回�
   async function loadReplacement() {
     setBusy(true);
     try {
+      setWorkbenchTab("replacement");
       const data = await api.recommendEmployeeReplacement(detail.id);
       setReplacement(data.items);
     } finally {
@@ -4713,18 +4717,6 @@ function EmployeeDetailPage({ employee, onBack, onChanged, backLabel = "返回�
             上传员工简历
             <input className="hidden" type="file" accept=".txt,.md,.docx,.pdf" disabled={busy} onChange={(event) => uploadSingleResume(event.target.files)} />
           </label>
-          <button className="primary-button" onClick={runAnalysis} disabled={busy}>
-            <Sparkles size={17} />
-            当前岗位/薪资分析
-          </button>
-          <button className="secondary-button" onClick={loadTransfer} disabled={busy}>
-            <BriefcaseBusiness size={17} />
-            调岗推荐
-          </button>
-          <button className="secondary-button" onClick={loadReplacement} disabled={busy}>
-            <Users size={17} />
-            离职替补
-          </button>
           <button className="secondary-button" onClick={() => api.employeeReport(detail.id)}>
             <Download size={17} />
             导出报告
@@ -4751,6 +4743,19 @@ function EmployeeDetailPage({ employee, onBack, onChanged, backLabel = "返回�
           </div>
         </div>
       </div>
+
+      <EmployeeWorkbenchPanel
+        analysis={analysis}
+        busy={busy}
+        employee={detail}
+        onAnalyze={runAnalysis}
+        onReplacement={loadReplacement}
+        onTransfer={loadTransfer}
+        replacement={replacement}
+        tab={workbenchTab}
+        transfer={transfer}
+        onTabChange={setWorkbenchTab}
+      />
 
       {editOpen && (
         <div className="modal-backdrop" onClick={() => setEditOpen(false)}>
@@ -4810,41 +4815,6 @@ function EmployeeDetailPage({ employee, onBack, onChanged, backLabel = "返回�
 
       <div className="resume-layout">
         <main className="resume-main">
-          {analysis && (
-            <div className="resume-card">
-              <ResumeSectionTitle icon={<Sparkles size={18} />} title="AI 分析结论" />
-              <p className="resume-summary">{analysis.analysis.summary || "暂无分析摘要"}</p>
-              <div className="mt-4 grid gap-3 md:grid-cols-3">
-                <KpiMini label="岗位匹配" value={`${analysis.match_score}/100`} hint={riskLabel(analysis.risk_level)} />
-                <KpiMini label="薪资评分" value={`${analysis.salary_score}/100`} hint={salaryStatusLabel(analysis.salary_status)} />
-                <KpiMini label="分析来源" value={analysis.source} hint="规则 + 标签证据" />
-              </div>
-              <div className="mt-4 grid gap-2">
-                {(analysis.analysis.actions || []).map((action, index) => <div className="rounded-md bg-mint/10 px-3 py-2 text-sm text-ink" key={index}>{action}</div>)}
-              </div>
-              {analysis.analysis.ai_review?.source === "deepseek" && (
-                <div className="mt-4 grid gap-3 md:grid-cols-2">
-                  <div className="rounded-md border border-line p-3">
-                    <p className="text-xs font-semibold text-steel">AI 证据链</p>
-                    <div className="mt-2 space-y-2">
-                      {(analysis.analysis.ai_review.evidence || []).slice(0, 5).map((item, index) => (
-                        <p className="text-sm text-ink" key={index}>• {item}</p>
-                      ))}
-                    </div>
-                  </div>
-                  <div className="rounded-md border border-line p-3">
-                    <p className="text-xs font-semibold text-steel">规则修正与风险</p>
-                    <div className="mt-2 space-y-2">
-                      {[...(analysis.analysis.ai_review.rule_corrections || []), ...(analysis.analysis.ai_review.risks || [])].slice(0, 5).map((item, index) => (
-                        <p className="text-sm text-ink" key={index}>• {item}</p>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-
           <div className="resume-card">
             <ResumeSectionTitle icon={<FileText size={18} />} title="个人简介" />
             <p className="resume-summary">{String(resume.summary || detail.raw_text || "暂无简介")}</p>
@@ -4883,8 +4853,6 @@ function EmployeeDetailPage({ employee, onBack, onChanged, backLabel = "返回�
           </div>
           <SkillRadar tags={detail.tags} />
           <SkillCategoryList tags={detail.tags} />
-          <RecommendationList title="调岗推荐" items={transfer} type="transfer" />
-          <RecommendationList title="离职替补推荐" items={replacement} type="replacement" />
         </aside>
       </div>
     </section>
@@ -4953,21 +4921,207 @@ function CompactOrganizationTree({
   );
 }
 
-function RecommendationList({ title, items, type }: { title: string; items: EmployeeRecommendation[]; type: "transfer" | "replacement" }) {
-  if (!items.length) return null;
+type WorkbenchTab = "analysis" | "transfer" | "replacement";
+
+function EmployeeWorkbenchPanel({
+  analysis,
+  busy,
+  employee,
+  onAnalyze,
+  onReplacement,
+  onTabChange,
+  onTransfer,
+  replacement,
+  tab,
+  transfer
+}: {
+  analysis: EmployeeAnalysis | null;
+  busy: boolean;
+  employee: EmployeeProfile;
+  onAnalyze: () => void;
+  onReplacement: () => void;
+  onTabChange: (tab: WorkbenchTab) => void;
+  onTransfer: () => void;
+  replacement: EmployeeRecommendation[];
+  tab: WorkbenchTab;
+  transfer: EmployeeRecommendation[];
+}) {
+  const aiSource = analysis?.analysis.ai_review?.source === "deepseek" ? "DeepSeek 复核" : analysis ? "规则分析" : "未分析";
+  const analysisEvidence = analysis?.analysis.ai_review?.evidence || [];
+  const analysisRisks = [...(analysis?.analysis.ai_review?.rule_corrections || []), ...(analysis?.analysis.ai_review?.risks || [])];
+  const summary = analysis?.analysis.ai_review?.summary || analysis?.analysis.summary || "点击分析后，系统会读取员工完整简历、当前岗位 JD、薪资、标签证据，输出岗位适配、薪资合理性和动作建议。";
+  const topTransfer = transfer[0];
+  const topReplacement = replacement[0];
+
   return (
-    <div className="resume-card">
-      <ResumeSectionTitle icon={type === "transfer" ? <BriefcaseBusiness size={18} /> : <Users size={18} />} title={title} />
-      <div className="mt-4 grid gap-3">
-        {items.slice(0, 5).map((item) => (
-          <div className="rounded-md border border-line p-3" key={item.id}>
-            <div className="flex items-center justify-between gap-3">
-              <strong>{type === "transfer" ? item.target_job?.title : item.candidate?.name_masked}</strong>
-              <span className="badge">{item.score}/100</span>
+    <div className="employee-workbench resume-card">
+      <div className="employee-workbench-head">
+        <div>
+          <span className="badge muted">人才盘点工作台</span>
+          <h3>{employee.name}{" · "}当前岗位分析 / 调岗推荐 / 离职替补</h3>
+        </div>
+        <div className="employee-workbench-tabs">
+          <button className={tab === "analysis" ? "active" : ""} type="button" onClick={() => onTabChange("analysis")}>当前岗位</button>
+          <button className={tab === "transfer" ? "active" : ""} type="button" onClick={() => onTabChange("transfer")}>调岗推荐</button>
+          <button className={tab === "replacement" ? "active" : ""} type="button" onClick={() => onTabChange("replacement")}>离职替补</button>
+        </div>
+      </div>
+
+      <div className="employee-workbench-grid">
+        <WorkbenchMetricCard
+          active={tab === "analysis"}
+          icon={<Sparkles size={16} />}
+          label="当前岗位/薪资"
+          meta={aiSource}
+          score={analysis ? analysis.match_score + "/100" : "待分析"}
+          onClick={() => onTabChange("analysis")}
+        />
+        <WorkbenchMetricCard
+          active={tab === "transfer"}
+          icon={<BriefcaseBusiness size={16} />}
+          label="可调岗岗位"
+          meta={topTransfer ? recommendationTargetName(topTransfer, "transfer") + " · 最高 " + topTransfer.score + "/100" : "读取内部岗位 JD"}
+          score={transfer.length ? transfer.length + " 个" : "待生成"}
+          onClick={() => onTabChange("transfer")}
+        />
+        <WorkbenchMetricCard
+          active={tab === "replacement"}
+          icon={<Users size={16} />}
+          label="离职替补候选"
+          meta={topReplacement ? recommendationTargetName(topReplacement, "replacement") + " · 最高 " + topReplacement.score + "/100" : "读取候选人完整简历"}
+          score={replacement.length ? replacement.length + " 人" : "待生成"}
+          onClick={() => onTabChange("replacement")}
+        />
+      </div>
+
+      {tab === "analysis" && (
+        <div className="employee-workbench-body">
+          <div className="employee-workbench-action-row">
+            <div>
+              <h4>当前岗位与薪资合理性</h4>
+              <p>{summary}</p>
             </div>
-            <p className="mt-1 text-xs text-steel">{String(item.reason.summary || "基于岗位 JD 与技能标签匹配。")}</p>
+            <button className="primary-button" onClick={onAnalyze} disabled={busy} type="button">
+              <Sparkles size={16} />
+              {analysis ? "重新分析" : "开始分析"}
+            </button>
           </div>
-        ))}
+          {analysis ? (
+            <>
+              <div className="mt-3 grid gap-2 md:grid-cols-3">
+                <KpiMini label="岗位匹配" value={analysis.match_score + "/100"} hint={riskLabel(analysis.risk_level)} />
+                <KpiMini label="薪资评分" value={analysis.salary_score + "/100"} hint={salaryStatusLabel(analysis.salary_status)} />
+                <KpiMini label="分析来源" value={aiSource} hint={analysis.source} />
+              </div>
+              <InsightList title="AI 证据链" items={analysisEvidence} empty="暂无 DeepSeek 证据链，当前显示规则分析结论。" />
+              <InsightList title="规则修正与风险" items={analysisRisks} empty="暂无明显规则修正或风险。" />
+              <InsightList title="下一步动作" items={analysis.analysis.actions || []} empty="暂无动作建议。" />
+            </>
+          ) : (
+            <div className="resume-empty">还没有生成岗位与薪资分析。</div>
+          )}
+        </div>
+      )}
+
+      {tab === "transfer" && (
+        <div className="employee-workbench-body">
+          <div className="employee-workbench-action-row">
+            <div>
+              <h4>调岗推荐</h4>
+              <p>综合内部岗位 JD、员工完整简历、技能证据和薪资区间排序，前 5 个岗位进入 AI 复核。</p>
+            </div>
+            <button className="primary-button" onClick={onTransfer} disabled={busy} type="button">
+              <BriefcaseBusiness size={16} />
+              {transfer.length ? "重新生成" : "生成推荐"}
+            </button>
+          </div>
+          <RecommendationList title="调岗推荐" items={transfer} type="transfer" embedded />
+        </div>
+      )}
+
+      {tab === "replacement" && (
+        <div className="employee-workbench-body">
+          <div className="employee-workbench-action-row">
+            <div>
+              <h4>离职替补推荐</h4>
+              <p>读取离职员工岗位 JD 和候选人完整简历，结合规则得分与 DeepSeek 证据链输出替补理由。</p>
+            </div>
+            <button className="primary-button" onClick={onReplacement} disabled={busy || !employee.current_job_id} type="button">
+              <Users size={16} />
+              {replacement.length ? "重新生成" : "生成替补"}
+            </button>
+          </div>
+          {!employee.current_job_id && <div className="resume-empty">该员工未绑定当前岗位，先编辑员工档案绑定岗位后再推荐替补。</div>}
+          <RecommendationList title="离职替补推荐" items={replacement} type="replacement" embedded />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function WorkbenchMetricCard({ active, icon, label, meta, onClick, score }: { active: boolean; icon: React.ReactNode; label: string; meta: string; onClick: () => void; score: string }) {
+  return (
+    <button className={"workbench-metric " + (active ? "active" : "")} type="button" onClick={onClick}>
+      <span>{icon}</span>
+      <strong>{score}</strong>
+      <em>{label}</em>
+      <small>{meta}</small>
+    </button>
+  );
+}
+
+function InsightList({ empty, items, title }: { empty: string; items: string[]; title: string }) {
+  return (
+    <div className="insight-list">
+      <p>{title}</p>
+      {items.length ? <div>{items.slice(0, 6).map((item, index) => <span key={index}>{item}</span>)}</div> : <small>{empty}</small>}
+    </div>
+  );
+}
+
+function recommendationTargetName(item: EmployeeRecommendation, type: "transfer" | "replacement") {
+  return type === "transfer" ? item.target_job?.title || "未命名岗位" : item.candidate?.name_masked || "未命名候选人";
+}
+
+function recommendationStringList(value: unknown) {
+  return Array.isArray(value) ? value.map((item) => String(item)).filter(Boolean) : [];
+}
+
+function recommendationAiReview(reason: Record<string, unknown>) {
+  const value = reason.ai_review;
+  return value && typeof value === "object" ? value as Record<string, unknown> : {};
+}
+function RecommendationList({ embedded = false, title, items, type }: { embedded?: boolean; title: string; items: EmployeeRecommendation[]; type: "transfer" | "replacement" }) {
+  if (!items.length) return <div className="resume-empty">暂无{title}，点击生成后会在这里展示。</div>;
+  return (
+    <div className={embedded ? "recommendation-panel" : "resume-card"}>
+      {!embedded && <ResumeSectionTitle icon={type === "transfer" ? <BriefcaseBusiness size={18} /> : <Users size={18} />} title={title} />}
+      <div className="mt-4 grid gap-3">
+        {items.slice(0, 8).map((item) => {
+          const aiReview = recommendationAiReview(item.reason);
+          const evidence = recommendationStringList(aiReview.evidence).slice(0, 3);
+          const risks = recommendationStringList(aiReview.risks).slice(0, 3);
+          const source = String(aiReview.source || item.reason.source || "rule");
+          return (
+            <div className="recommendation-row" key={item.id}>
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <strong>{recommendationTargetName(item, type)}</strong>
+                  <p>{String(aiReview.summary || item.reason.summary || "基于岗位 JD、完整简历与技能证据综合匹配。")}</p>
+                </div>
+                <span className="badge">{item.score}/100</span>
+              </div>
+              <div className="recommendation-meta">
+                <span className={source === "deepseek" ? "badge success" : "badge muted"}>{source === "deepseek" ? "DeepSeek 复核" : "规则初排"}</span>
+                {typeof item.reason.rule_score === "number" && <span>规则 {String(item.reason.rule_score)}</span>}
+                {typeof item.reason.ai_score === "number" && <span>AI {String(item.reason.ai_score)}</span>}
+                {typeof item.reason.final_score === "number" && <span>最终 {String(item.reason.final_score)}</span>}
+              </div>
+              {!!evidence.length && <InsightList title="证据链" items={evidence} empty="" />}
+              {!!risks.length && <InsightList title="风险提示" items={risks} empty="" />}
+            </div>
+          );
+        })}
       </div>
     </div>
   );

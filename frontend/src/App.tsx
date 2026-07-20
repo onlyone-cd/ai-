@@ -4672,9 +4672,7 @@ function EmployeeDetailPage({ employee, onBack, onChanged, backLabel = "返回�
     setBusy(true);
     try {
       setWorkbenchTab("analysis");
-      const data = await api.analyzeEmployeeCurrentJob(detail.id);
-      setAnalysis(data);
-      await reloadDetail();
+      await api.analyzeEmployeeCurrentJobAsync(detail.id);
     } finally {
       setBusy(false);
     }
@@ -4684,8 +4682,7 @@ function EmployeeDetailPage({ employee, onBack, onChanged, backLabel = "返回�
     setBusy(true);
     try {
       setWorkbenchTab("transfer");
-      const data = await api.recommendEmployeeTransfer(detail.id);
-      setTransfer(data.items);
+      await api.recommendEmployeeTransferAsync(detail.id);
     } finally {
       setBusy(false);
     }
@@ -4695,8 +4692,7 @@ function EmployeeDetailPage({ employee, onBack, onChanged, backLabel = "返回�
     setBusy(true);
     try {
       setWorkbenchTab("replacement");
-      const data = await api.recommendEmployeeReplacement(detail.id);
-      setReplacement(data.items);
+      await api.recommendEmployeeReplacementAsync(detail.id);
     } finally {
       setBusy(false);
     }
@@ -5005,7 +5001,7 @@ function EmployeeWorkbenchPanel({
             </div>
             <button className="primary-button" onClick={onAnalyze} disabled={busy} type="button">
               <Sparkles size={16} />
-              {analysis ? "重新分析" : "开始分析"}
+              {analysis ? "后台重新分析" : "后台分析"}
             </button>
           </div>
           {analysis ? (
@@ -5034,7 +5030,7 @@ function EmployeeWorkbenchPanel({
             </div>
             <button className="primary-button" onClick={onTransfer} disabled={busy} type="button">
               <BriefcaseBusiness size={16} />
-              {transfer.length ? "重新生成" : "生成推荐"}
+              {transfer.length ? "后台重新生成" : "后台生成"}
             </button>
           </div>
           <RecommendationList title="调岗推荐" items={transfer} type="transfer" embedded />
@@ -5050,7 +5046,7 @@ function EmployeeWorkbenchPanel({
             </div>
             <button className="primary-button" onClick={onReplacement} disabled={busy || !employee.current_job_id} type="button">
               <Users size={16} />
-              {replacement.length ? "重新生成" : "生成替补"}
+              {replacement.length ? "后台重新生成" : "后台生成"}
             </button>
           </div>
           {!employee.current_job_id && <div className="resume-empty">该员工未绑定当前岗位，先编辑员工档案绑定岗位后再推荐替补。</div>}
@@ -5976,7 +5972,10 @@ function taskStatusLabel(status: string) {
 function taskTypeLabel(type: string) {
   if (type === "backup_export") return "全量备份导出";
   return {
-    resume_retry_parse: "简历重新解析"
+    resume_retry_parse: "简历重新解析",
+    employee_analyze_current_job: "员工岗位/薪资分析",
+    employee_recommend_transfer: "员工调岗推荐",
+    employee_recommend_replacement: "员工离职替补推荐"
   }[type] || type;
 }
 
@@ -6008,6 +6007,7 @@ function taskNextAction(task: BackgroundTask) {
 function taskSourceAction(task: BackgroundTask) {
   if (task.task_type === "resume_retry_parse") return "打开人才库查看解析后的简历标签和结构化内容。";
   if (task.task_type === "backup_export") return "在上线运维的最近备份包中确认备份文件。";
+  if (String(task.task_type).startsWith("employee_")) return "打开组织与内部人才，进入员工档案查看最新 AI 盘点结果。";
   return "打开来源模块查看业务结果。";
 }
 

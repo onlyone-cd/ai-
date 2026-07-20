@@ -822,10 +822,13 @@ export const api = {
     return upload<{ updated_count: number; skipped_count: number; failed_count: number; updated: { row: number; employee: EmployeeProfile; compensation: EmployeeCompensation }[]; skipped: { row: number; reason: string }[]; errors: { row: number; error: string }[] }>("/employees/compensation-import", formData);
   },
   analyzeEmployeeCurrentJob: (id: number) => request<EmployeeAnalysis>(`/employees/${id}/analyze-current-job`, { method: "POST" }),
+  analyzeEmployeeCurrentJobAsync: (id: number) => request<{ task: BackgroundTask }>(`/employees/${id}/analyze-current-job?async=1`, { method: "POST" }),
   batchAnalyzeEmployees: (payload: { organization_unit_id?: number; employee_ids?: number[]; limit?: number }) =>
     request<{ items: EmployeeAnalysis[]; skipped: { employee_id: number; name: string; reason: string }[]; analyzed_count: number; skipped_count: number }>("/employees/batch-analyze", { method: "POST", body: JSON.stringify(payload) }),
   recommendEmployeeTransfer: (id: number) => request<{ items: EmployeeRecommendation[] }>(`/employees/${id}/recommend-transfer`, { method: "POST" }),
+  recommendEmployeeTransferAsync: (id: number) => request<{ task: BackgroundTask }>(`/employees/${id}/recommend-transfer?async=1`, { method: "POST" }),
   recommendEmployeeReplacement: (id: number) => request<{ items: EmployeeRecommendation[] }>(`/employees/${id}/recommend-replacement`, { method: "POST" }),
+  recommendEmployeeReplacementAsync: (id: number) => request<{ task: BackgroundTask }>(`/employees/${id}/recommend-replacement?async=1`, { method: "POST" }),
   employeeReport: (id: number) => download(`/employees/${id}/report.txt`, `employee-${id}-report.txt`),
   jobs: (params?: { scope?: "recruiting" | "internal" | "all"; limit?: number; offset?: number }) =>
     request<{ items: Job[]; scope?: string } & Partial<PaginationMeta>>(`/jobs${queryString(params)}`),

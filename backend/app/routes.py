@@ -1373,7 +1373,12 @@ def analyze_employee_current_job(user, employee_id):
     employee = db.session.get(EmployeeProfile, employee_id)
     if not employee:
         return error("员工不存在", "NOT_FOUND", 404)
-    analysis = analyze_employee_against_job(employee, employee.current_job)
+    if async_requested():
+        task = enqueue_task("employee_analyze_current_job", {"employee_id": employee.id}, created_by=user.id, max_attempts=2)
+        audit_log(user, "enqueue", "background_task", task.id, task.task_type, {"employee_id": employee.id})
+        db.session.commit()
+        return ok({"task": task.to_dict()}, "员工岗位与薪资分析已加入后台任务")
+    analysis = run_employee_current_job_analysis(employee)
     db.session.add(analysis)
     audit_log(user, "analyze", "employee", employee.id, employee.name, {"job_id": employee.current_job_id})
     db.session.commit()
@@ -1387,6 +1392,22 @@ def recommend_employee_transfer(user, employee_id):
     employee = db.session.get(EmployeeProfile, employee_id)
     if not employee:
         return error("员工不存在", "NOT_FOUND", 404)
+    if async_requested():
+        task = enqueue_task("employee_recommend_transfer", {"employee_id": employee.id}, created_by=user.id, max_attempts=2)
+        audit_log(user, "enqueue", "background_task", task.id, task.task_type, {"employee_id": employee.id})
+        db.session.commit()
+        return ok({"task": task.to_dict()}, "调岗推荐已加入后台任务")
+    items = run_employee_transfer_recommendation(employee)
+    audit_log(user, "recommend", "employee", employee.id, employee.name, {"type": "transfer", "count": len(items)})
+    db.session.commit()
+    return ok({"items": items}, "调岗推荐已生成")
+
+
+def run_employee_current_job_analysis(employee):
+    return analyze_employee_against_job(employee, employee.current_job)
+
+
+def run_employee_transfer_recommendation(employee):
     EmployeeRecommendation.query.filter_by(employee_id=employee.id, recommendation_type="transfer").delete()
     candidate_reasons = []
     for job in apply_job_scope(Job.query.filter_by(status="active"), "internal").order_by(Job.created_at.desc()).all():
@@ -1423,9 +1444,7 @@ def recommend_employee_transfer(user, employee_id):
         db.session.flush()
         items.append(recommendation.to_dict())
     items.sort(key=lambda item: item["score"], reverse=True)
-    audit_log(user, "recommend", "employee", employee.id, employee.name, {"type": "transfer", "count": len(items)})
-    db.session.commit()
-    return ok({"items": items}, "调岗推荐已生成")
+    return items
 
 
 @api.post("/employees/<int:employee_id>/recommend-replacement")
@@ -1437,6 +1456,20 @@ def recommend_employee_replacement(user, employee_id):
         return error("员工不存在", "NOT_FOUND", 404)
     if not employee.current_job:
         return error("员工未绑定当前岗位，无法推荐替补")
+    if async_requested():
+        task = enqueue_task("employee_recommend_replacement", {"employee_id": employee.id}, created_by=user.id, max_attempts=2)
+        audit_log(user, "enqueue", "background_task", task.id, task.task_type, {"employee_id": employee.id})
+        db.session.commit()
+        return ok({"task": task.to_dict()}, "离职替补推荐已加入后台任务")
+    items = run_employee_replacement_recommendation(employee)
+    audit_log(user, "recommend", "employee", employee.id, employee.name, {"type": "replacement", "count": len(items)})
+    db.session.commit()
+    return ok({"items": items}, "离职替补推荐已生成")
+
+
+def run_employee_replacement_recommendation(employee):
+    if not employee.current_job:
+        raise ValueError("员工未绑定当前岗位，无法推荐替补")
     EmployeeRecommendation.query.filter_by(employee_id=employee.id, recommendation_type="replacement").delete()
     preview_items = []
     for item in preview_matches(employee.current_job, limit=40):
@@ -1472,9 +1505,7 @@ def recommend_employee_replacement(user, employee_id):
         db.session.flush()
         items.append(recommendation.to_dict())
     items.sort(key=lambda item: item["score"], reverse=True)
-    audit_log(user, "recommend", "employee", employee.id, employee.name, {"type": "replacement", "count": len(items)})
-    db.session.commit()
-    return ok({"items": items}, "离职替补推荐已生成")
+    return items
 
 
 @api.post("/employees/batch-analyze")
@@ -3890,6 +3921,10 @@ def with_permissions(user):
 
 def can_view_employee_salary(user):
     return user.role in {"admin", "manager"}
+
+
+def async_requested():
+    return str(request.args.get("async") or "").lower() in {"1", "true", "yes"}
 
 
 def employee_payload(employee, user, detail=False):

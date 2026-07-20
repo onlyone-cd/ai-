@@ -741,6 +741,22 @@ def test_internal_talent_organization_employee_analysis_and_recommendations(clie
     assert any(item["recommendation_type"] == "replacement" for item in detail_data["recommendations"])
     assert detail_data["recommendations"][0]["score"] >= detail_data["recommendations"][-1]["score"]
 
+    queued_analysis = client.post(f"/api/employees/{employee['id']}/analyze-current-job?async=1", headers=admin_headers)
+    assert queued_analysis.status_code == 200
+    analysis_task = queued_analysis.get_json()["data"]["task"]
+    assert analysis_task["task_type"] == "employee_analyze_current_job"
+    run_analysis_task = client.post(f"/api/tasks/{analysis_task['id']}/run", headers=admin_headers)
+    assert run_analysis_task.status_code == 200
+    assert run_analysis_task.get_json()["data"]["status"] == "succeeded"
+
+    queued_transfer = client.post(f"/api/employees/{employee['id']}/recommend-transfer?async=1", headers=admin_headers)
+    assert queued_transfer.status_code == 200
+    assert queued_transfer.get_json()["data"]["task"]["task_type"] == "employee_recommend_transfer"
+
+    queued_replacement = client.post(f"/api/employees/{employee['id']}/recommend-replacement?async=1", headers=admin_headers)
+    assert queued_replacement.status_code == 200
+    assert queued_replacement.get_json()["data"]["task"]["task_type"] == "employee_recommend_replacement"
+
     report = client.get(f"/api/employees/{employee['id']}/report.txt", headers=admin_headers)
     assert report.status_code == 200
     assert "内部员工分析报告" in report.get_data(as_text=True)

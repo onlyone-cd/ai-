@@ -1,5 +1,5 @@
 from . import db
-from .models import BackgroundTask, Candidate, CandidateTag, utcnow
+from .models import BackgroundTask, Candidate, CandidateTag, EmployeeProfile, utcnow
 from .ops_service import create_backup_package
 from .resume_service import reparse_candidate
 
@@ -70,6 +70,12 @@ def execute_task(task):
         return run_resume_retry_parse(task)
     if task.task_type == "backup_export":
         return create_backup_package()
+    if task.task_type == "employee_analyze_current_job":
+        return run_employee_analyze_current_job(task)
+    if task.task_type == "employee_recommend_transfer":
+        return run_employee_recommend_transfer(task)
+    if task.task_type == "employee_recommend_replacement":
+        return run_employee_recommend_replacement(task)
     raise ValueError(f"未知后台任务类型：{task.task_type}")
 
 
@@ -84,4 +90,52 @@ def run_resume_retry_parse(task):
         "candidate_name": candidate.name_masked,
         "parse_status": candidate.parse_status,
         "tag_count": CandidateTag.query.filter_by(candidate_id=candidate.id).count(),
+    }
+
+
+def task_employee(task):
+    employee_id = int((task.payload or {}).get("employee_id") or 0)
+    employee = db.session.get(EmployeeProfile, employee_id)
+    if not employee:
+        raise ValueError("员工不存在")
+    return employee
+
+
+def run_employee_analyze_current_job(task):
+    from .routes import run_employee_current_job_analysis
+
+    employee = task_employee(task)
+    analysis = run_employee_current_job_analysis(employee)
+    db.session.add(analysis)
+    db.session.flush()
+    return {
+        "employee_id": employee.id,
+        "employee_name": employee.name,
+        "analysis": analysis.to_dict(),
+    }
+
+
+def run_employee_recommend_transfer(task):
+    from .routes import run_employee_transfer_recommendation
+
+    employee = task_employee(task)
+    items = run_employee_transfer_recommendation(employee)
+    return {
+        "employee_id": employee.id,
+        "employee_name": employee.name,
+        "items": items,
+        "count": len(items),
+    }
+
+
+def run_employee_recommend_replacement(task):
+    from .routes import run_employee_replacement_recommendation
+
+    employee = task_employee(task)
+    items = run_employee_replacement_recommendation(employee)
+    return {
+        "employee_id": employee.id,
+        "employee_name": employee.name,
+        "items": items,
+        "count": len(items),
     }

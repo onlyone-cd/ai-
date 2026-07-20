@@ -1062,6 +1062,35 @@ function JobsPage() {
                       <p className="mt-1">{match.reason.domain_warnings.slice(0, 2).join("；")}</p>
                     </div>
                   ) : null}
+                  {(match.reason.score_breakdown || match.reason.evidence_chain?.length) ? (
+                    <details className="mt-2 rounded-md border border-line bg-white px-3 py-2 text-xs">
+                      <summary className="cursor-pointer font-medium text-ink">评分拆解与证据链</summary>
+                      {match.reason.score_breakdown && (
+                        <div className="mt-2 grid gap-2 md:grid-cols-4">
+                          <InfoItem label="规则分" value={`${match.reason.score_breakdown.rule_score}/100`} />
+                          <InfoItem label="AI 分" value={typeof match.reason.score_breakdown.ai_score === "number" ? `${match.reason.score_breakdown.ai_score}/100` : "未复核"} />
+                          <InfoItem label="技能匹配" value={`${match.reason.score_breakdown.skill_match}%`} />
+                          <InfoItem label="能力熟练" value={`${match.reason.score_breakdown.capability}%`} />
+                        </div>
+                      )}
+                      {match.reason.evidence_chain?.length ? (
+                        <div className="mt-3 grid gap-2">
+                          {match.reason.evidence_chain.slice(0, 8).map((item, index) => (
+                            <div className="rounded-md bg-slate-50 px-3 py-2" key={`${item.type}-${index}`}>
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className={`badge ${item.status === "accepted" ? "success" : item.status === "rejected" || item.status === "gap" ? "danger" : "muted"}`}>
+                                  {item.status === "accepted" ? "认可" : item.status === "rejected" ? "剔除" : item.status === "gap" ? "缺口" : "AI"}
+                                </span>
+                                <strong>{item.title}</strong>
+                              </div>
+                              <p className="mt-1 text-steel">{item.detail}</p>
+                              {item.evidence?.length ? <p className="mt-1 truncate text-steel">证据：{item.evidence.slice(0, 2).join("；")}</p> : null}
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
+                    </details>
+                  ) : null}
                   <div className="mt-3">
                     <div className="flex flex-wrap gap-2">
                       <button className="secondary-button" onClick={() => setSelectedCandidate(match.candidate)}>

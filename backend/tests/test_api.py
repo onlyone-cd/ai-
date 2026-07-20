@@ -1362,6 +1362,11 @@ def test_job_match_combines_rule_score_and_ai_review(client, admin_headers, app,
     assert reason["ai_review"]["recommendation"] == "推荐"
     assert reason["score_formula"] == "final_score=round(rule_score*35% + ai_score*65%); no pre-filter before AI review"
     assert first["score"] == round(reason["rule_score"] * 0.35 + 80 * 0.65)
+    assert reason["score_breakdown"]["rule_score"] == reason["rule_score"]
+    assert reason["score_breakdown"]["ai_score"] == 80
+    assert reason["score_breakdown"]["final_score"] == first["score"]
+    assert any(item["type"] == "ai_summary" for item in reason["evidence_chain"])
+    assert any(item["type"] == "rule_hit" and item["evidence"] for item in reason["evidence_chain"])
 
 
 def test_job_match_reports_deepseek_balance_error_once(client, admin_headers, app, monkeypatch):

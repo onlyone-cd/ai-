@@ -130,6 +130,7 @@ def preview_matches(job, limit=None, candidates=None):
         reason["rule_score"] = reason["score"]
         reason["final_score"] = reason["score"]
         reason["score_formula"] = f"preview=rule_score; persisted_match=rule_score*{weights['rule']}%+ai_score*{weights['ai']}% when AI review succeeds"
+        enrich_match_reason(reason)
         results.append(
             {
                 "job_id": job.id,
@@ -173,6 +174,7 @@ def ai_review_matches(job, items, limit=None):
     if not llm_available():
         for item in items:
             item["reason"]["ai_review"] = {"source": "disabled", "summary": "AI 未启用，当前为规则匹配分。"}
+            enrich_match_reason(item["reason"])
         return items
 
     review_limit = len(items) if limit is None else max(0, min(int(limit), len(items)))
@@ -186,6 +188,7 @@ def ai_review_matches(job, items, limit=None):
             }
             item["reason"]["ai_score"] = None
             item["reason"]["final_score"] = item["reason"].get("rule_score", item["score"])
+            enrich_match_reason(item["reason"])
             reviewed.append(item)
             continue
         if index >= review_limit:
@@ -235,6 +238,7 @@ def mark_ai_unavailable(items, summary):
             item["reason"]["ai_score"] = None
             item["reason"]["final_score"] = item["reason"].get("rule_score", item["score"])
             item["score"] = item["reason"]["final_score"]
+            enrich_match_reason(item["reason"])
 
 
 def mark_rule_pending(item):
@@ -248,6 +252,7 @@ def mark_rule_pending(item):
     item["reason"]["ai_score"] = None
     item["reason"]["final_score"] = pending_score
     item["score"] = pending_score
+    enrich_match_reason(item["reason"])
 
 
 def db_candidate(candidate_id):
@@ -274,7 +279,90 @@ def apply_ai_review(job, candidate, item):
         reason["ai_score"] = None
         reason["final_score"] = rule_score
         reason["rule_score"] = rule_score
+    enrich_match_reason(reason)
     return item
+
+
+def enrich_match_reason(reason):
+    reason["score_breakdown"] = build_score_breakdown(reason)
+    reason["evidence_chain"] = build_evidence_chain(reason)
+    return reason
+
+
+def build_score_breakdown(reason):
+    weights = get_matching_weights()
+    rule_score = clamp_score(reason.get("rule_score", reason.get("score")), 0)
+    final_score = clamp_score(reason.get("final_score", rule_score), rule_score)
+    ai_score = reason.get("ai_score")
+    ai_score_value = clamp_score(ai_score, 0) if isinstance(ai_score, (int, float)) else None
+    return {
+        "rule_score": rule_score,
+        "ai_score": ai_score_value,
+        "final_score": final_score,
+        "rule_weight": int(weights.get("rule", 35)) if ai_score_value is not None else 100,
+        "ai_weight": int(weights.get("ai", 65)) if ai_score_value is not None else 0,
+        "skill_match": round(float(reason.get("match_rate") or 0) * 100),
+        "capability": round(float(reason.get("capability_rate") or 0) * 100),
+        "experience": None if reason.get("experience_rate") is None else round(float(reason.get("experience_rate") or 0) * 100),
+        "formula": reason.get("score_formula") or reason.get("formula") or "",
+    }
+
+
+def build_evidence_chain(reason):
+    chain = []
+    for hit in reason.get("hits") or []:
+        chain.append(
+            {
+                "type": "rule_hit",
+                "status": "accepted",
+                "title": f"{hit.get('jd_tag')} 命中 {hit.get('candidate_tag')}",
+                "detail": f"{hit.get('match_type', 'exact')} · JD 权重 {hit.get('job_weight')} · 简历熟练度 {hit.get('candidate_score')}/5",
+                "evidence": list_of_text(hit.get("evidence"))[:3],
+            }
+        )
+    for tag in reason.get("missing_tags") or []:
+        chain.append(
+            {
+                "type": "missing",
+                "status": "gap",
+                "title": f"缺失 {tag}",
+                "detail": "JD 要求中未在候选人简历标签和原文证据中确认。",
+                "evidence": [],
+            }
+        )
+    for warning in reason.get("domain_warnings") or []:
+        chain.append(
+            {
+                "type": "rule_rejection",
+                "status": "rejected",
+                "title": "规则命中被剔除",
+                "detail": warning,
+                "evidence": [],
+            }
+        )
+    review = reason.get("ai_review") or {}
+    if review:
+        if review.get("summary"):
+            chain.append(
+                {
+                    "type": "ai_summary",
+                    "status": review.get("source") or "ai",
+                    "title": "AI 综合判断",
+                    "detail": review.get("summary"),
+                    "evidence": list_of_text(review.get("evidence"))[:3],
+                }
+            )
+        for correction in list_of_text(review.get("rule_corrections"))[:5]:
+            chain.append(
+                {
+                    "type": "ai_correction",
+                    "status": "reviewed",
+                    "title": "AI 规则纠偏",
+                    "detail": correction,
+                    "evidence": [],
+                }
+            )
+    return chain[:20]
 
 
 def llm_failure_summary(exc):

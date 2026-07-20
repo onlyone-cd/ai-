@@ -171,6 +171,24 @@ export type MatchResult = {
     ai_score?: number | null;
     final_score?: number;
     score_formula?: string;
+    score_breakdown?: {
+      rule_score: number;
+      ai_score?: number | null;
+      final_score: number;
+      rule_weight: number;
+      ai_weight: number;
+      skill_match: number;
+      capability: number;
+      experience?: number | null;
+      formula?: string;
+    };
+    evidence_chain?: {
+      type: string;
+      status: string;
+      title: string;
+      detail: string;
+      evidence?: string[];
+    }[];
     ai_review?: {
       source: string;
       score?: number;

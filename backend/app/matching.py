@@ -15,6 +15,27 @@ RELATED_SETS = [
 
 EXACT_ONLY_TAGS = {"Excel", "PowerPoint", "Word", "金蝶", "用友", "SAP"}
 FINANCE_SYSTEM_TAGS = {"金蝶", "用友", "ERP财务"}
+GENERIC_OFFICE_TOOLS = {"Excel", "PowerPoint", "Word"}
+ROLE_DOMAIN_CATEGORIES = {
+    "财务/会计",
+    "人力资源",
+    "供应链/采购",
+    "销售/商务",
+    "客户服务",
+    "运营/市场",
+    "物流/仓储",
+    "法务/合规",
+    "行政/文秘",
+    "生产制造",
+    "质量/体系",
+    "教育/培训",
+    "医疗/护理",
+    "建筑/地产",
+    "餐饮/酒店",
+    "零售/门店",
+    "工程/制造",
+    "设计/工程",
+}
 
 ALIASES = {
     "js": "javascript",
@@ -74,6 +95,35 @@ def has_domain_context(jd_tag, candidate_tag, candidate_context):
     return has_category_context(category, candidate_context)
 
 
+def jd_required_domains(jd_tags):
+    labels = label_map()
+    domains = []
+    for item in jd_tags:
+        label = labels.get(item.get("tag"))
+        if label and label.category in ROLE_DOMAIN_CATEGORIES and label.category not in domains:
+            domains.append(label.category)
+    return domains
+
+
+def has_any_required_domain(required_domains, candidate_context):
+    return any(has_category_context(domain, candidate_context) for domain in required_domains)
+
+
+def domain_sensitive_hit_allowed(required_tag, candidate_tag, required_domains, candidate_context):
+    if not required_domains:
+        return True
+    labels = label_map()
+    required_label = labels.get(required_tag)
+    candidate_label = labels.get(candidate_tag)
+    required_category = required_label.category if required_label else ""
+    candidate_category = candidate_label.category if candidate_label else ""
+    if required_category in required_domains or candidate_category in required_domains:
+        return has_category_context(required_category or candidate_category, candidate_context)
+    if required_tag in GENERIC_OFFICE_TOOLS or candidate_tag in GENERIC_OFFICE_TOOLS:
+        return has_any_required_domain(required_domains, candidate_context)
+    return True
+
+
 DEFAULT_WEIGHTS = {
     "skill_match": 75,
     "capability": 25,
@@ -86,10 +136,12 @@ def match_candidate(job_skill_tags, candidate_tags, years_required=None, candida
     weights = {**DEFAULT_WEIGHTS, **(weights or {})}
     jd_tags = parse_skill_tags(job_skill_tags)
     total_weight = sum(item["weight"] for item in jd_tags) or 1
+    required_domains = jd_required_domains(jd_tags)
     matched_weight = 0.0
     capability_weight = 0.0
     hits = []
     missing = []
+    domain_warnings = []
     used_candidate_indexes = set()
 
     for required in jd_tags:
@@ -102,6 +154,16 @@ def match_candidate(job_skill_tags, candidate_tags, years_required=None, candida
                 continue
             factor, match_type = relation_factor(required["tag"], candidate_tag["tag"])
             if factor and not has_domain_context(required["tag"], candidate_tag["tag"], candidate_context):
+                domain_warnings.append(f"{required['tag']} / {candidate_tag['tag']} 缺少岗位领域上下文，已从规则命中剔除")
+                continue
+            if factor and not domain_sensitive_hit_allowed(required["tag"], candidate_tag["tag"], required_domains, candidate_context):
+                domain_warnings.append(
+                    f"{required['tag']} / {candidate_tag['tag']} 缺少 {', '.join(required_domains)} 场景证据，已从规则命中剔除"
+                )
+                continue
+            evidence = tag_evidence(candidate_tag["tag"], candidate_context)
+            if factor and not evidence:
+                domain_warnings.append(f"{required['tag']} / {candidate_tag['tag']} 缺少简历原文证据，已从规则命中剔除")
                 continue
             if factor and (best is None or factor * score > best["factor"] * best["candidate_score"]):
                 best = {
@@ -112,7 +174,7 @@ def match_candidate(job_skill_tags, candidate_tags, years_required=None, candida
                     "candidate_score": score,
                     "factor": factor,
                     "match_type": match_type,
-                    "evidence": tag_evidence(candidate_tag["tag"], candidate_context),
+                    "evidence": evidence,
                 }
         if best:
             used_candidate_indexes.add(best.pop("candidate_index"))
@@ -137,6 +199,8 @@ def match_candidate(job_skill_tags, candidate_tags, years_required=None, candida
         "missing_tags": missing,
         "formula": f"skill_score=round(match_rate*{weights.get('skill_match', 75)} + capability_rate*{weights.get('capability', 25)}); final=skill_score*{weights.get('skill_overall', 85)}%+experience_fit*{weights.get('experience', 15)} when years_required exists",
         "weights": weights,
+        "required_domains": required_domains,
+        "domain_warnings": list(dict.fromkeys(domain_warnings))[:8],
         "match_rate": round(match_rate, 3),
         "capability_rate": round(capability_rate, 3),
         "skill_score": max(0, min(100, skill_score)),

@@ -57,6 +57,27 @@ def test_finance_system_tags_require_accounting_context_even_for_exact_match():
     assert accountant["hits"][0]["evidence"]
 
 
+def test_finance_jd_office_tools_need_finance_context():
+    tags = [{"tag": "Excel", "score": 5, "category": "工具"}]
+
+    developer = match_candidate("财务报表 5|Excel 3", tags, candidate_context="Java 开发工程师，使用 Excel 整理接口测试数据。")
+    accountant = match_candidate("财务报表 5|Excel 3", tags, candidate_context="总账会计，负责财务报表编制，熟悉 Excel 数据透视表。")
+
+    assert developer["hits"] == []
+    assert developer["domain_warnings"]
+    assert accountant["hits"][0]["candidate_tag"] == "Excel"
+
+
+def test_stale_candidate_tags_without_resume_evidence_are_ignored():
+    tags = [{"tag": "用友", "score": 5, "category": "工具"}]
+
+    result = match_candidate("用友 5", tags, candidate_context="Java 开发工程师，负责 Spring Boot 后端服务。")
+
+    assert result["hits"] == []
+    assert "用友" in result["missing_tags"]
+    assert any("缺少" in warning for warning in result["domain_warnings"])
+
+
 def test_match_hits_include_resume_evidence_context():
     tags = [{"tag": "SolidWorks", "score": 4, "category": "设计/工程"}]
 

@@ -1056,6 +1056,12 @@ function JobsPage() {
                       ) : null}
                     </div>
                   )}
+                  {match.reason.domain_warnings?.length ? (
+                    <div className="mt-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                      <p className="font-medium">规则证据校验</p>
+                      <p className="mt-1">{match.reason.domain_warnings.slice(0, 2).join("；")}</p>
+                    </div>
+                  ) : null}
                   <div className="mt-3">
                     <div className="flex flex-wrap gap-2">
                       <button className="secondary-button" onClick={() => setSelectedCandidate(match.candidate)}>

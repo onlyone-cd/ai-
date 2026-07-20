@@ -163,6 +163,8 @@ export type MatchResult = {
       evidence?: string[];
     }[];
     missing_tags: string[];
+    required_domains?: string[];
+    domain_warnings?: string[];
     match_rate: number;
     capability_rate: number;
     rule_score?: number;

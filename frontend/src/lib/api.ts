@@ -104,6 +104,7 @@ export type EmployeeProfile = {
   raw_text?: string;
   candidate?: Candidate | null;
   analyses?: EmployeeAnalysis[];
+  recommendations?: EmployeeRecommendation[];
 };
 
 export type EmployeeAnalysis = {

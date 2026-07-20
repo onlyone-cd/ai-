@@ -4581,17 +4581,23 @@ function EmployeeDetailPage({ employee, onBack, onChanged, backLabel = "返回�
   const education = resumeArray(resume, "education");
   const flatUnits = useMemo(() => flattenOrganizationUnits(units), [units]);
 
+  function syncEmployeeDetail(data: EmployeeProfile) {
+    setDetail(data);
+    setAnalysis(data.analyses?.[0] || null);
+    const recommendations = data.recommendations || [];
+    setTransfer(recommendations.filter((item) => item.recommendation_type === "transfer"));
+    setReplacement(recommendations.filter((item) => item.recommendation_type === "replacement"));
+  }
+
   useEffect(() => {
     api.getEmployee(employee.id).then((data) => {
-      setDetail(data);
-      setAnalysis(data.analyses?.[0] || null);
+      syncEmployeeDetail(data);
     });
   }, [employee.id]);
 
   async function reloadDetail() {
     const fresh = await api.getEmployee(detail.id);
-    setDetail(fresh);
-    setAnalysis(fresh.analyses?.[0] || null);
+    syncEmployeeDetail(fresh);
     onChanged(fresh);
     return fresh;
   }
@@ -4604,7 +4610,7 @@ function EmployeeDetailPage({ employee, onBack, onChanged, backLabel = "返回�
     ]);
     setUnits(tree.items);
     setJobs(jobData.items);
-    setDetail(fresh);
+    syncEmployeeDetail(fresh);
     setEditForm({
       name: fresh.name || "",
       employee_no: fresh.employee_no || "",
@@ -4639,8 +4645,7 @@ function EmployeeDetailPage({ employee, onBack, onChanged, backLabel = "返回�
         organization_unit_id: editForm.organization_unit_id || null,
         current_job_id: editForm.current_job_id || null
       });
-      setDetail(updated);
-      setAnalysis(updated.analyses?.[0] || null);
+      syncEmployeeDetail(updated);
       onChanged(updated);
       setEditOpen(false);
       notify("success", "员工岗位、部门和薪资已更新");
@@ -4655,10 +4660,7 @@ function EmployeeDetailPage({ employee, onBack, onChanged, backLabel = "返回�
     setBusy(true);
     try {
       const updated = await api.uploadEmployeeResume(detail.id, file);
-      setDetail(updated);
-      setAnalysis(updated.analyses?.[0] || null);
-      setTransfer([]);
-      setReplacement([]);
+      syncEmployeeDetail(updated);
       onChanged(updated);
       notify("success", "员工简历已解析，标签和档案已更新");
     } finally {

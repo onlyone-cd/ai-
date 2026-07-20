@@ -736,7 +736,10 @@ def test_internal_talent_organization_employee_analysis_and_recommendations(clie
 
     detail = client.get(f"/api/employees/{employee['id']}", headers=admin_headers)
     assert detail.status_code == 200
-    assert detail.get_json()["data"]["candidate"]["id"] == candidate["id"]
+    detail_data = detail.get_json()["data"]
+    assert detail_data["candidate"]["id"] == candidate["id"]
+    assert any(item["recommendation_type"] == "replacement" for item in detail_data["recommendations"])
+    assert detail_data["recommendations"][0]["score"] >= detail_data["recommendations"][-1]["score"]
 
     report = client.get(f"/api/employees/{employee['id']}/report.txt", headers=admin_headers)
     assert report.status_code == 200

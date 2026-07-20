@@ -332,6 +332,7 @@ class EmployeeProfile(db.Model):
     owner = db.relationship("User")
     compensations = db.relationship("EmployeeCompensation", cascade="all, delete-orphan", backref="employee", order_by="desc(EmployeeCompensation.effective_date)")
     analyses = db.relationship("EmployeeAnalysis", cascade="all, delete-orphan", backref="employee", order_by="desc(EmployeeAnalysis.created_at)")
+    recommendations = db.relationship("EmployeeRecommendation", cascade="all, delete-orphan", backref="employee", order_by="desc(EmployeeRecommendation.score)")
 
     def latest_compensation(self):
         return self.compensations[0] if self.compensations else None
@@ -381,6 +382,7 @@ class EmployeeProfile(db.Model):
             data["raw_text"] = self.raw_text or ""
             data["candidate"] = self.candidate.to_dict(detail=True) if self.candidate else None
             data["analyses"] = [analysis.to_dict(include_salary=include_salary) for analysis in self.analyses]
+            data["recommendations"] = [recommendation.to_dict() for recommendation in self.recommendations]
         return data
 
 
@@ -472,7 +474,6 @@ class EmployeeRecommendation(db.Model):
     reason_json = db.Column(db.JSON, nullable=False, default=dict)
     created_at = db.Column(db.DateTime(timezone=True), default=utcnow)
 
-    employee = db.relationship("EmployeeProfile")
     target_job = db.relationship("Job")
     candidate = db.relationship("Candidate")
 

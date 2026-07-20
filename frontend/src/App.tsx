@@ -535,6 +535,20 @@ function CandidatesPage() {
     });
   }, []);
 
+  useEffect(() => {
+    if (!selectedJobId) return;
+    api.jobMatches(selectedJobId, { limit: 200 })
+      .then((data) => {
+        setMatchResults(data.items);
+        if (data.items.length) {
+          setMatchMessage(`已载入「${data.job.title}」最近一次匹配结果 ${data.items.length} 位。`);
+        }
+      })
+      .catch(() => {
+        setMatchResults([]);
+      });
+  }, [selectedJobId]);
+
   const filteredJobs = useMemo(() => {
     const keyword = jobQuery.trim().toLowerCase();
     if (!keyword) return jobs;
@@ -590,13 +604,11 @@ function CandidatesPage() {
       return;
     }
     setMatchLoading(true);
-    setMatchMessage(`正在按「${selectedJob?.title || "当前岗位"}」进行岗位匹配，请稍候...`);
+    setMatchMessage(`正在把「${selectedJob?.title || "当前岗位"}」岗位匹配加入后台任务，避免页面超时...`);
     try {
-      const data = await api.matchJob(selectedJobId);
-      setMatchResults(data.items);
-      const aiReviewed = data.items.filter((item) => item.reason.ai_review?.source === "deepseek").length;
-      setMatchMessage(`已按「${data.job.title}」完成综合匹配，AI 已深度复核前 ${aiReviewed} 位，候选人已按综合分排序。`);
-      notify("success", `岗位匹配完成，返回 ${data.items.length} 位候选人`);
+      const data = await api.matchJobAsync(selectedJobId);
+      setMatchMessage(`岗位匹配已进入后台任务 #${data.task.id}，完成后会持久化结果；可在后台任务查看进度，完成后刷新本页载入最新结果。`);
+      notify("success", `岗位匹配已加入后台任务 #${data.task.id}`);
     } catch (error) {
       const text = error instanceof Error ? error.message : "岗位匹配失败";
       setMatchMessage(text);
@@ -795,6 +807,7 @@ function JobsPage() {
   const [selectedCandidate, setSelectedCandidate] = useState<Candidate | null>(null);
   const [matches, setMatches] = useState<MatchResult[]>([]);
   const [preview, setPreview] = useState<MatchResult[]>([]);
+  const [matching, setMatching] = useState(false);
   const [formOpen, setFormOpen] = useState(false);
   const [error, setError] = useState("");
   const [pipelineMessage, setPipelineMessage] = useState("");
@@ -814,19 +827,22 @@ function JobsPage() {
     setError("");
     api.getJob(jobId).then(setSelectedJob);
     api.matchPreview(jobId, 5).then((data) => setPreview(data.items));
+    api.jobMatches(jobId, { limit: 200 }).then((data) => setMatches(data.items)).catch(() => setMatches([]));
   }, [jobId]);
 
   async function runMatch() {
     if (!jobId) return;
     setError("");
+    setMatching(true);
     try {
-      const data = await api.matchJob(jobId);
-      setMatches(data.items);
-      setSelectedJob(data.job);
-      notify("success", `AI 综合匹配已完成，返回 ${data.items.length} 位候选人`);
+      const data = await api.matchJobAsync(jobId);
+      setPipelineMessage(`岗位匹配已进入后台任务 #${data.task.id}，完成后刷新结果或在后台任务查看详情。`);
+      notify("success", `AI 综合匹配已加入后台任务 #${data.task.id}`);
       load();
     } catch (err) {
       setError(err instanceof Error ? err.message : "匹配失败");
+    } finally {
+      setMatching(false);
     }
   }
 
@@ -991,9 +1007,13 @@ function JobsPage() {
               <Plus size={17} />
               批量加入前 5
             </button>
-            <button className="primary-button" onClick={runMatch} disabled={!jobId || selectedJob?.status === "closed"}>
+            <button className="secondary-button" onClick={() => jobId && api.jobMatches(jobId, { limit: 200 }).then((data) => { setMatches(data.items); setSelectedJob(data.job); notify("success", `已刷新 ${data.items.length} 条持久化匹配结果`); })} disabled={!jobId}>
               <RefreshCw size={17} />
-              执行匹配
+              刷新结果
+            </button>
+            <button className="primary-button" onClick={runMatch} disabled={!jobId || selectedJob?.status === "closed" || matching}>
+              <RefreshCw size={17} />
+              {matching ? "排队中" : "后台匹配"}
             </button>
           </div>
         </div>
@@ -5973,6 +5993,7 @@ function taskTypeLabel(type: string) {
   if (type === "backup_export") return "全量备份导出";
   return {
     resume_retry_parse: "简历重新解析",
+    job_match: "岗位候选人匹配",
     employee_analyze_current_job: "员工岗位/薪资分析",
     employee_recommend_transfer: "员工调岗推荐",
     employee_recommend_replacement: "员工离职替补推荐"
@@ -6007,6 +6028,7 @@ function taskNextAction(task: BackgroundTask) {
 function taskSourceAction(task: BackgroundTask) {
   if (task.task_type === "resume_retry_parse") return "打开人才库查看解析后的简历标签和结构化内容。";
   if (task.task_type === "backup_export") return "在上线运维的最近备份包中确认备份文件。";
+  if (task.task_type === "job_match") return "打开岗位管理，刷新该岗位的持久化匹配结果。";
   if (String(task.task_type).startsWith("employee_")) return "打开组织与内部人才，进入员工档案查看最新 AI 盘点结果。";
   return "打开来源模块查看业务结果。";
 }
@@ -6014,6 +6036,7 @@ function taskSourceAction(task: BackgroundTask) {
 function taskSourceView(task: BackgroundTask): View {
   if (task.task_type === "resume_retry_parse") return "candidates";
   if (task.task_type === "backup_export") return "tasks";
+  if (task.task_type === "job_match") return "jobs";
   if (String(task.task_type).includes("boss")) return "boss";
   if (String(task.task_type).includes("interview")) return "interviews";
   if (String(task.task_type).includes("employee")) return "organization";

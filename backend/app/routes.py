@@ -2010,6 +2010,49 @@ def match_preview(user, job_id):
     return ok({"job": job.to_dict(), "items": preview_matches(job, limit=limit, candidates=visible_candidate_query(user).all())})
 
 
+@api.get("/jobs/<int:job_id>/matches")
+@login_required
+@roles_required("admin", "manager", "recruiter")
+def list_job_matches(user, job_id):
+    job = db.session.get(Job, job_id)
+    if not job:
+        return error("岗位不存在", "NOT_FOUND", 404)
+    if is_internal_job(job):
+        return error("内部岗位仅用于组织与内部人才分析，不进入招聘岗位匹配", "INTERNAL_JOB_NOT_RECRUITING", 409)
+    query = Match.query.filter_by(job_id=job.id).join(Candidate, Match.candidate_id == Candidate.id)
+    if user.role == "recruiter":
+        query = query.filter(Candidate.owner_hr_id == user.id)
+    query = query.order_by(Match.score.desc(), Match.created_at.desc(), Match.id.desc())
+    matches, meta = paginate_query(query)
+    return ok({"job": job.to_dict(), "items": [item.to_dict() for item in matches], **meta})
+
+
+def run_job_match_for_user(job_id, user=None):
+    job = db.session.get(Job, job_id)
+    if not job:
+        raise ValueError("岗位不存在")
+    if is_internal_job(job):
+        raise ValueError("内部岗位仅用于组织与内部人才分析，不进入招聘岗位匹配")
+    job.jd_structured = ensure_jd_structured(job)
+    db.session.commit()
+    if job.status != "active":
+        raise ValueError("关闭岗位不能执行匹配，请先恢复岗位")
+    candidates = visible_candidate_query(user).all() if user else Candidate.query.all()
+    results = persist_matches(db, job, candidates=candidates)
+    if user:
+        emit_notification_event(
+            user,
+            "job_matched",
+            {
+                "job_title": job.title,
+                "match_count": len(results),
+                "top_score": results[0]["score"] if results else 0,
+            },
+        )
+        db.session.commit()
+    return job, results
+
+
 @api.post("/jobs/<int:job_id>/match")
 @login_required
 @roles_required("admin", "manager", "recruiter")
@@ -2023,17 +2066,12 @@ def run_job_match(user, job_id):
     db.session.commit()
     if job.status != "active":
         return error("关闭岗位不能执行匹配，请先恢复岗位", "JOB_CLOSED", 409)
-    results = persist_matches(db, job, candidates=visible_candidate_query(user).all())
-    emit_notification_event(
-        user,
-        "job_matched",
-        {
-            "job_title": job.title,
-            "match_count": len(results),
-            "top_score": results[0]["score"] if results else 0,
-        },
-    )
-    db.session.commit()
+    if async_requested():
+        task = enqueue_task("job_match", {"job_id": job.id, "job_title": job.title}, created_by=user.id, max_attempts=2)
+        audit_log(user, "enqueue", "background_task", task.id, task.task_type, {"job_id": job.id})
+        db.session.commit()
+        return ok({"task": task.to_dict()}, "岗位匹配已加入后台任务")
+    job, results = run_job_match_for_user(job.id, user=user)
     return ok({"job": job.to_dict(), "items": results}, "岗位匹配已完成")
 
 

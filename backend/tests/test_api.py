@@ -1276,6 +1276,32 @@ def test_accounting_job_matches_accounting_candidate_first(client, admin_headers
     assert all("rule_score" in item["reason"] for item in matches)
 
 
+def test_job_match_can_run_as_background_task_and_list_persisted_matches(client, admin_headers):
+    jobs = client.get("/api/jobs", headers=admin_headers).get_json()["data"]["items"]
+    accounting_job = next(job for job in jobs if job["title"] == "财务会计主管")
+
+    queued = client.post(f"/api/jobs/{accounting_job['id']}/match?async=1", headers=admin_headers)
+
+    assert queued.status_code == 200
+    task = queued.get_json()["data"]["task"]
+    assert task["task_type"] == "job_match"
+    assert task["status"] == "queued"
+    assert task["payload"]["job_id"] == accounting_job["id"]
+
+    run_task = run_next_task()
+    assert run_task.id == task["id"]
+    assert run_task.status == "succeeded"
+    assert run_task.result["job_id"] == accounting_job["id"]
+    assert run_task.result["count"] == Candidate.query.count()
+
+    listed = client.get(f"/api/jobs/{accounting_job['id']}/matches", headers=admin_headers)
+    assert listed.status_code == 200
+    data = listed.get_json()["data"]
+    assert data["job"]["id"] == accounting_job["id"]
+    assert data["items"][0]["candidate"]["title"] == "总账会计"
+    assert data["items"][0]["score"] >= data["items"][-1]["score"]
+
+
 def test_job_match_combines_rule_score_and_ai_review(client, admin_headers, app, monkeypatch):
     jobs = client.get("/api/jobs", headers=admin_headers).get_json()["data"]["items"]
     accounting_job = next(job for job in jobs if job["title"] == "财务会计主管")

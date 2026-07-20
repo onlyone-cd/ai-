@@ -1,5 +1,5 @@
 from . import db
-from .models import BackgroundTask, Candidate, CandidateTag, EmployeeProfile, utcnow
+from .models import BackgroundTask, Candidate, CandidateTag, EmployeeProfile, User, utcnow
 from .ops_service import create_backup_package
 from .resume_service import reparse_candidate
 
@@ -76,6 +76,8 @@ def execute_task(task):
         return run_employee_recommend_transfer(task)
     if task.task_type == "employee_recommend_replacement":
         return run_employee_recommend_replacement(task)
+    if task.task_type == "job_match":
+        return run_job_match(task)
     raise ValueError(f"未知后台任务类型：{task.task_type}")
 
 
@@ -138,4 +140,27 @@ def run_employee_recommend_replacement(task):
         "employee_name": employee.name,
         "items": items,
         "count": len(items),
+    }
+
+
+def run_job_match(task):
+    from .routes import run_job_match_for_user
+
+    job_id = int((task.payload or {}).get("job_id") or 0)
+    user = db.session.get(User, task.created_by) if task.created_by else None
+    job, items = run_job_match_for_user(job_id, user=user)
+    return {
+        "job_id": job.id,
+        "job_title": job.title,
+        "count": len(items),
+        "top_score": items[0]["score"] if items else 0,
+        "top_candidates": [
+            {
+                "candidate_id": item["candidate_id"],
+                "candidate_name": item["candidate"]["name_masked"],
+                "score": item["score"],
+                "ai_source": (item.get("reason") or {}).get("ai_review", {}).get("source"),
+            }
+            for item in items[:5]
+        ],
     }

@@ -845,7 +845,10 @@ export const api = {
   restoreJob: (id: number) => request<Job>(`/jobs/${id}/restore`, { method: "POST" }),
   deleteJob: (id: number) => request<{ deleted: number }>(`/jobs/${id}`, { method: "DELETE" }),
   matchPreview: (jobId: number, limit = 5) => request<{ job: Job; items: MatchResult[] }>(`/jobs/${jobId}/match-preview?limit=${limit}`),
+  jobMatches: (jobId: number, params?: { limit?: number; offset?: number }) =>
+    request<{ job: Job; items: MatchResult[] } & PaginationMeta>(`/jobs/${jobId}/matches${queryString(params)}`),
   matchJob: (jobId: number) => request<{ job: Job; items: MatchResult[] }>(`/jobs/${jobId}/match`, { method: "POST" }),
+  matchJobAsync: (jobId: number) => request<{ task: BackgroundTask }>(`/jobs/${jobId}/match?async=1`, { method: "POST" }),
   settings: () => request<SystemSettings>("/settings"),
   updateAiSettings: (payload: Partial<AiSettings> & { api_key?: string }) =>
     request<AiSettings>("/settings/ai", { method: "PATCH", body: JSON.stringify(payload) }),

@@ -4127,6 +4127,8 @@ def infer_agent_tool_names(text, pending_action=None):
         return ["agent_plan"]
     if is_create_job_request(value):
         return ["create_job"]
+    if is_candidate_comparison_question(value):
+        tools.append("match_candidates_for_job")
     if is_candidate_job_match_question(value):
         tools.append("match_candidates_for_job")
     if is_employee_resume_agent_request(value):
@@ -4389,6 +4391,9 @@ def execute_agent_readonly_tool(user, text, tool_name, history=None):
         counts = Counter(job.status for job in jobs)
         return {"answer": f"当前共有 {len(jobs)} 个岗位，开放 {counts.get('active', 0)} 个。\n{format_job_list(jobs)}", "tool": "get_job_summary", "result": {"counts": dict(counts), "recent": [job.to_dict() for job in jobs[:8]]}, "suggestions": suggestions, "readonly": True}
     if tool_name == "match_candidates_for_job":
+        comparison = answer_candidate_comparison_question(user, text, suggestions, history=history)
+        if comparison:
+            return comparison
         evidence_answer = answer_candidate_job_match_question(user, text, suggestions, history=history)
         if evidence_answer:
             return evidence_answer
@@ -4536,6 +4541,10 @@ def run_agent_tool(user, message, pending_action=None, history=None):
     if clarification:
         return clarification
 
+    comparison = answer_candidate_comparison_question(user, text, suggestions, history=history)
+    if comparison:
+        return comparison
+
     match_evidence = answer_candidate_job_match_question(user, text, suggestions, history=history)
     if match_evidence:
         return match_evidence
@@ -4635,6 +4644,9 @@ def run_agent_tool(user, message, pending_action=None, history=None):
         }
 
     if "推荐" in text or "匹配" in text or "最佳候选人" in text:
+        comparison = answer_candidate_comparison_question(user, text, suggestions, history=history)
+        if comparison:
+            return comparison
         match_evidence = answer_candidate_job_match_question(user, text, suggestions, history=history)
         if match_evidence:
             return match_evidence
@@ -5513,6 +5525,44 @@ def find_candidate_for_agent_message(text):
         fuzzy.sort(key=lambda item: item[0], reverse=True)
         return fuzzy[0][1], [item[1] for item in fuzzy[:6]]
     return None, candidates[:6]
+
+
+def find_candidates_for_agent_message(text, limit=4):
+    normalized = re.sub(r"\s+", "", str(text or "")).lower()
+    terms = extract_agent_name_terms(text)
+    candidates = Candidate.query.order_by(Candidate.created_at.desc(), Candidate.id.desc()).limit(800).all()
+    exact = []
+    scored = []
+    for candidate in candidates:
+        fields = [
+            candidate.name_masked or "",
+            candidate.phone_masked or "",
+            candidate.email_masked or "",
+        ]
+        compact_fields = [re.sub(r"\s+", "", field).lower() for field in fields if field]
+        if any(field and field in normalized for field in compact_fields):
+            exact.append(candidate)
+            continue
+        score = 0
+        name = re.sub(r"\s+", "", candidate.name_masked or "").lower()
+        if name and len(name) >= 2:
+            for term in terms:
+                term_compact = re.sub(r"\s+", "", term).lower()
+                if not term_compact:
+                    continue
+                if term_compact in name or name in term_compact:
+                    score += 4
+                elif SequenceMatcher(None, name, term_compact).ratio() >= 0.72:
+                    score += 2
+        if score:
+            scored.append((score, candidate))
+    if exact:
+        return exact[:limit], exact
+    if scored:
+        scored.sort(key=lambda item: item[0], reverse=True)
+        matches = [item[1] for item in scored[:limit]]
+        return matches, matches
+    return [], candidates[:limit]
 
 
 def extract_agent_name_terms(text):
@@ -6448,6 +6498,15 @@ def is_candidate_job_match_question(text):
     return bool(candidate or employee)
 
 
+def is_candidate_comparison_question(text):
+    value = str(text or "")
+    if not any(word in value for word in ["谁更适合", "哪个更适合", "哪位更适合", "对比", "比较", "谁更推荐", "谁更匹配"]):
+        return False
+    if not any(word in value for word in ["岗位", "职位", "JD", "jd", "匹配", "推荐", "适合"]):
+        return False
+    return len(find_candidates_for_agent_message(value, limit=4)[0]) >= 2
+
+
 def find_job_for_agent_question(text, history=None):
     job = find_job_from_message(text)
     if job:
@@ -6531,6 +6590,89 @@ def answer_candidate_job_match_question(user, text, suggestions, history=None):
         "suggestions": ["查看候选人完整简历", "把他和前 5 名候选人对比", "重新后台匹配该岗位", "加入流程"],
         "readonly": True,
     }
+
+
+def answer_candidate_comparison_question(user, text, suggestions, history=None):
+    if not is_candidate_comparison_question(text):
+        return None
+    candidates, alternatives = find_candidates_for_agent_message(text, limit=4)
+    if len(candidates) < 2:
+        return ask_agent_clarification(
+            text,
+            intent="match_candidates_for_job",
+            missing=["candidates"],
+            selected_tools=["global_lookup", "match_candidates_for_job"],
+            answer="我可以对比候选人，但需要至少两个明确候选人。请补充两个姓名、手机号后四位或邮箱。",
+            suggestions=[item.name_masked for item in alternatives[:4] if item.name_masked] or suggestions,
+        )
+    candidates = [candidate for candidate in candidates if can_access_candidate(user, candidate)][:4]
+    if len(candidates) < 2:
+        return {
+            "answer": "识别到了候选人，但你没有权限同时查看这些候选人的匹配证据。",
+            "tool": "match_candidates_for_job",
+            "result": {"allowed": False},
+            "suggestions": suggestions,
+            "readonly": True,
+        }
+    job = find_job_for_agent_question(text, history=history)
+    if not job or is_internal_job(job):
+        return ask_agent_clarification(
+            text,
+            intent="match_candidates_for_job",
+            missing=["job"],
+            selected_tools=["get_job_summary", "match_candidates_for_job"],
+            answer=f"我已识别 {len(candidates)} 位候选人，但还需要确认要对比哪个在招岗位。请补充岗位名称。",
+            suggestions=[item.title for item in Job.query.filter_by(status="active").order_by(Job.created_at.desc()).limit(6).all() if not is_internal_job(item)] or suggestions,
+        )
+    items = []
+    for candidate in candidates:
+        match = match_candidate_for_agent(job, candidate, user)
+        if match:
+            items.append({"candidate": candidate.to_dict(), "match": match})
+    items.sort(key=lambda item: item["match"].get("score", 0), reverse=True)
+    answer = format_candidate_comparison_answer(job, items)
+    return {
+        "answer": answer,
+        "tool": "match_candidates_for_job",
+        "result": {"job": job.to_dict(), "items": items, "comparison": True},
+        "suggestions": ["查看第一名完整简历", "把第一名加入流程", "查看两人缺口差异", "重新后台匹配该岗位"],
+        "readonly": True,
+    }
+
+
+def format_candidate_comparison_answer(job, items):
+    if not items:
+        return f"没有生成有效对比结果，建议先执行「{job.title}」的后台匹配。"
+    winner = items[0]
+    lines = [
+        f"按「{job.title}」的 JD 和候选人完整简历对比，当前更推荐 {winner['candidate']['name_masked']}，综合分 {winner['match'].get('score')}/100。",
+        "排序：",
+    ]
+    for index, item in enumerate(items, 1):
+        candidate = item["candidate"]
+        match = item["match"]
+        reason = enrich_match_reason(match.get("reason") or {})
+        breakdown = reason.get("score_breakdown") or {}
+        review = reason.get("ai_review") or {}
+        accepted = [chain for chain in reason.get("evidence_chain") or [] if chain.get("status") == "accepted"]
+        gaps = [chain for chain in reason.get("evidence_chain") or [] if chain.get("status") == "gap"]
+        evidence = "；".join(format_evidence_chain_item(chain) for chain in accepted[:2]) or "暂无明确命中证据"
+        gap_text = "、".join(chain.get("title", "").replace("缺失 ", "") for chain in gaps[:3]) or "无明显关键缺口"
+        ai_part = f"，AI 判断：{review.get('summary')}" if review.get("summary") else ""
+        lines.append(
+            f"{index}. {candidate['name_masked']}：{match.get('score')}/100"
+            f"（规则 {breakdown.get('rule_score', reason.get('rule_score', match.get('score')))}，AI {breakdown.get('ai_score') if breakdown.get('ai_score') is not None else '未复核'}）。"
+            f"证据：{evidence}。缺口：{gap_text}{ai_part}"
+        )
+    if len(items) >= 2:
+        gap = int(items[0]["match"].get("score") or 0) - int(items[1]["match"].get("score") or 0)
+        if gap >= 15:
+            lines.append(f"结论：第一名优势明显，分差 {gap} 分，可优先推进。")
+        elif gap >= 5:
+            lines.append(f"结论：第一名略优，分差 {gap} 分，建议结合面试重点再复核。")
+        else:
+            lines.append(f"结论：分差只有 {gap} 分，建议把两人都进入下一轮，用面试问题验证关键缺口。")
+    return "\n".join(lines)
 
 
 def format_candidate_match_evidence(job, candidate, match):

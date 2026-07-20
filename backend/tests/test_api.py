@@ -2610,6 +2610,20 @@ def test_agent_explains_candidate_job_match_with_evidence_chain(client, admin_he
     assert data["result"]["match"]["reason"]["evidence_chain"]
 
 
+def test_agent_compares_candidates_for_same_job(client, admin_headers):
+    response = client.post("/api/agent/chat", headers=admin_headers, json={"message": "李华和王强谁更适合Python后端工程师岗位"})
+
+    assert response.status_code == 200
+    data = response.get_json()["data"]
+    assert data["tool"] == "match_candidates_for_job"
+    assert data["result"]["comparison"] is True
+    assert data["result"]["job"]["title"] == "Python 后端工程师"
+    assert data["result"]["items"][0]["candidate"]["name_masked"] == "王强"
+    assert "当前更推荐 王强" in data["answer"]
+    assert "排序" in data["answer"]
+    assert "缺口" in data["answer"]
+
+
 def test_boss_draft_can_be_listed_and_reviewed(client, admin_headers):
     created = client.post("/api/boss/messages/draft", headers=admin_headers, json={"candidate_id": 1, "job_id": 1})
     assert created.status_code == 200

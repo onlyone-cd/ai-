@@ -2596,6 +2596,20 @@ def test_agent_lists_job_details_and_matches_best_candidates(client, admin_heade
     assert len(match_data["result"]["jobs"]) >= 3
 
 
+def test_agent_explains_candidate_job_match_with_evidence_chain(client, admin_headers):
+    response = client.post("/api/agent/chat", headers=admin_headers, json={"message": "李华为什么适合财务会计主管岗位"})
+
+    assert response.status_code == 200
+    data = response.get_json()["data"]
+    assert data["tool"] == "match_candidates_for_job"
+    assert data["result"]["candidate"]["name_masked"] == "李华"
+    assert data["result"]["job"]["title"] == "财务会计主管"
+    assert "评分拆解" in data["answer"]
+    assert "主要证据" in data["answer"]
+    assert data["result"]["match"]["reason"]["score_breakdown"]
+    assert data["result"]["match"]["reason"]["evidence_chain"]
+
+
 def test_boss_draft_can_be_listed_and_reviewed(client, admin_headers):
     created = client.post("/api/boss/messages/draft", headers=admin_headers, json={"candidate_id": 1, "job_id": 1})
     assert created.status_code == 200

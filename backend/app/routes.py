@@ -20,7 +20,7 @@ from sqlalchemy.exc import IntegrityError
 
 from . import db, production_config_checks
 from .auth import hash_password, issue_token, login_required, roles_required, validate_password_strength, verify_password
-from .job_service import ai_review_matches, build_jd_structured, clamp_score, ensure_jd_structured, list_of_text, llm_failure_summary, persist_matches, preview_matches, truncate_text
+from .job_service import ai_review_matches, build_jd_structured, clamp_score, ensure_jd_structured, enrich_match_reason, list_of_text, llm_failure_summary, persist_matches, preview_matches, truncate_text
 from .llm_client import LLMError, chat_json, llm_available, llm_status
 from .matching import match_candidate, parse_skill_tags
 from .models import AgentConversation, AgentMessage, AuditLog, BackgroundTask, BossAccount, BossDraft, BossSyncItem, BossSyncJob, Candidate, CandidateTag, EmployeeAnalysis, EmployeeCompensation, EmployeeProfile, EmployeeRecommendation, InterviewAssignment, InterviewFeedback, InterviewSpeechLog, Job, LLMUsage, Match, NotificationChannel, NotificationEvent, NotificationLog, OfferRecord, OrganizationUnit, PipelineStage, ResumeAttachment, UploadBatch, User, utcnow, years_between
@@ -2043,7 +2043,12 @@ def list_job_matches(user, job_id):
         query = query.filter(Candidate.owner_hr_id == user.id)
     query = query.order_by(Match.score.desc(), Match.created_at.desc(), Match.id.desc())
     matches, meta = paginate_query(query)
-    return ok({"job": job.to_dict(), "items": [item.to_dict() for item in matches], **meta})
+    items = []
+    for item in matches:
+        data = item.to_dict()
+        data["reason"] = enrich_match_reason(data.get("reason") or {})
+        items.append(data)
+    return ok({"job": job.to_dict(), "items": items, **meta})
 
 
 def run_job_match_for_user(job_id, user=None):
@@ -4122,6 +4127,8 @@ def infer_agent_tool_names(text, pending_action=None):
         return ["agent_plan"]
     if is_create_job_request(value):
         return ["create_job"]
+    if is_candidate_job_match_question(value):
+        tools.append("match_candidates_for_job")
     if is_employee_resume_agent_request(value):
         tools.append("analyze_employee_resume")
     if is_profile_knowledge_lookup_request(value):
@@ -4382,12 +4389,13 @@ def execute_agent_readonly_tool(user, text, tool_name, history=None):
         counts = Counter(job.status for job in jobs)
         return {"answer": f"当前共有 {len(jobs)} 个岗位，开放 {counts.get('active', 0)} 个。\n{format_job_list(jobs)}", "tool": "get_job_summary", "result": {"counts": dict(counts), "recent": [job.to_dict() for job in jobs[:8]]}, "suggestions": suggestions, "readonly": True}
     if tool_name == "match_candidates_for_job":
+        evidence_answer = answer_candidate_job_match_question(user, text, suggestions, history=history)
+        if evidence_answer:
+            return evidence_answer
         jobs = jobs_for_match_request(text)
         results = []
         for job in jobs[:5]:
-            job.jd_structured = ensure_jd_structured(job)
-            matches = ai_review_matches(job, preview_matches(job, limit=8))
-            matches.sort(key=lambda item: item["score"], reverse=True)
+            matches = agent_matches_for_job(job, user, limit=5)
             results.append({"job": job.to_dict(), "items": matches[:5]})
         if results:
             db.session.commit()
@@ -4528,6 +4536,10 @@ def run_agent_tool(user, message, pending_action=None, history=None):
     if clarification:
         return clarification
 
+    match_evidence = answer_candidate_job_match_question(user, text, suggestions, history=history)
+    if match_evidence:
+        return match_evidence
+
     if is_employee_resume_agent_request(text):
         return analyze_employee_resume_from_agent(user, text, suggestions, history=history)
 
@@ -4623,6 +4635,9 @@ def run_agent_tool(user, message, pending_action=None, history=None):
         }
 
     if "推荐" in text or "匹配" in text or "最佳候选人" in text:
+        match_evidence = answer_candidate_job_match_question(user, text, suggestions, history=history)
+        if match_evidence:
+            return match_evidence
         jobs = jobs_for_match_request(text)
         if not jobs:
             return {
@@ -4634,10 +4649,7 @@ def run_agent_tool(user, message, pending_action=None, history=None):
             }
         results = []
         for job in jobs:
-            job.jd_structured = ensure_jd_structured(job)
-            matches = ai_review_matches(job, preview_matches(job, limit=8))
-            matches.sort(key=lambda item: item["score"], reverse=True)
-            matches = matches[:5]
+            matches = agent_matches_for_job(job, user, limit=5)
             results.append({"job": job.to_dict(), "items": matches})
         db.session.commit()
         first = results[0]
@@ -6413,14 +6425,152 @@ def find_job_from_message(message):
 
 def jobs_for_match_request(message):
     if any(word in message for word in ["所有岗位", "全部岗位", "每个岗位", "各岗位"]):
-        return Job.query.filter_by(status="active").order_by(Job.created_at.desc()).limit(8).all()
+        jobs = Job.query.filter_by(status="active").order_by(Job.created_at.desc()).limit(16).all()
+        return [job for job in jobs if not is_internal_job(job)][:8]
     job = find_job_from_message(message)
     if job:
-        return [job]
+        return [] if is_internal_job(job) else [job]
     if "岗位" in message and "最佳候选人" in message:
-        return Job.query.filter_by(status="active").order_by(Job.created_at.desc()).limit(8).all()
-    fallback = Job.query.filter_by(status="active").first() or Job.query.first()
+        jobs = Job.query.filter_by(status="active").order_by(Job.created_at.desc()).limit(16).all()
+        return [job for job in jobs if not is_internal_job(job)][:8]
+    fallback = next((job for job in Job.query.filter_by(status="active").order_by(Job.created_at.desc()).limit(16).all() if not is_internal_job(job)), None)
     return [fallback] if fallback else []
+
+
+def is_candidate_job_match_question(text):
+    value = str(text or "")
+    if not any(word in value for word in ["适合", "不适合", "为什么", "匹配原因", "推荐理由", "证据链", "匹配详情"]):
+        return False
+    if not any(word in value for word in ["岗位", "职位", "JD", "jd", "匹配", "推荐"]):
+        return False
+    candidate, _ = find_candidate_for_agent_message(value)
+    employee, _ = find_employee_for_agent_message(value)
+    return bool(candidate or employee)
+
+
+def find_job_for_agent_question(text, history=None):
+    job = find_job_from_message(text)
+    if job:
+        return job
+    history_text = "\n".join(item.get("content", "") for item in (history or [])[-6:] if isinstance(item, dict))
+    return find_job_from_message(f"{history_text}\n{text}") if history_text else None
+
+
+def agent_matches_for_job(job, user, limit=5):
+    if not job or is_internal_job(job):
+        return []
+    persisted = Match.query.filter_by(job_id=job.id).join(Candidate, Match.candidate_id == Candidate.id)
+    if user.role == "recruiter":
+        persisted = persisted.filter(Candidate.owner_hr_id == user.id)
+    persisted_items = persisted.order_by(Match.score.desc(), Match.created_at.desc(), Match.id.desc()).limit(limit).all()
+    if persisted_items:
+        results = []
+        for item in persisted_items:
+            data = item.to_dict()
+            data["reason"] = enrich_match_reason(data.get("reason") or {})
+            results.append(data)
+        return results
+    job.jd_structured = ensure_jd_structured(job)
+    matches = ai_review_matches(job, preview_matches(job, limit=max(limit, 8), candidates=visible_candidate_query(user).all()))
+    matches.sort(key=lambda item: item["score"], reverse=True)
+    return matches[:limit]
+
+
+def match_candidate_for_agent(job, candidate, user):
+    if not job or not candidate or is_internal_job(job):
+        return None
+    persisted = Match.query.filter_by(job_id=job.id, candidate_id=candidate.id).order_by(Match.created_at.desc(), Match.id.desc()).first()
+    if persisted and (user.role != "recruiter" or candidate.owner_hr_id == user.id):
+        data = persisted.to_dict()
+        data["reason"] = enrich_match_reason(data.get("reason") or {})
+        return data
+    job.jd_structured = ensure_jd_structured(job)
+    items = preview_matches(job, limit=1, candidates=[candidate])
+    reviewed = ai_review_matches(job, items, limit=1)
+    reviewed.sort(key=lambda item: item["score"], reverse=True)
+    return reviewed[0] if reviewed else None
+
+
+def answer_candidate_job_match_question(user, text, suggestions, history=None):
+    if not is_candidate_job_match_question(text):
+        return None
+    candidate, candidate_alternatives = find_candidate_for_agent_message(text)
+    if not candidate:
+        return ask_agent_clarification(
+            text,
+            intent="match_candidates_for_job",
+            missing=["person"],
+            selected_tools=["global_lookup", "match_candidates_for_job"],
+            answer="我可以解释某个人和岗位的匹配原因，但需要先确认候选人是谁。请补充姓名、手机号后四位或邮箱。",
+            suggestions=[item.name_masked for item in candidate_alternatives[:4] if item.name_masked] or suggestions,
+        )
+    if not can_access_candidate(user, candidate):
+        return {
+            "answer": "找到了候选人，但你没有权限查看该候选人的匹配证据。",
+            "tool": "match_candidates_for_job",
+            "result": {"allowed": False},
+            "suggestions": suggestions,
+            "readonly": True,
+        }
+    job = find_job_for_agent_question(text, history=history)
+    if not job or is_internal_job(job):
+        return ask_agent_clarification(
+            text,
+            intent="match_candidates_for_job",
+            missing=["job"],
+            selected_tools=["get_job_summary", "match_candidates_for_job"],
+            answer=f"我已识别候选人 {candidate.name_masked}，但还需要确认要对比哪个在招岗位。请补充岗位名称。",
+            suggestions=[job.title for job in Job.query.filter_by(status="active").order_by(Job.created_at.desc()).limit(6).all() if not is_internal_job(job)] or suggestions,
+        )
+    match = match_candidate_for_agent(job, candidate, user)
+    answer = format_candidate_match_evidence(job, candidate, match)
+    return {
+        "answer": answer,
+        "tool": "match_candidates_for_job",
+        "result": {"job": job.to_dict(), "candidate": candidate.to_dict(), "match": match},
+        "suggestions": ["查看候选人完整简历", "把他和前 5 名候选人对比", "重新后台匹配该岗位", "加入流程"],
+        "readonly": True,
+    }
+
+
+def format_candidate_match_evidence(job, candidate, match):
+    if not match:
+        return f"我没有找到 {candidate.name_masked} 与「{job.title}」的有效匹配结果。建议先执行该岗位的后台匹配。"
+    reason = enrich_match_reason(match.get("reason") or {})
+    breakdown = reason.get("score_breakdown") or {}
+    review = reason.get("ai_review") or {}
+    lines = [
+        f"{candidate.name_masked} 与「{job.title}」的综合匹配分是 {match.get('score')}/100。",
+        f"评分拆解：规则分 {breakdown.get('rule_score', reason.get('rule_score', match.get('score')))}/100，AI 分 {breakdown.get('ai_score') if breakdown.get('ai_score') is not None else '未复核'}，技能匹配 {breakdown.get('skill_match', 0)}%，能力熟练 {breakdown.get('capability', 0)}%。",
+    ]
+    if review.get("summary"):
+        lines.append(f"AI 判断：{review.get('summary')}")
+    accepted = [item for item in reason.get("evidence_chain") or [] if item.get("status") == "accepted"]
+    gaps = [item for item in reason.get("evidence_chain") or [] if item.get("status") == "gap"]
+    rejected = [item for item in reason.get("evidence_chain") or [] if item.get("status") == "rejected"]
+    if accepted:
+        lines.append("主要证据：" + "；".join(format_evidence_chain_item(item) for item in accepted[:4]))
+    if gaps:
+        lines.append("缺口：" + "；".join(item.get("title", "") for item in gaps[:4]))
+    if rejected:
+        lines.append("规则纠偏：" + "；".join(item.get("detail", "") for item in rejected[:3]))
+    if review.get("risks"):
+        lines.append("风险：" + "；".join(review.get("risks")[:3]))
+    if review.get("interview_focus"):
+        lines.append("建议面试追问：" + "；".join(review.get("interview_focus")[:3]))
+    if match.get("score", 0) >= 80:
+        lines.append("结论：可以优先推进，但仍建议按上面的风险点复核。")
+    elif match.get("score", 0) >= 60:
+        lines.append("结论：可进入备选池，适合先补充电话沟通或技术/业务追问。")
+    else:
+        lines.append("结论：当前不建议优先推进，除非 JD 要求或候选人补充材料发生变化。")
+    return "\n".join(lines)
+
+
+def format_evidence_chain_item(item):
+    evidence = item.get("evidence") or []
+    suffix = f"（{evidence[0]}）" if evidence else ""
+    return f"{item.get('title', '')}{suffix}"
 
 
 def format_job_list(jobs):

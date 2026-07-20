@@ -1,5 +1,5 @@
 from . import db
-from .models import BackgroundTask, Candidate, CandidateTag, EmployeeProfile, User, utcnow
+from .models import BackgroundTask, Candidate, CandidateTag, EmployeeProfile, Job, Match, User, utcnow
 from .ops_service import create_backup_package
 from .resume_service import reparse_candidate
 
@@ -78,6 +78,8 @@ def execute_task(task):
         return run_employee_recommend_replacement(task)
     if task.task_type == "job_match":
         return run_job_match(task)
+    if task.task_type == "matching_recalibration":
+        return run_matching_recalibration(task)
     raise ValueError(f"未知后台任务类型：{task.task_type}")
 
 
@@ -163,4 +165,72 @@ def run_job_match(task):
             }
             for item in items[:5]
         ],
+    }
+
+
+def run_matching_recalibration(task):
+    from .routes import is_internal_job, run_job_match_for_user
+
+    payload = task.payload or {}
+    user = db.session.get(User, task.created_by) if task.created_by else None
+    candidate_limit = max(1, min(int(payload.get("candidate_limit") or 200), 1000))
+    job_limit = max(1, min(int(payload.get("job_limit") or 50), 200))
+    reparse_candidates = bool(payload.get("reparse_candidates", True))
+    rematch_jobs = bool(payload.get("rematch_jobs", True))
+
+    reparsed = []
+    reparse_errors = []
+    if reparse_candidates:
+        candidate_query = Candidate.query
+        if user and user.role == "recruiter":
+            candidate_query = candidate_query.filter_by(owner_hr_id=user.id)
+        candidates = candidate_query.order_by(Candidate.created_at.desc(), Candidate.id.desc()).limit(candidate_limit).all()
+        for candidate in candidates:
+            try:
+                reparse_candidate(candidate)
+                db.session.commit()
+                tag_count = CandidateTag.query.filter_by(candidate_id=candidate.id).count()
+                reparsed.append({"candidate_id": candidate.id, "candidate_name": candidate.name_masked, "tag_count": tag_count})
+            except Exception as exc:
+                db.session.rollback()
+                failed = db.session.get(Candidate, candidate.id)
+                if failed:
+                    failed.parse_status = "failed"
+                    failed.parse_error = str(exc)[:500]
+                    db.session.commit()
+                reparse_errors.append({"candidate_id": candidate.id, "candidate_name": candidate.name_masked, "error": str(exc)[:300]})
+        if not rematch_jobs and reparsed:
+            candidate_ids = [item["candidate_id"] for item in reparsed]
+            Match.query.filter(Match.candidate_id.in_(candidate_ids)).delete(synchronize_session=False)
+            db.session.commit()
+
+    rematched = []
+    match_errors = []
+    if rematch_jobs:
+        job_query = Job.query.filter_by(status="active")
+        jobs = [job for job in job_query.order_by(Job.created_at.desc(), Job.id.desc()).limit(job_limit * 2).all() if not is_internal_job(job)][:job_limit]
+        for job in jobs:
+            try:
+                _, items = run_job_match_for_user(job.id, user=user)
+                rematched.append(
+                    {
+                        "job_id": job.id,
+                        "job_title": job.title,
+                        "count": len(items),
+                        "top_score": items[0]["score"] if items else 0,
+                    }
+                )
+            except Exception as exc:
+                db.session.rollback()
+                match_errors.append({"job_id": job.id, "job_title": job.title, "error": str(exc)[:300]})
+
+    return {
+        "reparsed_count": len(reparsed),
+        "reparse_failed_count": len(reparse_errors),
+        "rematched_count": len(rematched),
+        "match_failed_count": len(match_errors),
+        "reparsed": reparsed[:20],
+        "reparse_errors": reparse_errors[:20],
+        "rematched": rematched[:20],
+        "match_errors": match_errors[:20],
     }

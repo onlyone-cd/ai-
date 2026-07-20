@@ -1302,6 +1302,26 @@ def test_job_match_can_run_as_background_task_and_list_persisted_matches(client,
     assert data["items"][0]["score"] >= data["items"][-1]["score"]
 
 
+def test_matching_recalibration_task_reparses_and_rematches(client, admin_headers):
+    queued = client.post(
+        "/api/matching/recalibrate",
+        headers=admin_headers,
+        json={"candidate_limit": 3, "job_limit": 2, "reparse_candidates": True, "rematch_jobs": True},
+    )
+
+    assert queued.status_code == 200
+    task = queued.get_json()["data"]["task"]
+    assert task["task_type"] == "matching_recalibration"
+    assert task["payload"]["candidate_limit"] == 3
+
+    run_task = run_next_task()
+    assert run_task.id == task["id"]
+    assert run_task.status == "succeeded"
+    assert run_task.result["reparsed_count"] <= 3
+    assert run_task.result["rematched_count"] <= 2
+    assert Match.query.count() > 0
+
+
 def test_job_match_combines_rule_score_and_ai_review(client, admin_headers, app, monkeypatch):
     jobs = client.get("/api/jobs", headers=admin_headers).get_json()["data"]["items"]
     accounting_job = next(job for job in jobs if job["title"] == "财务会计主管")

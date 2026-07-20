@@ -742,6 +742,8 @@ export const api = {
   retryTask: (id: number) => request<BackgroundTask>(`/tasks/${id}/retry`, { method: "POST" }),
   retryTasks: (taskIds: number[]) => request<{ retried: BackgroundTask[]; skipped: { id: number; reason: string }[]; retried_count: number; skipped_count: number }>("/tasks/retry-batch", { method: "POST", body: JSON.stringify({ task_ids: taskIds }) }),
   runTask: (id: number) => request<BackgroundTask>(`/tasks/${id}/run`, { method: "POST" }),
+  recalibrateMatching: (payload?: { reparse_candidates?: boolean; rematch_jobs?: boolean; candidate_limit?: number; job_limit?: number }) =>
+    request<{ task: BackgroundTask }>("/matching/recalibrate", { method: "POST", body: JSON.stringify(payload || {}) }),
   opsBackupStatus: () => request<OpsBackupStatus>("/ops/backup/status"),
   opsDataQuality: () => request<OpsDataQuality>("/ops/data-quality"),
   opsDeployGates: () => request<OpsDeployGates>("/ops/deploy-gates"),

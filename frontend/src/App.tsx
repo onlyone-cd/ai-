@@ -2936,6 +2936,24 @@ function TasksPage({ setView }: { setView: (view: View) => void }) {
     }
   }
 
+  async function createMatchingRecalibration() {
+    setOpsBusy(true);
+    try {
+      const data = await api.recalibrateMatching({
+        reparse_candidates: true,
+        rematch_jobs: true,
+        candidate_limit: 500,
+        job_limit: 100
+      });
+      notify("success", `匹配数据校准已加入后台任务 #${data.task.id}`);
+      await load(status, 0, taskLimit);
+    } catch (error) {
+      notify("error", error instanceof Error ? error.message : "创建校准任务失败");
+    } finally {
+      setOpsBusy(false);
+    }
+  }
+
   const statuses = ["all", "queued", "running", "succeeded", "failed"];
   const totalRows = opsStatus ? Object.values(opsStatus.counts || {}).reduce((sum, value) => sum + Number(value || 0), 0) : 0;
   const moduleTarget: Record<string, View> = {
@@ -2966,6 +2984,10 @@ function TasksPage({ setView }: { setView: (view: View) => void }) {
           <button className="secondary-button" onClick={batchRetry} disabled={opsBusy || selectedTaskIds.size === 0}>
             <RefreshCw size={17} />
             批量重试 {selectedTaskIds.size || ""}
+          </button>
+          <button className="secondary-button" onClick={createMatchingRecalibration} disabled={opsBusy}>
+            <ShieldCheck size={17} />
+            匹配数据校准
           </button>
         </div>
       </div>
@@ -6000,6 +6022,7 @@ function taskTypeLabel(type: string) {
   return {
     resume_retry_parse: "简历重新解析",
     job_match: "岗位候选人匹配",
+    matching_recalibration: "匹配数据校准",
     employee_analyze_current_job: "员工岗位/薪资分析",
     employee_recommend_transfer: "员工调岗推荐",
     employee_recommend_replacement: "员工离职替补推荐"
@@ -6035,6 +6058,7 @@ function taskSourceAction(task: BackgroundTask) {
   if (task.task_type === "resume_retry_parse") return "打开人才库查看解析后的简历标签和结构化内容。";
   if (task.task_type === "backup_export") return "在上线运维的最近备份包中确认备份文件。";
   if (task.task_type === "job_match") return "打开岗位管理，刷新该岗位的持久化匹配结果。";
+  if (task.task_type === "matching_recalibration") return "打开岗位管理查看重算后的匹配结果，或到人才库抽查标签证据。";
   if (String(task.task_type).startsWith("employee_")) return "打开组织与内部人才，进入员工档案查看最新 AI 盘点结果。";
   return "打开来源模块查看业务结果。";
 }
@@ -6043,6 +6067,7 @@ function taskSourceView(task: BackgroundTask): View {
   if (task.task_type === "resume_retry_parse") return "candidates";
   if (task.task_type === "backup_export") return "tasks";
   if (task.task_type === "job_match") return "jobs";
+  if (task.task_type === "matching_recalibration") return "jobs";
   if (String(task.task_type).includes("boss")) return "boss";
   if (String(task.task_type).includes("interview")) return "interviews";
   if (String(task.task_type).includes("employee")) return "organization";

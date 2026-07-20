@@ -564,6 +564,25 @@ def run_background_task_now(user, task_id):
     return ok(task.to_dict(), "后台任务已执行")
 
 
+@api.post("/matching/recalibrate")
+@login_required
+@roles_required("admin", "manager", "recruiter")
+def enqueue_matching_recalibration(user):
+    payload = request.get_json(silent=True) or {}
+    candidate_limit = max(1, min(int(payload.get("candidate_limit") or 200), 1000))
+    job_limit = max(1, min(int(payload.get("job_limit") or 50), 200))
+    task_payload = {
+        "reparse_candidates": bool(payload.get("reparse_candidates", True)),
+        "rematch_jobs": bool(payload.get("rematch_jobs", True)),
+        "candidate_limit": candidate_limit,
+        "job_limit": job_limit,
+    }
+    task = enqueue_task("matching_recalibration", task_payload, created_by=user.id, max_attempts=1)
+    audit_log(user, "enqueue", "background_task", task.id, task.task_type, task_payload)
+    db.session.commit()
+    return ok({"task": task.to_dict()}, "匹配数据校准任务已加入后台队列")
+
+
 NOTIFICATION_CHANNEL_TYPES = {"email", "webhook", "wecom", "sms", "console"}
 DEFAULT_NOTIFICATION_EVENTS = [
     {

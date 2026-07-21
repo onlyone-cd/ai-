@@ -434,8 +434,10 @@ function inspectBossPage() {
   const jobSignals = countTextHits(pageSignal, JOB_LIST_MARKERS) + countTextHits(pageSignal, ["\u62db\u8058\u4e2d", "\u5f85\u5f00\u653e", "\u5df2\u5173\u95ed", "\u804c\u4f4d\u540d\u79f0", "\u62db\u8058\u4eba\u6570", "\u53d1\u5e03\u804c\u4f4d", "\u5237\u65b0\u804c\u4f4d", "\u7f16\u8f91\u804c\u4f4d"]);
   const candidateListSignals = countTextHits(pageSignal, ["\u6c9f\u901a\u5217\u8868", "\u725b\u4eba\u5217\u8868", "\u63a8\u8350\u725b\u4eba", "\u5019\u9009\u4eba", "\u5df2\u6c9f\u901a", "\u610f\u5411\u6c9f\u901a"]);
   const hasJobCards = collectJobBlocks().length > 0;
+  const hasOnlineResumeModal = countTextHits(pageSignal, ["\u671f\u671b\u804c\u4f4d", "\u5de5\u4f5c\u7ecf\u5386"]) >= 2;
+  const hasProfileHeader = /(\d+\s*\u5c81|\u5c81).*(\u5927\u4e13|\u672c\u79d1|\u7855\u58eb|\u535a\u58eb|\u5e74\u4ee5\u4e0a|\u79bb\u804c|\u6d3b\u8dc3)/s.test(pageSignal);
   const isBossPage = /(^|\.)zhipin\.com$/i.test(location.hostname);
-  const isResumePage = isBossPage && resumeSignals >= 3 && jobSignals < 2;
+  const isResumePage = isBossPage && jobSignals < 2 && (resumeSignals >= 3 || hasOnlineResumeModal || (resumeSignals >= 2 && hasProfileHeader));
   const isJobListPage = isBossPage && !isResumePage && (jobSignals >= 2 || ((/\/job|\/position|position|job/i.test(location.href)) && hasJobCards));
   const isCandidateListPage = isBossPage && !isResumePage && !isJobListPage && candidateListSignals >= 1;
   let pageType = "unknown";

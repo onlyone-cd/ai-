@@ -20,7 +20,7 @@ from sqlalchemy.exc import IntegrityError
 
 from . import db, production_config_checks
 from .auth import hash_password, issue_token, login_required, roles_required, validate_password_strength, verify_password
-from .job_service import ai_review_matches, build_jd_structured, clamp_score, ensure_jd_structured, enrich_match_reason, list_of_text, llm_failure_summary, persist_matches, preview_matches, truncate_text
+from .job_service import ai_review_matches, build_jd_structured, clamp_score, ensure_jd_structured, enrich_match_reason, has_job_tag_hits, list_of_text, llm_failure_summary, persist_matches, preview_matches, truncate_text
 from .llm_client import LLMError, chat_json, llm_available, llm_status
 from .matching import match_candidate, parse_skill_tags
 from .models import AgentConversation, AgentMessage, AuditLog, BackgroundTask, BossAccount, BossDraft, BossSyncItem, BossSyncJob, Candidate, CandidateTag, EmployeeAnalysis, EmployeeCompensation, EmployeeProfile, EmployeeRecommendation, InterviewAssignment, InterviewFeedback, InterviewSpeechLog, Job, LLMUsage, Match, NotificationChannel, NotificationEvent, NotificationLog, OfferRecord, OrganizationUnit, PipelineStage, ResumeAttachment, UploadBatch, User, utcnow, years_between
@@ -2042,12 +2042,14 @@ def list_job_matches(user, job_id):
     if user.role == "recruiter":
         query = query.filter(Candidate.owner_hr_id == user.id)
     query = query.order_by(Match.score.desc(), Match.created_at.desc(), Match.id.desc())
-    matches, meta = paginate_query(query)
     items = []
-    for item in matches:
+    for item in query.all():
         data = item.to_dict()
         data["reason"] = enrich_match_reason(data.get("reason") or {})
+        if not has_job_tag_hits(data["reason"]):
+            continue
         items.append(data)
+    items, meta = paginate_items(items)
     return ok({"job": job.to_dict(), "items": items, **meta})
 
 
@@ -6608,6 +6610,8 @@ def agent_matches_for_job(job, user, limit=5):
         for item in persisted_items:
             data = item.to_dict()
             data["reason"] = enrich_match_reason(data.get("reason") or {})
+            if not has_job_tag_hits(data["reason"]):
+                continue
             results.append(data)
         return results
     job.jd_structured = ensure_jd_structured(job)
@@ -6623,6 +6627,8 @@ def match_candidate_for_agent(job, candidate, user):
     if persisted and (user.role != "recruiter" or candidate.owner_hr_id == user.id):
         data = persisted.to_dict()
         data["reason"] = enrich_match_reason(data.get("reason") or {})
+        if not has_job_tag_hits(data["reason"]):
+            return None
         return data
     job.jd_structured = ensure_jd_structured(job)
     items = preview_matches(job, limit=1, candidates=[candidate])

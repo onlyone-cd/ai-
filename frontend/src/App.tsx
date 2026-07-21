@@ -539,9 +539,10 @@ function CandidatesPage() {
     if (!selectedJobId) return;
     api.jobMatches(selectedJobId, { limit: 200 })
       .then((data) => {
-        setMatchResults(data.items);
+        const items = data.items.filter(hasJobTagHits);
+        setMatchResults(items);
         if (data.items.length) {
-          setMatchMessage(`已载入「${data.job.title}」最近一次匹配结果 ${data.items.length} 位。`);
+          setMatchMessage(`已载入「${data.job.title}」最近一次有效匹配结果 ${items.length} 位；未命中岗位标签的候选人已隐藏。`);
         }
       })
       .catch(() => {
@@ -562,7 +563,7 @@ function CandidatesPage() {
   }, [jobs, jobQuery]);
 
   const selectedJob = jobs.find((job) => job.id === selectedJobId);
-  const scoreByCandidate = useMemo(() => new Map(matchResults.map((item) => [item.candidate_id, item])), [matchResults]);
+  const scoreByCandidate = useMemo(() => new Map(matchResults.filter(hasJobTagHits).map((item) => [item.candidate_id, item])), [matchResults]);
   const activeJobCount = jobs.filter((job) => job.status === "active").length;
   const parseFailedCount = candidates.filter((candidate) => candidate.parse_status === "failed").length;
   const taggedCount = candidates.filter((candidate) => candidate.tags.length > 0).length;
@@ -736,7 +737,7 @@ function CandidatesPage() {
         {matchMessage && (
           <div className="talent-match-panel">
             <strong>{matchMessage}</strong>
-            <p>规则：简历评分为技能熟练度折算，岗位匹配分为 JD 技能权重 × 候选人技能分，满分均为 100。</p>
+            <p>规则：岗位匹配只展示命中过 JD 标签的候选人；未命中岗位标签的人不参与展示和加入流程。</p>
           </div>
         )}
 
@@ -826,8 +827,8 @@ function JobsPage() {
     if (!jobId) return;
     setError("");
     api.getJob(jobId).then(setSelectedJob);
-    api.matchPreview(jobId, 5).then((data) => setPreview(data.items));
-    api.jobMatches(jobId, { limit: 200 }).then((data) => setMatches(data.items)).catch(() => setMatches([]));
+    api.matchPreview(jobId, 5).then((data) => setPreview(data.items.filter(hasJobTagHits)));
+    api.jobMatches(jobId, { limit: 200 }).then((data) => setMatches(data.items.filter(hasJobTagHits))).catch(() => setMatches([]));
   }, [jobId]);
 
   async function runMatch() {
@@ -897,7 +898,7 @@ function JobsPage() {
         .includes(keyword)
     );
   }, [jobs, query]);
-  const visibleMatches = useMemo(() => (matches.length ? matches : preview), [matches, preview]);
+  const visibleMatches = useMemo(() => (matches.length ? matches : preview).filter(hasJobTagHits), [matches, preview]);
   const pagedJobs = useClientPagination(visibleJobs, 20);
   const pagedMatches = useClientPagination(visibleMatches, 20);
 
@@ -1000,14 +1001,14 @@ function JobsPage() {
         <div className="toolbar">
           <div>
             <h2 className="font-semibold">匹配结果</h2>
-            <p className="text-xs text-steel">预览先按标签规则排序；执行匹配会调用 AI 阅读完整 JD 与简历，并按规则分 35% + AI 分 65% 生成综合分，不做 50 分初筛。</p>
+            <p className="text-xs text-steel">只显示命中过岗位标签的候选人；执行匹配会调用 AI 阅读完整 JD 与简历，并按规则分 35% + AI 分 65% 生成综合分。</p>
           </div>
           <div className="flex flex-wrap gap-2">
             <button className="secondary-button" onClick={() => addToPipeline(visibleMatches.slice(0, 5).map((item) => item.candidate_id))} disabled={!jobId || !visibleMatches.length}>
               <Plus size={17} />
               批量加入前 5
             </button>
-            <button className="secondary-button" onClick={() => jobId && api.jobMatches(jobId, { limit: 200 }).then((data) => { setMatches(data.items); setSelectedJob(data.job); notify("success", `已刷新 ${data.items.length} 条持久化匹配结果`); })} disabled={!jobId}>
+            <button className="secondary-button" onClick={() => jobId && api.jobMatches(jobId, { limit: 200 }).then((data) => { const items = data.items.filter(hasJobTagHits); setMatches(items); setSelectedJob(data.job); notify("success", `已刷新 ${items.length} 条有效匹配结果`); })} disabled={!jobId}>
               <RefreshCw size={17} />
               刷新结果
             </button>
@@ -5974,6 +5975,10 @@ function evidenceStatusLabel(status?: string) {
   if (status === "unknown_label") return "标签库缺失";
   if (status === "error") return "校验异常";
   return "缺少证据";
+}
+
+function hasJobTagHits(match: MatchResult) {
+  return Boolean(match.reason?.hits?.length);
 }
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {

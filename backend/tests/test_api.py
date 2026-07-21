@@ -1271,9 +1271,10 @@ def test_accounting_job_matches_accounting_candidate_first(client, admin_headers
     matches = response.get_json()["data"]["items"]
     assert matches[0]["candidate"]["title"] == "总账会计"
     assert matches[0]["score"] >= 90
-    assert len(matches) == Candidate.query.count()
-    assert any(item["candidate"]["title"] == "Python 后端工程师" for item in matches)
+    assert len(matches) < Candidate.query.count()
+    assert not any(item["candidate"]["title"] == "Python 后端工程师" for item in matches)
     assert all("rule_score" in item["reason"] for item in matches)
+    assert all(item["reason"]["hits"] for item in matches)
 
 
 def test_job_match_can_run_as_background_task_and_list_persisted_matches(client, admin_headers):
@@ -1292,7 +1293,7 @@ def test_job_match_can_run_as_background_task_and_list_persisted_matches(client,
     assert run_task.id == task["id"]
     assert run_task.status == "succeeded"
     assert run_task.result["job_id"] == accounting_job["id"]
-    assert run_task.result["count"] == Candidate.query.count()
+    assert 0 < run_task.result["count"] < Candidate.query.count()
 
     listed = client.get(f"/api/jobs/{accounting_job['id']}/matches", headers=admin_headers)
     assert listed.status_code == 200
@@ -1349,8 +1350,10 @@ def test_job_match_combines_rule_score_and_ai_review(client, admin_headers, app,
 
     assert response.status_code == 200
     items = response.get_json()["data"]["items"]
-    assert 3 <= len(calls) <= min(8, Candidate.query.count())
-    if Candidate.query.count() > 8:
+    assert len(items) >= 1
+    assert all(item["reason"]["hits"] for item in items)
+    assert len(calls) == min(3, len(items))
+    if len(items) > 8:
         pending = [item for item in items if item["reason"]["ai_review"]["source"] == "rule_pending"]
         assert pending
         assert pending[0]["score"] == round(pending[0]["reason"]["rule_score"] * 0.35)
@@ -1360,7 +1363,7 @@ def test_job_match_combines_rule_score_and_ai_review(client, admin_headers, app,
     assert reason["ai_score"] == 80
     assert reason["ai_review"]["source"] == "deepseek"
     assert reason["ai_review"]["recommendation"] == "推荐"
-    assert reason["score_formula"] == "final_score=round(rule_score*35% + ai_score*65%); no pre-filter before AI review"
+    assert reason["score_formula"] == "final_score=round(rule_score*35% + ai_score*65%); no-hit candidates hidden before AI review"
     assert first["score"] == round(reason["rule_score"] * 0.35 + 80 * 0.65)
     assert reason["score_breakdown"]["rule_score"] == reason["rule_score"]
     assert reason["score_breakdown"]["ai_score"] == 80
@@ -1391,9 +1394,9 @@ def test_job_match_reports_deepseek_balance_error_once(client, admin_headers, ap
     failed = [item for item in items if item["reason"]["ai_review"]["source"] == "failed"]
     unavailable = [item for item in items if item["reason"]["ai_review"]["source"] == "ai_unavailable"]
     assert len(failed) == 1
-    assert unavailable
     assert "DeepSeek 余额不足" in failed[0]["reason"]["ai_review"]["summary"]
-    assert "DeepSeek 余额不足" in unavailable[0]["reason"]["ai_review"]["summary"]
+    if unavailable:
+        assert "DeepSeek 余额不足" in unavailable[0]["reason"]["ai_review"]["summary"]
     assert failed[0]["score"] == failed[0]["reason"]["rule_score"]
 
 

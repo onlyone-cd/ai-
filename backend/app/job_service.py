@@ -129,8 +129,10 @@ def preview_matches(job, limit=None, candidates=None):
         )
         reason["rule_score"] = reason["score"]
         reason["final_score"] = reason["score"]
-        reason["score_formula"] = f"preview=rule_score; persisted_match=rule_score*{weights['rule']}%+ai_score*{weights['ai']}% when AI review succeeds"
+        reason["score_formula"] = f"preview=rule_score; no-hit candidates hidden; persisted_match=rule_score*{weights['rule']}%+ai_score*{weights['ai']}% when AI review succeeds"
         enrich_match_reason(reason)
+        if not has_job_tag_hits(reason):
+            continue
         results.append(
             {
                 "job_id": job.id,
@@ -142,6 +144,10 @@ def preview_matches(job, limit=None, candidates=None):
         )
     results.sort(key=lambda item: item["score"], reverse=True)
     return results[:limit] if limit else results
+
+
+def has_job_tag_hits(reason):
+    return bool((reason or {}).get("hits"))
 
 
 DEFAULT_AI_REVIEW_LIMIT = 3
@@ -272,7 +278,7 @@ def apply_ai_review(job, candidate, item):
         reason["ai_score"] = ai_score
         reason["final_score"] = final_score
         reason["rule_score"] = rule_score
-        reason["score_formula"] = f"final_score=round(rule_score*{weights.get('rule', 35)}% + ai_score*{weights.get('ai', 65)}%); no pre-filter before AI review"
+        reason["score_formula"] = f"final_score=round(rule_score*{weights.get('rule', 35)}% + ai_score*{weights.get('ai', 65)}%); no-hit candidates hidden before AI review"
         item["score"] = final_score
     except LLMError as exc:
         reason["ai_review"] = {"source": "failed", "summary": llm_failure_summary(exc), "error": str(exc)[:300]}

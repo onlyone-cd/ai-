@@ -227,11 +227,12 @@ async function autoCollectCommunicationResumes(options = {}) {
     const key = label.slice(0, 60);
     if (seen.has(key)) continue;
     seen.add(key);
+    const fallback = buildCandidateListFallbackItem(card, index);
     try {
       card.scrollIntoView({ block: "center", inline: "nearest" });
       await sleep(260);
       card.click();
-      await sleep(850);
+      await waitForDetailPaneChange(label);
       await openOnlineResumeTab();
       const result = await collectObtainedResumeText();
       if (!result.raw_text || result.raw_text.length < 30) throw new Error("\u672a\u91c7\u96c6\u5230\u8db3\u591f\u7684\u7b80\u5386\u6b63\u6587");
@@ -241,12 +242,18 @@ async function autoCollectCommunicationResumes(options = {}) {
         title: guessTitle(result.raw_text),
         summary: result.raw_text.slice(0, 260),
         raw_text: result.raw_text,
-        page_url: location.href
+        page_url: location.href,
+        source: result.source || "boss_auto_resume"
       });
       closeResumeOverlay();
       await sleep(220);
     } catch (error) {
-      errors.push({ index: index + 1, label, error: error.message });
+      if (fallback && !items.some((item) => item.external_id === fallback.external_id || item.raw_text === fallback.raw_text)) {
+        items.push(fallback);
+        errors.push({ index: index + 1, label, error: `${error.message}；已降级导入列表可见信息，后续可重新补全在线简历` });
+      } else {
+        errors.push({ index: index + 1, label, error: error.message });
+      }
       closeResumeOverlay();
       await sleep(180);
     }
@@ -309,17 +316,18 @@ async function openOnlineResumeTab() {
   const buttons = [...document.querySelectorAll("button,a,div,span")]
     .filter(isVisibleElement)
     .map((node) => ({ node, text: (node.innerText || node.textContent || "").replace(/\s+/g, " ").trim() }))
-    .filter((item) => item.text.includes("\u5728\u7ebf\u7b80\u5386") || item.text.includes("\u67e5\u770b\u7b80\u5386"));
+    .filter((item) => isResumeOpenActionText(item.text))
+    .sort((a, b) => scoreResumeOpenAction(b.node, b.text) - scoreResumeOpenAction(a.node, a.text));
   if (buttons[0]?.node) {
     (buttons[0].node.closest?.("button,a,[role='button']") || buttons[0].node).click();
-    await sleep(850);
+    await sleep(1100);
     return true;
   }
   return false;
 }
 
 function findResumeTabButtons() {
-  const keywords = ["\u5728\u7ebf\u7b80\u5386", "\u9644\u4ef6\u7b80\u5386", "\u5df2\u83b7\u5f97\u7b80\u5386"];
+  const keywords = ["\u5728\u7ebf\u7b80\u5386", "\u9644\u4ef6\u7b80\u5386", "\u5df2\u83b7\u5f97\u7b80\u5386", "\u67e5\u770b\u7b80\u5386", "\u5b8c\u6574\u7b80\u5386"];
   const nodes = [...document.querySelectorAll("button,a,div,span")]
     .filter(isVisibleElement)
     .map((node) => {
@@ -339,6 +347,57 @@ function findResumeTabButtons() {
       ...item,
       available: !item.button.matches?.("[disabled],.disabled,[aria-disabled='true']") && !/\u672a\u83b7\u5f97|\u672a\u5f00\u901a|\u65e0/.test(item.label)
     }));
+}
+
+function isResumeOpenActionText(text) {
+  const value = String(text || "").replace(/\s+/g, "");
+  if (!value || value.length > 80) return false;
+  return [
+    "\u5728\u7ebf\u7b80\u5386",
+    "\u67e5\u770b\u7b80\u5386",
+    "\u67e5\u770b\u5b8c\u6574\u7b80\u5386",
+    "\u5b8c\u6574\u7b80\u5386",
+    "\u5df2\u83b7\u5f97\u7b80\u5386",
+    "\u9644\u4ef6\u7b80\u5386",
+    "\u7b80\u5386\u8be6\u60c5"
+  ].some((word) => value.includes(word)) && !/\u672a\u83b7\u5f97|\u672a\u5f00\u901a|\u65e0\u7b80\u5386/.test(value);
+}
+
+function scoreResumeOpenAction(node, text) {
+  const rect = node.getBoundingClientRect();
+  let score = 0;
+  if (text.includes("\u5728\u7ebf\u7b80\u5386")) score += 30;
+  if (text.includes("\u5b8c\u6574\u7b80\u5386")) score += 20;
+  if (text.includes("\u67e5\u770b")) score += 12;
+  if (rect.left > (window.innerWidth || 1200) * 0.35) score += 8;
+  if (node.closest?.("button,a,[role='button'],[role='tab']")) score += 5;
+  return score;
+}
+
+function buildCandidateListFallbackItem(card, index) {
+  const text = normalizeResumeText(card.innerText || card.textContent || "");
+  if (!text || text.length < 10) return null;
+  const rawText = normalizeResumeText(`简历来源：BOSS 沟通列表\n候选人：${guessName(text)}\n求职信息：${text}\n备注：插件未能自动打开在线简历，已先导入列表可见信息，建议后续重新补全完整简历。`);
+  if (!hasResumeSignal(rawText)) return null;
+  return {
+    external_id: `boss-list-${Date.now()}-${index}`,
+    name: guessName(text),
+    title: guessTitle(text),
+    summary: text.slice(0, 260),
+    raw_text: rawText,
+    page_url: location.href,
+    source: "boss_list_fallback"
+  };
+}
+
+async function waitForDetailPaneChange(previousLabel) {
+  const before = normalizeResumeText(document.body.innerText || "").slice(0, 2000);
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    await sleep(260);
+    const after = normalizeResumeText(document.body.innerText || "").slice(0, 2600);
+    if (after !== before || (previousLabel && after.includes(previousLabel.slice(0, 12)))) return true;
+  }
+  return false;
 }
 
 function findCommunicationCandidateCards() {
@@ -804,7 +863,7 @@ function inspectBossPage() {
   } else if (isCandidateListPage) {
     pageType = "candidate_list";
     label = "\u6c9f\u901a/\u5019\u9009\u4eba\u5217\u8868";
-    message = "\u53ef\u6279\u91cf\u91c7\u96c6\u5019\u9009\u4eba\uff1b\u5355\u4efd\u7b80\u5386\u8bf7\u6253\u5f00\u7b80\u5386\u8be6\u60c5";
+    message = "\u53ef\u4f7f\u7528\u81ea\u52a8\u6253\u5f00\u6c9f\u901a\u5217\u8868\u5bfc\u5165\u6216\u6279\u91cf\u5019\u9009\u4eba\uff1b\u5355\u4efd\u7b80\u5386\u8bf7\u6253\u5f00\u7b80\u5386\u8be6\u60c5";
   }
   return {
     is_boss_page: isBossPage,
@@ -812,7 +871,7 @@ function inspectBossPage() {
     label,
     message,
     can_import_resume: isResumePage,
-    can_import_obtained_resume: isResumePage || hasResumeTabs,
+    can_import_obtained_resume: isResumePage,
     can_sync_jobs: isJobListPage,
     can_batch_import_candidates: isCandidateListPage,
     resume_signals: resumeSignals,

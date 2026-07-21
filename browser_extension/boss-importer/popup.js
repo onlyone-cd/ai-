@@ -1,16 +1,22 @@
 const $ = (id) => document.getElementById(id);
 let currentPageState = null;
 
-chrome.storage.local.get(["baseUrl", "token", "jobId"], (saved) => {
+chrome.storage.local.get(["baseUrl", "token", "jobId", "bossImportTaskStatus"], (saved) => {
   if (saved.baseUrl) $("baseUrl").value = saved.baseUrl;
   if (saved.token) $("token").value = saved.token;
   if (saved.jobId) $("jobId").value = saved.jobId;
+  if (saved.bossImportTaskStatus?.message) renderTaskStatus(saved.bossImportTaskStatus);
 });
 
 document.addEventListener("DOMContentLoaded", refreshPageState);
 chrome.tabs?.onActivated?.addListener(refreshPageState);
 chrome.tabs?.onUpdated?.addListener((_tabId, changeInfo) => {
   if (changeInfo.status === "complete") refreshPageState();
+});
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === "local" && changes.bossImportTaskStatus?.newValue) {
+    renderTaskStatus(changes.bossImportTaskStatus.newValue);
+  }
 });
 
 function saveConfig() {
@@ -79,6 +85,36 @@ function requirePageCapability(capability, message) {
   if (!currentPageState?.[capability]) throw new Error(message);
 }
 
+function renderTaskStatus(task) {
+  if (!task?.message) return;
+  $("status").textContent = task.message;
+}
+
+function sendRuntimeMessage(message) {
+  return new Promise((resolve, reject) => {
+    chrome.runtime.sendMessage(message, (response) => {
+      const err = chrome.runtime.lastError;
+      if (err) reject(new Error(err.message));
+      else resolve(response);
+    });
+  });
+}
+
+async function startBackgroundImport(operation, options = {}) {
+  const { baseUrl, token } = saveConfig();
+  const tab = await getActiveBossTab();
+  const response = await sendRuntimeMessage({
+    type: "start-background-import",
+    operation,
+    tabId: tab.id,
+    baseUrl,
+    token,
+    options
+  });
+  if (!response?.ok) throw new Error("后台任务启动失败");
+  $("status").textContent = "后台任务已启动，可关闭插件窗口，任务会继续执行。";
+}
+
 async function uploadResumePayload(baseUrl, token, collected, successPrefix) {
   if (!collected?.raw_text || collected.raw_text.length < 30) throw new Error("未采集到足够的简历正文");
   const response = await fetch(`${baseUrl}/api/boss/screen-resume/import`, {
@@ -123,16 +159,11 @@ $("bindCookieBtn").addEventListener("click", async () => {
 });
 
 $("obtainedImportBtn").addEventListener("click", async () => {
-  const { baseUrl, token } = saveConfig();
-  $("status").textContent = "正在导入已获得简历...";
+  $("status").textContent = "正在启动后台导入已获得简历...";
 
   try {
     requirePageCapability("can_import_obtained_resume", "当前未识别到已获得的在线简历或附件简历");
-    const tab = await getActiveBossTab();
-    const collected = await chrome.tabs.sendMessage(tab.id, { type: "collect-obtained-resumes" });
-    const sourceTabs = collected.source_tabs?.length ? `\n来源：${collected.source_tabs.join("、")}` : "";
-    $("status").textContent = `已采集 ${collected.chunk_count || 1} 段${sourceTabs}\n正在上传解析...`;
-    await uploadResumePayload(baseUrl, token, collected, "已获得简历导入成功");
+    await startBackgroundImport("obtained_resume");
   } catch (error) {
     $("status").textContent = `失败：${error.message}`;
   }
@@ -154,37 +185,13 @@ $("importBtn").addEventListener("click", async () => {
 });
 
 $("autoListImportBtn").addEventListener("click", async () => {
-  const { baseUrl, token } = saveConfig();
-  $("status").textContent = "正在自动打开沟通列表候选人并采集在线简历...";
+  $("status").textContent = "正在启动后台自动导入沟通列表...";
 
   try {
     if (!currentPageState?.can_batch_import_candidates && currentPageState?.page_type !== "candidate_list") {
       throw new Error("请先打开 BOSS 沟通列表，再执行自动导入");
     }
-    const tab = await getActiveBossTab();
-    const collected = await chrome.tabs.sendMessage(tab.id, {
-      type: "auto-collect-communication-resumes",
-      options: { limit: 20 }
-    });
-    const items = collected?.items || [];
-    const errors = collected?.errors || [];
-    if (!items.length) throw new Error(errors[0]?.error || "未自动采集到可导入简历");
-
-    $("status").textContent = `已自动采集 ${items.length} 份简历，失败 ${errors.length} 份，正在导入系统...`;
-    const response = await fetch(`${baseUrl}/api/boss/candidates/batch-import`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${token}`
-      },
-      body: JSON.stringify({ items, source: "extension_auto_list" })
-    });
-    const body = await response.json();
-    if (!response.ok) throw new Error(body.error || "自动批量导入失败");
-
-    const imported = body.data.items?.length || 0;
-    const failed = (body.data.errors?.length || 0) + errors.length;
-    $("status").textContent = `自动导入完成：成功 ${imported} 份，失败 ${failed} 份。`;
+    await startBackgroundImport("auto_communication_resumes", { limit: 20 });
   } catch (error) {
     $("status").textContent = `失败：${error.message}`;
   }

@@ -3528,20 +3528,20 @@ def emit_boss_sync_notification(user, sync_job):
 def looks_like_boss_job_text(title, text):
     value = re.sub(r"\s+", " ", f"{title or ''} {text or ''}").strip()
     if len(value) < 12:
-        return False, "岗位内容过短"
-    resume_markers = ["工作经历", "项目经历", "教育经历", "期望职位", "求职期望", "个人优势", "资格证书", "随时到岗", "离职", "在职"]
-    job_markers = ["招聘", "岗位", "职位", "岗位职责", "职位描述", "任职要求", "薪资", "月薪", "年薪", "学历", "经验", "招聘人数"]
+        return False, "\u5c97\u4f4d\u5185\u5bb9\u8fc7\u77ed"
+    resume_markers = ["\u5de5\u4f5c\u7ecf\u5386", "\u9879\u76ee\u7ecf\u5386", "\u6559\u80b2\u7ecf\u5386", "\u671f\u671b\u804c\u4f4d", "\u6c42\u804c\u671f\u671b", "\u4e2a\u4eba\u4f18\u52bf", "\u8d44\u683c\u8bc1\u4e66", "\u968f\u65f6\u5230\u5c97", "\u79bb\u804c", "\u5728\u804c"]
+    job_markers = ["\u62db\u8058", "\u5c97\u4f4d", "\u804c\u4f4d", "\u5c97\u4f4d\u804c\u8d23", "\u804c\u4f4d\u63cf\u8ff0", "\u4efb\u804c\u8981\u6c42", "\u85aa\u8d44", "\u6708\u85aa", "\u5e74\u85aa", "\u5b66\u5386", "\u7ecf\u9a8c", "\u62db\u8058\u4eba\u6570"]
     resume_hits = sum(1 for word in resume_markers if word in value)
     job_hits = sum(1 for word in job_markers if word in value)
-    has_salary_or_city = bool(re.search(r"(\d+\s*[kK]|元/月|北京|上海|广州|深圳|杭州|南京|苏州|成都|武汉|长沙)", value))
-    has_job_title = bool(re.search(r"(工程师|开发|前端|后端|Java|Python|测试|产品|运营|会计|财务|销售|客服|人事|行政|经理|主管|总监|架构师|分析师|专员)", value, re.I))
+    has_salary_or_city = bool(re.search(r"(\d+\s*[kK]|\u5143/\u6708|\u5317\u4eac|\u4e0a\u6d77|\u5e7f\u5dde|\u6df1\u5733|\u676d\u5dde|\u5357\u4eac|\u82cf\u5dde|\u6210\u90fd|\u6b66\u6c49|\u957f\u6c99)", value))
+    has_job_title = bool(re.search(r"(\u5de5\u7a0b\u5e08|\u5f00\u53d1|\u524d\u7aef|\u540e\u7aef|Java|Python|\u6d4b\u8bd5|\u4ea7\u54c1|\u8fd0\u8425|\u4f1a\u8ba1|\u8d22\u52a1|\u9500\u552e|\u5ba2\u670d|\u4eba\u4e8b|\u884c\u653f|\u7ecf\u7406|\u4e3b\u7ba1|\u603b\u76d1|\u67b6\u6784\u5e08|\u5206\u6790\u5e08|\u4e13\u5458)", value, re.I))
     has_candidate_contact = bool(re.search(r"1[3-9]\d{9}|[\w.+-]+@[\w.-]+", value))
-    if resume_hits >= 2 and ("期望职位" in value or "求职期望" in value or has_candidate_contact):
-        return False, "疑似候选人简历/期望职位内容，不能作为 BOSS 岗位导入"
+    if resume_hits >= 2 and ("\u671f\u671b\u804c\u4f4d" in value or "\u6c42\u804c\u671f\u671b" in value or has_candidate_contact):
+        return False, "\u7591\u4f3c\u5019\u9009\u4eba\u7b80\u5386/\u671f\u671b\u804c\u4f4d\u5185\u5bb9\uff0c\u4e0d\u80fd\u4f5c\u4e3a BOSS \u5c97\u4f4d\u5bfc\u5165"
     if not has_job_title:
-        return False, "未识别到岗位名称"
+        return False, "\u672a\u8bc6\u522b\u5230\u5c97\u4f4d\u540d\u79f0"
     if job_hits < 1 and not has_salary_or_city:
-        return False, "未识别到岗位列表字段"
+        return False, "\u672a\u8bc6\u522b\u5230\u5c97\u4f4d\u5217\u8868\u5b57\u6bb5"
     return True, ""
 
 

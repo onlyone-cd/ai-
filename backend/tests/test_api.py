@@ -2744,7 +2744,7 @@ def test_boss_extension_can_be_downloaded(client, admin_headers):
         content = archive.read("content.js").decode("utf-8")
         assert "findResumeColumnBounds" in content
         assert "assertBossJobListPage" in content
-        assert "不能采集候选人的期望职位" in content
+        assert "\\u4e0d\\u80fd\\u91c7\\u96c6\\u5019\\u9009\\u4eba\\u7684\\u671f\\u671b\\u804c\\u4f4d" in content
 
 
 def test_boss_screen_resume_import_creates_candidate_and_draft(client, admin_headers):
@@ -2875,8 +2875,8 @@ def test_boss_job_import_rejects_resume_expected_position(client, admin_headers)
             "items": [
                 {
                     "external_id": "resume-expected-job",
-                    "title": "会计",
-                    "jd_text": "期望职位：会计\n工作经历：负责财务报表和纳税申报\n教育经历：本科\n电话 13600002222",
+                    "title": "\u4f1a\u8ba1",
+                    "jd_text": "\u671f\u671b\u804c\u4f4d\uff1a\u4f1a\u8ba1\n\u5de5\u4f5c\u7ecf\u5386\uff1a\u8d1f\u8d23\u8d22\u52a1\u62a5\u8868\u548c\u7eb3\u7a0e\u7533\u62a5\n\u6559\u80b2\u7ecf\u5386\uff1a\u672c\u79d1\n\u7535\u8bdd 13600002222",
                 }
             ]
         },
@@ -2885,7 +2885,7 @@ def test_boss_job_import_rejects_resume_expected_position(client, admin_headers)
     assert response.status_code == 200
     data = response.get_json()["data"]
     assert data["items"] == []
-    assert data["errors"][0]["error"] == "疑似候选人简历/期望职位内容，不能作为 BOSS 岗位导入"
+    assert data["errors"][0]["error"] == "\u7591\u4f3c\u5019\u9009\u4eba\u7b80\u5386/\u671f\u671b\u804c\u4f4d\u5185\u5bb9\uff0c\u4e0d\u80fd\u4f5c\u4e3a BOSS \u5c97\u4f4d\u5bfc\u5165"
     assert not Job.query.filter_by(job_code="BOSS-resume-expected-job").first()
 
 

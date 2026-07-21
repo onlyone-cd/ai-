@@ -1,26 +1,160 @@
 const RESUME_MARKERS = [
-  "工作经历",
-  "项目经历",
-  "教育经历",
-  "期望职位",
-  "求职期望",
-  "个人优势",
-  "资格证书",
-  "自我评价",
-  "求职状态",
-  "专业技能"
+  "\u5de5\u4f5c\u7ecf\u5386",
+  "\u9879\u76ee\u7ecf\u5386",
+  "\u6559\u80b2\u7ecf\u5386",
+  "\u671f\u671b\u804c\u4f4d",
+  "\u6c42\u804c\u671f\u671b",
+  "\u4e2a\u4eba\u4f18\u52bf",
+  "\u8d44\u683c\u8bc1\u4e66",
+  "\u81ea\u6211\u8bc4\u4ef7",
+  "\u6c42\u804c\u72b6\u6001",
+  "\u4e13\u4e1a\u6280\u80fd"
 ];
 
 const JOB_LIST_MARKERS = [
-  "职位管理",
-  "岗位管理",
-  "我的职位",
-  "招聘职位",
-  "职位列表",
-  "岗位列表",
-  "发布职位",
-  "在招职位",
-  "招聘中"
+  "\u804c\u4f4d\u7ba1\u7406",
+  "\u5c97\u4f4d\u7ba1\u7406",
+  "\u6211\u7684\u804c\u4f4d",
+  "\u62db\u8058\u804c\u4f4d",
+  "\u804c\u4f4d\u5217\u8868",
+  "\u5c97\u4f4d\u5217\u8868",
+  "\u53d1\u5e03\u804c\u4f4d",
+  "\u5728\u62db\u804c\u4f4d",
+  "\u62db\u8058\u4e2d"
+];
+
+const NAV_EXACT_WORDS = [
+  "BOSS\u76f4\u8058",
+  "\u804c\u4f4d\u7ba1\u7406",
+  "\u63a8\u8350\u725b\u4eba",
+  "\u641c\u7d22",
+  "\u6c9f\u901a",
+  "\u610f\u5411\u6c9f\u901a",
+  "\u4e92\u52a8",
+  "\u725b\u4eba\u7ba1\u7406",
+  "\u9053\u5177",
+  "\u5de5\u5177\u7ba1\u7406",
+  "\u66f4\u591a",
+  "\u9644\u4ef6\u7b80\u5386",
+  "\u4e0d\u5408\u9002",
+  "\u53d1\u6d88\u606f",
+  "\u6536\u85cf",
+  "\u8f6c\u53d1",
+  "\u4e3e\u62a5"
+];
+
+const NAV_PREFIX_WORDS = [
+  "\u672a\u5904\u7406",
+  "\u5df2\u5904\u7406",
+  "\u5f85\u6c9f\u901a",
+  "\u5df2\u6c9f\u901a",
+  "\u65b0\u62db\u547c",
+  "\u770b\u8fc7\u6211",
+  "\u5bf9\u6211\u611f\u5174\u8da3",
+  "\u6211\u7684\u5ba2\u670d",
+  "\u62db\u8058\u6570\u636e",
+  "\u8d26\u53f7\u6743\u76ca",
+  "\u7eed\u8d39VIP",
+  "\u7ee7\u7eed\u6c9f\u901a"
+];
+
+const NAV_CONTAINS_WORDS = [
+  "\u62db\u8058\u89c4\u8303",
+  "\u9690\u79c1\u4fdd\u62a4",
+  "\u5e73\u53f0\u76f8\u5173\u63d0\u4ea4",
+  "\u5728\u7ebf\u6d4f\u89c8\u725b\u4eba\u7b80\u5386",
+  "\u4e0b\u8f7dAPP",
+  "\u626b\u7801\u767b\u5f55",
+  "\u5f00\u804a",
+  "\u6362\u4e00\u6279",
+  "\u7b5b\u9009",
+  "\u6392\u5e8f",
+  "\u5237\u65b0"
+];
+
+const ACTION_ONLY_WORDS = [
+  "\u67e5\u770b\u8054\u7cfb\u65b9\u5f0f",
+  "\u83b7\u53d6\u8054\u7cfb\u65b9\u5f0f",
+  "\u7acb\u5373\u6c9f\u901a",
+  "\u7ee7\u7eed\u6c9f\u901a",
+  "\u6253\u62db\u547c",
+  "\u4ea4\u6362\u5fae\u4fe1",
+  "\u7ea6\u9762\u8bd5",
+  "\u53d1\u9762\u8bd5\u9080\u8bf7",
+  "\u53d1\u9001",
+  "\u5f00\u804a",
+  "\u6536\u85cf",
+  "\u8f6c\u53d1",
+  "\u4e3e\u62a5",
+  "\u4e0d\u5408\u9002",
+  "\u5907\u6ce8",
+  "\u6807\u8bb0"
+];
+
+const JOB_TITLE_WORDS = [
+  "\u5de5\u7a0b\u5e08",
+  "\u5f00\u53d1",
+  "\u524d\u7aef",
+  "\u540e\u7aef",
+  "Java",
+  "Python",
+  "\u6d4b\u8bd5",
+  "\u4ea7\u54c1",
+  "\u8fd0\u8425",
+  "\u4f1a\u8ba1",
+  "\u8d22\u52a1",
+  "\u9500\u552e",
+  "\u5ba2\u670d",
+  "\u4eba\u4e8b",
+  "\u884c\u653f",
+  "\u7ecf\u7406",
+  "\u4e3b\u7ba1",
+  "\u603b\u76d1",
+  "\u67b6\u6784\u5e08",
+  "\u5206\u6790\u5e08",
+  "\u4e13\u5458"
+];
+
+const JOB_FIELD_WORDS = [
+  "\u85aa\u8d44",
+  "\u6708\u85aa",
+  "\u5e74\u85aa",
+  "\u7ecf\u9a8c",
+  "\u5b66\u5386",
+  "\u672c\u79d1",
+  "\u5927\u4e13",
+  "\u62db\u8058",
+  "\u5c97\u4f4d",
+  "\u804c\u4f4d",
+  "\u804c\u8d23",
+  "\u4efb\u804c\u8981\u6c42",
+  "\u804c\u4f4d\u63cf\u8ff0",
+  "JD",
+  "\u5143/\u6708"
+];
+
+const CITY_WORDS = [
+  "\u5317\u4eac",
+  "\u4e0a\u6d77",
+  "\u5e7f\u5dde",
+  "\u6df1\u5733",
+  "\u676d\u5dde",
+  "\u5357\u4eac",
+  "\u82cf\u5dde",
+  "\u6210\u90fd",
+  "\u91cd\u5e86",
+  "\u6b66\u6c49",
+  "\u897f\u5b89",
+  "\u90d1\u5dde",
+  "\u957f\u6c99",
+  "\u5408\u80a5",
+  "\u53a6\u95e8",
+  "\u9752\u5c9b",
+  "\u5929\u6d25",
+  "\u5b81\u6ce2",
+  "\u65e0\u9521",
+  "\u4f5b\u5c71",
+  "\u4e1c\u839e"
 ];
 
 async function collectResumeText() {
@@ -47,7 +181,7 @@ async function collectResumeText() {
 
   const rawText = normalizeResumeText([...chunks].join("\n"));
   if (!hasResumeSignal(rawText)) {
-    throw new Error("未识别到简历正文，请打开 BOSS 候选人简历详情页，并确保中间简历区域可见");
+    throw new Error("\u672a\u8bc6\u522b\u5230\u7b80\u5386\u6b63\u6587\uff0c\u8bf7\u6253\u5f00 BOSS \u5019\u9009\u4eba\u7b80\u5386\u8be6\u60c5\u9875\uff0c\u5e76\u786e\u4fdd\u4e2d\u95f4\u7b80\u5386\u533a\u57df\u53ef\u89c1");
   }
   return {
     raw_text: rawText,
@@ -91,8 +225,8 @@ function findResumeRoot() {
 
 function scoreResumeRoot(text, rect) {
   const includeHits = countTextHits(text, RESUME_MARKERS);
-  const noiseHits = countMatches(text, /(BOSS直聘|职位管理|推荐牛人|账号权益|续费VIP|我的客服|招聘规范|招聘数据|道具|工具管理|意向沟通|互动|收藏|转发|举报|不合适|发消息|继续沟通)/g);
-  const dateHits = countMatches(text, /\d{4}[./-]\d{1,2}\s*[-至]\s*(\d{4}[./-]\d{1,2}|至今|今)/g);
+  const noiseHits = countTextHits(text, [...NAV_EXACT_WORDS, ...NAV_PREFIX_WORDS, ...NAV_CONTAINS_WORDS, ...ACTION_ONLY_WORDS]);
+  const dateHits = countMatches(text, /\d{4}[./-]\d{1,2}\s*[-\u81f3]\s*(\d{4}[./-]\d{1,2}|\u81f3\u4eca|\u4eca)/g);
   const contactHits = countMatches(text, /(1[3-9]\d{9}|[\w.+-]+@[\w.-]+)/g);
   const geometryPenalty = rect.left < 100 || rect.width > Math.min(window.innerWidth * 0.84, 1080) ? 8 : 0;
   return includeHits * 10 + dateHits * 5 + contactHits * 4 + Math.min(text.length / 240, 10) - noiseHits * 6 - geometryPenalty;
@@ -102,7 +236,7 @@ function findResumeColumnBounds(root) {
   const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 1200;
   let fallbackLeft = Math.max(170, viewportWidth * 0.13);
   let fallbackRight = Math.min(viewportWidth - 210, viewportWidth * 0.78);
-  const rightActionLeft = findPanelBoundary(/(继续沟通|发消息|不合适|交换微信|收藏|转发|举报|打招呼|立即沟通)/);
+  const rightActionLeft = findPanelBoundary((line) => includesAny(line, ACTION_ONLY_WORDS));
   if (rightActionLeft) fallbackRight = Math.min(fallbackRight, rightActionLeft - 16);
 
   const candidates = [...document.querySelectorAll("main,section,article,div")]
@@ -111,7 +245,7 @@ function findResumeColumnBounds(root) {
     .filter((item) => item.text.length >= 120 && item.rect.width >= 360 && item.rect.height >= 160)
     .filter((item) => countTextHits(item.text, RESUME_MARKERS) >= 2)
     .filter((item) => item.rect.left >= 80 && item.rect.right <= viewportWidth - 80)
-    .filter((item) => !/(职位管理|推荐牛人|账号权益|续费VIP|我的客服|招聘数据)/.test(item.text.slice(0, 500)));
+    .filter((item) => !includesAny(item.text.slice(0, 500), ["\u804c\u4f4d\u7ba1\u7406", "\u63a8\u8350\u725b\u4eba", "\u8d26\u53f7\u6743\u76ca", "\u7eed\u8d39VIP", "\u6211\u7684\u5ba2\u670d", "\u62db\u8058\u6570\u636e"]));
 
   if (candidates.length) {
     candidates.sort((a, b) => scoreResumeRoot(b.text, b.rect) - scoreResumeRoot(a.text, a.rect));
@@ -137,8 +271,8 @@ function findResumeColumnBounds(root) {
   return { left: fallbackLeft, right: fallbackRight, top: 0, bottom: window.innerHeight || 900 };
 }
 
-function findPanelBoundary(pattern) {
-  const rects = collectVisibleTextRects(document.body, (line) => pattern.test(line));
+function findPanelBoundary(predicate) {
+  const rects = collectVisibleTextRects(document.body, predicate);
   const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 1200;
   const rightRects = rects.filter((rect) => rect.left > viewportWidth * 0.58);
   if (!rightRects.length) return null;
@@ -229,16 +363,15 @@ function normalizeResumeText(text) {
 
 function isBossNavigationLine(line) {
   const compact = line.replace(/\s+/g, "");
-  if (/^(BOSS直聘|职位管理|推荐牛人|搜索|沟通|意向沟通|互动|牛人管理|道具|工具管理|更多|附件简历|不合适|发消息|收藏|转发|举报)$/.test(compact)) return true;
-  if (/^(未处理|已处理|待沟通|已沟通|新招呼|看过我|对我感兴趣|我的客服|招聘数据|账号权益|续费VIP)/.test(compact)) return true;
-  if (/(招聘规范|隐私保护|平台相关提交|在线浏览牛人简历|下载APP|扫码登录|开聊|换一批|筛选|排序|刷新)/.test(compact)) return true;
-  if (/^继续沟通/.test(compact)) return true;
+  if (NAV_EXACT_WORDS.includes(compact)) return true;
+  if (startsWithAny(compact, NAV_PREFIX_WORDS)) return true;
+  if (includesAny(compact, NAV_CONTAINS_WORDS)) return true;
   return false;
 }
 
 function isActionOnlyLine(line) {
   const compact = line.replace(/\s+/g, "");
-  return /^(查看联系方式|获取联系方式|立即沟通|继续沟通|打招呼|交换微信|约面试|发面试邀请|发送|开聊|收藏|转发|举报|不合适|备注|标记)$/.test(compact);
+  return ACTION_ONLY_WORDS.includes(compact);
 }
 
 async function collectBossCandidates() {
@@ -297,13 +430,13 @@ async function collectBossJobs() {
 function assertBossJobListPage() {
   const pageText = (document.body.innerText || "").slice(0, 6000);
   const pageSignal = `${location.href}\n${document.title}\n${pageText}`;
-  const resumeSignals = countTextHits(pageSignal, ["工作经历", "教育经历", "期望职位", "求职期望", "个人优势", "项目经历"]);
-  const jobSignals = countTextHits(pageSignal, JOB_LIST_MARKERS) + countMatches(pageSignal, /(招聘中|待开放|已关闭|职位名称|招聘人数|发布职位|刷新职位|编辑职位)/g);
+  const resumeSignals = countTextHits(pageSignal, ["\u5de5\u4f5c\u7ecf\u5386", "\u6559\u80b2\u7ecf\u5386", "\u671f\u671b\u804c\u4f4d", "\u6c42\u804c\u671f\u671b", "\u4e2a\u4eba\u4f18\u52bf", "\u9879\u76ee\u7ecf\u5386"]);
+  const jobSignals = countTextHits(pageSignal, JOB_LIST_MARKERS) + countTextHits(pageSignal, ["\u62db\u8058\u4e2d", "\u5f85\u5f00\u653e", "\u5df2\u5173\u95ed", "\u804c\u4f4d\u540d\u79f0", "\u62db\u8058\u4eba\u6570", "\u53d1\u5e03\u804c\u4f4d", "\u5237\u65b0\u804c\u4f4d", "\u7f16\u8f91\u804c\u4f4d"]);
   if (resumeSignals >= 3 && jobSignals < 2) {
-    throw new Error("当前是候选人简历页。同步岗位请打开 BOSS 职位管理/岗位列表页，不能采集候选人的期望职位");
+    throw new Error("\u5f53\u524d\u662f\u5019\u9009\u4eba\u7b80\u5386\u9875\u3002\u540c\u6b65\u5c97\u4f4d\u8bf7\u6253\u5f00 BOSS \u804c\u4f4d\u7ba1\u7406/\u5c97\u4f4d\u5217\u8868\u9875\uff0c\u4e0d\u80fd\u91c7\u96c6\u5019\u9009\u4eba\u7684\u671f\u671b\u804c\u4f4d");
   }
   if (jobSignals < 2 && !/\/job|\/position|position|job/i.test(location.href)) {
-    throw new Error("未识别到 BOSS 岗位列表。请先打开 BOSS 职位管理/岗位列表页后再同步岗位");
+    throw new Error("\u672a\u8bc6\u522b\u5230 BOSS \u5c97\u4f4d\u5217\u8868\u3002\u8bf7\u5148\u6253\u5f00 BOSS \u804c\u4f4d\u7ba1\u7406/\u5c97\u4f4d\u5217\u8868\u9875\u540e\u518d\u540c\u6b65\u5c97\u4f4d");
   }
 }
 
@@ -319,7 +452,7 @@ function collectCandidateBlocks() {
   const blocks = nodes
     .map((node) => normalizeResumeText(node.innerText || ""))
     .filter((text) => text.length >= 30 && text.length <= 4000)
-    .filter((text) => /(简历|求职|经验|本科|专科|硕士|博士|岁|离职|应届|电话|邮箱|@)/.test(text))
+    .filter((text) => includesAny(text, ["\u7b80\u5386", "\u6c42\u804c", "\u7ecf\u9a8c", "\u672c\u79d1", "\u4e13\u79d1", "\u7855\u58eb", "\u535a\u58eb", "\u5c81", "\u79bb\u804c", "\u5e94\u5c4a", "\u7535\u8bdd", "\u90ae\u7bb1", "@"]))
     .filter((text) => !looksLikeJobBlock(text));
   if (blocks.length) return blocks;
   return normalizeResumeText(document.body.innerText || "")
@@ -341,14 +474,14 @@ function collectJobBlocks() {
     .filter((text) => text.length >= 12 && text.length <= 3000)
     .filter((text) => looksLikeJobBlock(text))
     .filter((text) => !looksLikeResumeDetailBlock(text))
-    .filter((text) => !/(招聘规范|账号权益|续费VIP|我的客服|推荐牛人|道具|工具管理|期望职位|求职期望)/.test(text));
+    .filter((text) => !includesAny(text, ["\u62db\u8058\u89c4\u8303", "\u8d26\u53f7\u6743\u76ca", "\u7eed\u8d39VIP", "\u6211\u7684\u5ba2\u670d", "\u63a8\u8350\u725b\u4eba", "\u9053\u5177", "\u5de5\u5177\u7ba1\u7406", "\u671f\u671b\u804c\u4f4d", "\u6c42\u804c\u671f\u671b"]));
 }
 
 function normalizeJobText(text) {
   const seen = new Set();
   return splitCleanLines(text)
     .filter((line) => !isBossNavigationLine(line))
-    .filter((line) => !/(期望职位|求职期望|个人优势|工作经历|教育经历|项目经历|资格证书)/.test(line))
+    .filter((line) => !includesAny(line, ["\u671f\u671b\u804c\u4f4d", "\u6c42\u804c\u671f\u671b", "\u4e2a\u4eba\u4f18\u52bf", "\u5de5\u4f5c\u7ecf\u5386", "\u6559\u80b2\u7ecf\u5386", "\u9879\u76ee\u7ecf\u5386", "\u8d44\u683c\u8bc1\u4e66"]))
     .filter((line) => {
       const key = line.replace(/\s+/g, "");
       if (seen.has(key)) return false;
@@ -359,13 +492,13 @@ function normalizeJobText(text) {
 }
 
 function looksLikeJobBlock(text) {
-  const hasJobTitle = /(工程师|开发|前端|后端|Java|Python|测试|产品|运营|会计|财务|销售|客服|人事|行政|经理|主管|总监|架构师|分析师|专员)/.test(text);
-  const hasJobFields = /(薪资|月薪|年薪|经验|学历|本科|大专|招聘|岗位|职位|职责|任职要求|职位描述|JD|k|K|元\/月)/.test(text);
+  const hasJobTitle = includesAny(text, JOB_TITLE_WORDS);
+  const hasJobFields = includesAny(text, JOB_FIELD_WORDS) || /\d+\s*[kK]/.test(text);
   return hasJobTitle && hasJobFields;
 }
 
 function looksLikeResumeDetailBlock(text) {
-  return countTextHits(text, ["工作经历", "教育经历", "期望职位", "求职期望", "个人优势", "项目经历", "资格证书", "离职", "随时到岗"]) >= 2;
+  return countTextHits(text, ["\u5de5\u4f5c\u7ecf\u5386", "\u6559\u80b2\u7ecf\u5386", "\u671f\u671b\u804c\u4f4d", "\u6c42\u804c\u671f\u671b", "\u4e2a\u4eba\u4f18\u52bf", "\u9879\u76ee\u7ecf\u5386", "\u8d44\u683c\u8bc1\u4e66", "\u79bb\u804c", "\u968f\u65f6\u5230\u5c97"]) >= 2;
 }
 
 function normalizeJobKey(text) {
@@ -376,26 +509,25 @@ function normalizeJobKey(text) {
 }
 
 function guessName(text) {
-  const firstLine = text.split(/\n/).map((line) => line.trim()).find(Boolean) || "BOSS 候选人";
-  return firstLine.replace(/[|·].*$/, "").slice(0, 16) || "BOSS 候选人";
+  const firstLine = text.split(/\n/).map((line) => line.trim()).find(Boolean) || "BOSS \u5019\u9009\u4eba";
+  return firstLine.replace(/[|\u00b7].*$/, "").slice(0, 16) || "BOSS \u5019\u9009\u4eba";
 }
 
 function guessTitle(text) {
-  const line = text.split(/\n/).find((item) => /(开发|工程师|产品|运营|会计|财务|销售|设计|测试|人事|行政|经理|主管|分析师)/.test(item));
-  return (line || "BOSS 候选人").trim().slice(0, 32);
+  const line = text.split(/\n/).find((item) => includesAny(item, JOB_TITLE_WORDS));
+  return (line || "BOSS \u5019\u9009\u4eba").trim().slice(0, 32);
 }
 
 function guessJobTitle(text) {
   const line = text
     .split(/\n/)
     .map((item) => item.trim())
-    .find((item) => /(开发|工程师|产品|运营|会计|财务|销售|设计|测试|人事|行政|经理|主管|总监|架构师|分析师|客服|专员)/.test(item) && !/(期望职位|求职期望)/.test(item));
-  return (line || text.split(/\n/)[0] || "BOSS 岗位").replace(/[|·].*$/, "").slice(0, 32);
+    .find((item) => includesAny(item, JOB_TITLE_WORDS) && !includesAny(item, ["\u671f\u671b\u804c\u4f4d", "\u6c42\u804c\u671f\u671b"]));
+  return (line || text.split(/\n/)[0] || "BOSS \u5c97\u4f4d").replace(/[|\u00b7].*$/, "").slice(0, 32);
 }
 
 function guessCity(text) {
-  const match = text.match(/(北京|上海|广州|深圳|杭州|南京|苏州|成都|重庆|武汉|西安|郑州|长沙|合肥|厦门|青岛|天津|宁波|无锡|佛山|东莞)/);
-  return match?.[1] || "";
+  return CITY_WORDS.find((city) => text.includes(city)) || "";
 }
 
 function hasResumeSignal(text) {
@@ -407,6 +539,14 @@ function looksLikeOnlyNavigation(text) {
   if (!lines.length) return true;
   const noise = lines.filter((line) => isBossNavigationLine(line) || isActionOnlyLine(line)).length;
   return noise / lines.length > 0.45;
+}
+
+function includesAny(text, words) {
+  return words.some((word) => String(text || "").includes(word));
+}
+
+function startsWithAny(text, words) {
+  return words.some((word) => String(text || "").startsWith(word));
 }
 
 function countTextHits(text, words) {

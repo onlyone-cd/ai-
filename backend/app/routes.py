@@ -4000,6 +4000,37 @@ def boss_inbox_item(candidate):
     }
 
 
+def is_candidate_profile_usable(candidate):
+    raw_text = str(candidate.raw_text or "").strip()
+    if candidate.parse_status and candidate.parse_status != "ok":
+        return False
+    if len(raw_text) < 30:
+        return False
+    if candidate.source == "boss" and not looks_like_boss_resume_text(raw_text):
+        return False
+    if looks_like_navigation_noise(raw_text, candidate):
+        return False
+    return True
+
+
+def looks_like_navigation_noise(text, candidate=None):
+    value = re.sub(r"\s+", " ", str(text or "")).strip()
+    compact = re.sub(r"\s+", "", value)
+    noise_words = ["招聘规范", "我的客服", "职位管理", "推荐牛人", "账号权益", "续费VIP", "招聘数据", "道具", "工具箱", "新互动", "首充礼", "更多", "客服 11"]
+    noise_hits = sum(1 for word in noise_words if word in value or word in compact)
+    has_contact = bool(re.search(r"1[3-9]\d{9}|[\w.+-]+@[\w.-]+", value))
+    resume_evidence = bool(re.search(r"姓名|电话|邮箱|教育|学历|本科|大专|硕士|项目|经验|职责|负责|熟悉|开发|会计|销售|运营|人事|简历|experience|project|education|develop|accounting", value, re.I))
+    tag_count = len(getattr(candidate, "tags", []) or []) if candidate is not None else 0
+    title = re.sub(r"\s+", "", str(getattr(candidate, "title", "") or ""))
+    name = re.sub(r"\s+", "", str(getattr(candidate, "name_masked", "") or ""))
+    title_is_noise = title in {"职位管理", "招聘规范", "推荐牛人", "我的客服", "候选人"} or name in {"职位管理", "招聘规范", "推荐牛人", "我的客服"}
+    if noise_hits >= 3 and not has_contact and (tag_count == 0 or not resume_evidence):
+        return True
+    if title_is_noise and noise_hits >= 2 and not has_contact:
+        return True
+    return False
+
+
 def looks_like_boss_resume_text(text):
     value = re.sub(r"\s+", " ", str(text or "")).strip()
     if len(value) < 30:
@@ -5465,6 +5496,8 @@ def rank_users_for_knowledge(terms, limit=5):
 def rank_candidates_for_knowledge(terms, limit=5):
     items = []
     for candidate in Candidate.query.order_by(Candidate.created_at.desc(), Candidate.id.desc()).limit(800).all():
+        if not is_candidate_profile_usable(candidate):
+            continue
         haystack = " ".join(
             [
                 candidate.name_masked or "",
@@ -5750,7 +5783,7 @@ def find_employee_for_agent_message(text):
 def find_candidate_for_agent_message(text):
     normalized = re.sub(r"\s+", "", str(text or "")).lower()
     terms = extract_agent_name_terms(text)
-    candidates = Candidate.query.order_by(Candidate.created_at.desc(), Candidate.id.desc()).limit(800).all()
+    candidates = [candidate for candidate in Candidate.query.order_by(Candidate.created_at.desc(), Candidate.id.desc()).limit(800).all() if is_candidate_profile_usable(candidate)]
     exact = []
     fuzzy = []
     for candidate in candidates:
@@ -5790,7 +5823,7 @@ def find_candidate_for_agent_message(text):
 def find_candidates_for_agent_message(text, limit=4):
     normalized = re.sub(r"\s+", "", str(text or "")).lower()
     terms = extract_agent_name_terms(text)
-    candidates = Candidate.query.order_by(Candidate.created_at.desc(), Candidate.id.desc()).limit(800).all()
+    candidates = [candidate for candidate in Candidate.query.order_by(Candidate.created_at.desc(), Candidate.id.desc()).limit(800).all() if is_candidate_profile_usable(candidate)]
     exact = []
     scored = []
     for candidate in candidates:
@@ -6673,7 +6706,7 @@ def requested_segments(text):
 
 
 def candidate_segment_stats():
-    candidates = Candidate.query.order_by(Candidate.created_at.desc()).all()
+    candidates = [candidate for candidate in Candidate.query.order_by(Candidate.created_at.desc()).all() if is_candidate_profile_usable(candidate)]
     segment_meta = {
         "software": "软件开发",
         "accounting": "会计/财务",
@@ -7153,7 +7186,7 @@ def format_match_results(results):
 
 def search_candidates_for_agent(message):
     keywords = [word.strip() for word in message.replace("，", " ").replace("？", " ").replace("?", " ").split() if len(word.strip()) >= 2]
-    candidates = Candidate.query.order_by(Candidate.created_at.desc()).all()
+    candidates = [candidate for candidate in Candidate.query.order_by(Candidate.created_at.desc()).all() if is_candidate_profile_usable(candidate)]
     scored = []
     for candidate in candidates:
         haystack = " ".join(

@@ -2415,6 +2415,30 @@ def test_agent_uses_knowledge_lookup_for_profile_questions(client, admin_headers
     assert "人才库" in data["answer"]
 
 
+def test_agent_ignores_boss_navigation_noise_profiles(client, admin_headers):
+    noisy = Candidate(
+        owner_hr_id=1,
+        upload_batch_id="agent-noise",
+        name_masked="职位管理",
+        title="职位管理",
+        source="boss",
+        city="",
+        raw_text="招聘规范 我的客服 面试 招聘数据 账号权益 续费VIP 王成都 推荐牛人 职位管理 候选人 工具箱 更多",
+        resume_json={"summary": "职位管理 推荐牛人 搜索 沟通 新互动 人才管理 道具 首充礼 工具箱 更多"},
+    )
+    db.session.add(noisy)
+    db.session.commit()
+
+    response = client.post("/api/agent/chat", headers=admin_headers, json={"message": "查看 职位管理 简历"})
+
+    assert response.status_code == 200
+    data = response.get_json()["data"]
+    assert "推荐牛人" not in data["answer"]
+    assert "工具箱" not in data["answer"]
+    if data["tool"] == "knowledge_lookup":
+        assert data["result"].get("candidate", {}).get("id") != noisy.id
+
+
 def test_agent_global_lookup_finds_user_owned_jobs(client, admin_headers):
     owner = User(username="wangchengdu-agent", name="王成都", role="recruiter", password_hash="x", active=True)
     db.session.add(owner)

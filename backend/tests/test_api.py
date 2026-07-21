@@ -2433,6 +2433,7 @@ def test_agent_ignores_boss_navigation_noise_profiles(client, admin_headers):
 
     assert response.status_code == 200
     data = response.get_json()["data"]
+    assert data["tool"] != "knowledge_lookup"
     assert "推荐牛人" not in data["answer"]
     assert "工具箱" not in data["answer"]
     if data["tool"] == "knowledge_lookup":

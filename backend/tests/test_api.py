@@ -2865,6 +2865,7 @@ def test_resume_retry_parse_can_run_as_background_task(client, admin_headers):
     task = queued.get_json()["data"]["task"]
     assert task["task_type"] == "resume_retry_parse"
     assert task["status"] == "queued"
+    assert "before_tags" in task["payload"]
 
     listed = client.get("/api/tasks?task_type=resume_retry_parse", headers=admin_headers)
     assert listed.status_code == 200
@@ -2877,6 +2878,8 @@ def test_resume_retry_parse_can_run_as_background_task(client, admin_headers):
     assert run_task.status == "succeeded"
     assert run_task.result["candidate_id"] == candidate["id"]
     assert run_task.result["tag_count"] > 0
+    assert "after_tags" in run_task.result
+    assert "tag_diff" in run_task.result
 
     detail = client.get(f"/api/tasks/{task['id']}", headers=admin_headers)
     assert detail.status_code == 200
@@ -3164,6 +3167,13 @@ def test_tag_quality_panel_can_confirm_and_delete_tags(client, admin_headers):
     data = quality.get_json()["data"]
     assert data["overview"]["low_confidence"] >= 1
     assert any(item["candidate"]["id"] == 1 and item["tag"]["tag"] == "iOS" and "suspected_mismatch" in item["issue_types"] for item in data["items"])
+
+    queued = client.post("/api/resume/1/retry-parse?async=1", headers=admin_headers)
+    assert queued.status_code == 200
+    quality_with_task = client.get("/api/tags/quality?issue=all", headers=admin_headers).get_json()["data"]
+    ios_item = next(item for item in quality_with_task["items"] if item["candidate"]["id"] == 1 and item["tag"]["tag"] == "iOS")
+    assert ios_item["latest_reparse_task"]["id"] == queued.get_json()["data"]["task"]["id"]
+    assert ios_item["latest_reparse_task"]["payload"]["before_tags"]
 
     confirmed = client.post("/api/candidates/1/tags/iOS/confirm", headers=admin_headers, json={"note": "人工复核确认保留"})
     assert confirmed.status_code == 200

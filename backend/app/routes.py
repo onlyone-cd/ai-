@@ -30,7 +30,7 @@ from .resume_service import ARCHIVE_EXTENSIONS, parse_and_save_archive, parse_an
 from .responses import error, ok
 from .settings_service import auto_matching_weights, get_ai_config, get_matching_weights, save_ai_config, save_matching_weights
 from .tag_library import label_map, load_labels
-from .task_service import enqueue_task, retry_task, run_task
+from .task_service import candidate_tag_snapshot, enqueue_task, retry_task, run_task
 
 api = Blueprint("api", __name__)
 
@@ -1896,7 +1896,7 @@ def retry_parse_resume(user, candidate_id):
     if not can_access_candidate(user, candidate):
         return error("无权重解析该候选人简历", "FORBIDDEN", 403)
     if request.args.get("async") in {"1", "true", "yes"}:
-        task = enqueue_task("resume_retry_parse", {"candidate_id": candidate.id}, created_by=user.id)
+        task = enqueue_task("resume_retry_parse", {"candidate_id": candidate.id, "before_tags": candidate_tag_snapshot(candidate)}, created_by=user.id)
         audit_log(user, "enqueue", "background_task", task.id, task.task_type, {"candidate_id": candidate.id})
         db.session.commit()
         return ok({"task": task.to_dict()}, "简历重解析任务已加入后台队列")
@@ -3193,7 +3193,24 @@ def tag_quality_report(user):
             rows.append(item)
     rows.sort(key=lambda item: (tag_quality_priority(item), -item["tag"]["score"], item["candidate"]["name_masked"]))
     page, meta = paginate_items(rows, default_limit=30, max_limit=200)
+    attach_latest_reparse_tasks(page)
     return ok({"items": page, "overview": overview, "issue": issue_filter, **meta})
+
+
+def attach_latest_reparse_tasks(items):
+    candidate_ids = {item["candidate"]["id"] for item in items}
+    if not candidate_ids:
+        return
+    latest_by_candidate = {}
+    recent_tasks = BackgroundTask.query.filter_by(task_type="resume_retry_parse").order_by(BackgroundTask.created_at.desc(), BackgroundTask.id.desc()).limit(500).all()
+    for task in recent_tasks:
+        candidate_id = int((task.payload or {}).get("candidate_id") or 0)
+        if candidate_id in candidate_ids and candidate_id not in latest_by_candidate:
+            latest_by_candidate[candidate_id] = task.to_dict()
+        if len(latest_by_candidate) == len(candidate_ids):
+            break
+    for item in items:
+        item["latest_reparse_task"] = latest_by_candidate.get(item["candidate"]["id"])
 
 
 def build_tag_quality_item(tag):

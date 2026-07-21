@@ -3002,11 +3002,28 @@ function TasksPage({ setView }: { setView: (view: View) => void }) {
     const key = `reparse-${item.candidate.id}`;
     setTagQualityBusy(key);
     try {
-      await api.retryParseResumeAsync(item.candidate.id);
+      const data = await api.retryParseResumeAsync(item.candidate.id);
+      setSelectedTask(data.task);
       notify("success", `${item.candidate.name_masked} 已加入重新解析队列`);
       await Promise.all([load(status, 0, taskLimit), loadTagQuality(tagIssue, tagQuality?.offset || 0)]);
     } catch (error) {
       notify("error", error instanceof Error ? error.message : "重新解析失败");
+    } finally {
+      setTagQualityBusy("");
+    }
+  }
+
+  async function runQualityReparseTask(item: TagQualityItem) {
+    if (!item.latest_reparse_task) return;
+    const key = `run-${item.latest_reparse_task.id}`;
+    setTagQualityBusy(key);
+    try {
+      const task = await api.runTask(item.latest_reparse_task.id);
+      setSelectedTask(task);
+      notify("success", "解析任务已执行，标签变化已记录");
+      await Promise.all([load(status, 0, taskLimit), loadTagQuality(tagIssue, tagQuality?.offset || 0)]);
+    } catch (error) {
+      notify("error", error instanceof Error ? error.message : "执行解析任务失败");
     } finally {
       setTagQualityBusy("");
     }
@@ -3145,11 +3162,36 @@ function TasksPage({ setView }: { setView: (view: View) => void }) {
                     {(item.tag.evidence || []).length ? (item.tag.evidence || []).slice(0, 2).map((evidence, index) => <p className="truncate" key={index}>证据：{evidence}</p>) : <p>未找到直接证据片段</p>}
                   </div>
                 </div>
+                {item.latest_reparse_task && (
+                  <div className="mt-2 rounded-md border border-line bg-slate-50 px-3 py-2 text-xs text-steel">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className={`badge ${item.latest_reparse_task.status === "failed" ? "danger" : item.latest_reparse_task.status === "succeeded" ? "success" : "muted"}`}>
+                        {taskStatusLabel(item.latest_reparse_task.status)}
+                      </span>
+                      <span>最近解析任务 #{item.latest_reparse_task.id}</span>
+                      {item.latest_reparse_task.finished_at && <span>{formatDateTime(item.latest_reparse_task.finished_at)}</span>}
+                    </div>
+                    <p className="mt-1">{tagDiffSummary(item.latest_reparse_task)}</p>
+                    {item.latest_reparse_task.error && <p className="mt-1 text-red-700">{item.latest_reparse_task.error}</p>}
+                  </div>
+                )}
                 <div className="flex flex-wrap gap-2">
                   <button className="secondary-button" type="button" onClick={() => reparseTagCandidate(item)} disabled={Boolean(tagQualityBusy)}>
                     <RefreshCw size={16} />
                     {tagQualityBusy === `reparse-${item.candidate.id}` ? "排队中" : "重新解析"}
                   </button>
+                  {item.latest_reparse_task?.status === "queued" && (
+                    <button className="primary-button" type="button" onClick={() => runQualityReparseTask(item)} disabled={Boolean(tagQualityBusy)}>
+                      <RefreshCw size={16} />
+                      {tagQualityBusy === `run-${item.latest_reparse_task.id}` ? "执行中" : "立即执行"}
+                    </button>
+                  )}
+                  {item.latest_reparse_task && (
+                    <button className="secondary-button" type="button" onClick={() => openTaskDetail(item.latest_reparse_task!)}>
+                      <FileText size={16} />
+                      任务详情
+                    </button>
+                  )}
                   <button className="secondary-button" type="button" onClick={() => confirmQualityTag(item)} disabled={Boolean(tagQualityBusy)}>
                     <Check size={16} />
                     人工确认
@@ -3416,6 +3458,7 @@ function TasksPage({ setView }: { setView: (view: View) => void }) {
               <InfoItem label="完成时间" value={formatDateTime(selectedTask.finished_at || "") || "-"} />
             </div>
             {selectedTask.error && <div className="mt-4 rounded-md bg-red-50 p-3 text-sm text-red-700">{selectedTask.error}</div>}
+            {selectedTask.task_type === "resume_retry_parse" && Boolean(selectedTask.result?.tag_diff) && <TaskTagDiff task={selectedTask} />}
             <div className="mt-4 grid gap-3 md:grid-cols-2">
               <div>
                 <h3 className="font-semibold">任务参数</h3>
@@ -6204,6 +6247,43 @@ function titleFor(view: View) {
   }[view];
 }
 
+function TaskTagDiff({ task }: { task: BackgroundTask }) {
+  const result = task.result || {};
+  const diff = (result.tag_diff || {}) as {
+    added?: Array<{ tag: string; score?: number; evidence_status?: string }>;
+    removed?: Array<{ tag: string; score?: number; evidence_status?: string }>;
+    changed?: Array<{ tag: string; before?: { score?: number; evidence_status?: string }; after?: { score?: number; evidence_status?: string } }>;
+  };
+  const added = diff.added || [];
+  const removed = diff.removed || [];
+  const changed = diff.changed || [];
+  return (
+    <div className="mt-4 rounded-md border border-line bg-slate-50 p-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="badge success">新增 {added.length}</span>
+        <span className="badge danger">删除 {removed.length}</span>
+        <span className="badge muted">变化 {changed.length}</span>
+      </div>
+      <div className="mt-3 grid gap-3 md:grid-cols-3">
+        <TagDiffList title="新增标签" items={added.map((item) => `${item.tag} ${item.score || 0}/5 · ${item.evidence_status || "-"}`)} />
+        <TagDiffList title="删除标签" items={removed.map((item) => `${item.tag} ${item.score || 0}/5 · ${item.evidence_status || "-"}`)} />
+        <TagDiffList title="分数/证据变化" items={changed.map((item) => `${item.tag} ${item.before?.score || 0}/5 → ${item.after?.score || 0}/5 · ${item.after?.evidence_status || "-"}`)} />
+      </div>
+    </div>
+  );
+}
+
+function TagDiffList({ title, items }: { title: string; items: string[] }) {
+  return (
+    <div>
+      <h4 className="text-xs font-semibold text-ink">{title}</h4>
+      <div className="mt-2 grid gap-1 text-xs text-steel">
+        {items.length ? items.slice(0, 8).map((item) => <p className="truncate" key={item}>{item}</p>) : <p>无变化</p>}
+      </div>
+    </div>
+  );
+}
+
 function auditActionLabel(action: string) {
   if (action === "view") return "查看";
   return {
@@ -6262,6 +6342,18 @@ function tagQualityIssueTone(issue: string) {
     manual_confirmed: "success",
     verified: "success"
   }[issue] || "muted";
+}
+
+function tagDiffSummary(task: BackgroundTask) {
+  const diff = (task.result?.tag_diff || {}) as { added_count?: number; removed_count?: number; changed_count?: number };
+  if (task.status === "queued") return "已记录解析前标签快照，等待执行后生成变化对比";
+  if (task.status === "running") return "正在重新解析，完成后会生成新增、删除、分数变化对比";
+  if (task.status === "failed") return "解析失败，查看任务详情可以定位失败原因";
+  const added = Number(diff.added_count || 0);
+  const removed = Number(diff.removed_count || 0);
+  const changed = Number(diff.changed_count || 0);
+  if (!added && !removed && !changed) return "解析完成，标签无变化";
+  return `解析完成：新增 ${added}，删除 ${removed}，变化 ${changed}`;
 }
 
 function taskFailureInfo(task: BackgroundTask): { label: string; tone: string } {

@@ -14,6 +14,7 @@ export type TagQualityItem = {
   issue_types: string[];
   primary_issue: "suspected_mismatch" | "missing_evidence" | "low_confidence" | "manual_confirmed" | "verified" | string;
   reasons: string[];
+  latest_reparse_task?: BackgroundTask | null;
 };
 export type TagQualityReport = {
   items: TagQualityItem[];

@@ -1,5 +1,5 @@
 from . import db
-from .models import BackgroundTask, Candidate, CandidateTag, EmployeeProfile, Job, Match, User, utcnow
+from .models import BackgroundTask, Candidate, CandidateTag, EmployeeProfile, Job, Match, User, tag_evidence_payload, utcnow
 from .ops_service import create_backup_package
 from .resume_service import reparse_candidate
 
@@ -88,12 +88,53 @@ def run_resume_retry_parse(task):
     candidate = db.session.get(Candidate, candidate_id)
     if not candidate:
         raise ValueError("候选人不存在")
+    before_tags = (task.payload or {}).get("before_tags")
+    if not isinstance(before_tags, list):
+        before_tags = candidate_tag_snapshot(candidate)
     candidate = reparse_candidate(candidate)
+    after_tags = candidate_tag_snapshot(candidate)
     return {
         "candidate_id": candidate.id,
         "candidate_name": candidate.name_masked,
         "parse_status": candidate.parse_status,
-        "tag_count": CandidateTag.query.filter_by(candidate_id=candidate.id).count(),
+        "tag_count": len(after_tags),
+        "before_tags": before_tags,
+        "after_tags": after_tags,
+        "tag_diff": diff_tag_snapshots(before_tags, after_tags),
+    }
+
+
+def candidate_tag_snapshot(candidate):
+    tags = CandidateTag.query.filter_by(candidate_id=candidate.id).order_by(CandidateTag.category.asc(), CandidateTag.tag.asc()).all()
+    return [
+        {
+            "tag": tag.tag,
+            "score": int(tag.score or 0),
+            "category": tag.category,
+            "evidence_status": tag_evidence_payload(tag).get("evidence_status"),
+        }
+        for tag in tags
+    ]
+
+
+def diff_tag_snapshots(before_tags, after_tags):
+    before = {str(item.get("tag")): item for item in before_tags or [] if item.get("tag")}
+    after = {str(item.get("tag")): item for item in after_tags or [] if item.get("tag")}
+    added = [after[tag] for tag in sorted(after.keys() - before.keys())]
+    removed = [before[tag] for tag in sorted(before.keys() - after.keys())]
+    changed = []
+    for tag in sorted(before.keys() & after.keys()):
+        old = before[tag]
+        new = after[tag]
+        if old.get("score") != new.get("score") or old.get("evidence_status") != new.get("evidence_status") or old.get("category") != new.get("category"):
+            changed.append({"tag": tag, "before": old, "after": new})
+    return {
+        "added": added[:30],
+        "removed": removed[:30],
+        "changed": changed[:30],
+        "added_count": len(added),
+        "removed_count": len(removed),
+        "changed_count": len(changed),
     }
 
 

@@ -2,6 +2,24 @@ const API_BASE = "/api";
 
 export type User = { id: number; username: string; name: string; role: string; active: boolean; permissions?: string[] };
 export type CandidateTag = { tag: string; score: number; category: string; evidence?: string[]; evidence_status?: string };
+export type TagQualityItem = {
+  candidate: Pick<Candidate, "id" | "name_masked" | "title" | "city" | "source" | "owner_name">;
+  tag: CandidateTag & {
+    evidence_override?: boolean;
+    evidence_note?: string;
+    confirmed_by?: number | null;
+    confirmed_by_name?: string;
+    confirmed_at?: string | null;
+  };
+  issue_types: string[];
+  primary_issue: "suspected_mismatch" | "missing_evidence" | "low_confidence" | "manual_confirmed" | "verified" | string;
+  reasons: string[];
+};
+export type TagQualityReport = {
+  items: TagQualityItem[];
+  overview: { total_tags: number; verified: number; missing_evidence: number; low_confidence: number; suspected_mismatch: number; manual_confirmed: number };
+  issue: string;
+} & PaginationMeta;
 export type PaginationMeta = { total: number; limit: number; offset: number; has_more: boolean };
 export type Candidate = {
   id: number;
@@ -781,6 +799,10 @@ export const api = {
   deleteCandidate: (id: number) => request<{ deleted: number }>(`/candidates/${id}`, { method: "DELETE" }),
   retryParseResume: (id: number) => request<{ candidate: Candidate }>(`/resume/${id}/retry-parse`, { method: "POST" }),
   retryParseResumeAsync: (id: number) => request<{ task: BackgroundTask }>(`/resume/${id}/retry-parse?async=1`, { method: "POST" }),
+  tagQuality: (params?: { issue?: string; q?: string; limit?: number; offset?: number }) => request<TagQualityReport>(`/tags/quality${queryString(params)}`),
+  deleteCandidateTag: (candidateId: number, tag: string) => request<Candidate>(`/candidates/${candidateId}/tags/${encodeURIComponent(tag)}`, { method: "DELETE" }),
+  confirmCandidateTag: (candidateId: number, tag: string, note?: string) =>
+    request<Candidate>(`/candidates/${candidateId}/tags/${encodeURIComponent(tag)}/confirm`, { method: "POST", body: JSON.stringify({ note }) }),
   resumeAttachments: (params?: { candidate_id?: number; scan_status?: string; source?: string; limit?: number; offset?: number }) =>
     request<{ items: ResumeAttachment[] } & PaginationMeta>(`/resume/attachments${queryString(params)}`),
   candidateAttachments: (id: number, params?: { limit?: number; offset?: number }) =>

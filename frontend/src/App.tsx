@@ -35,7 +35,7 @@ import {
   Users,
   X
 } from "lucide-react";
-import { api, AgentConversation, AgentMessage, AgentResponse, AiInterviewPlan, AiSettings, AuditLog, BackgroundTask, BiOverview, BossInboxItem, Candidate, clearToken, DataIntegrity, EmployeeAnalysis, EmployeeProfile, EmployeeRecommendation, InterviewAssignment, InterviewFeedback, InterviewMessage, InterviewSpeechStatus, Job, LLMUsageSummary, MatchingWeights, MatchResult, notify, OfferRecord, OpsBackupStatus, OpsDataQuality, OpsDeployGates, OrganizationUnit, PipelineItem, PublicInterviewRoom, setToken, SkillTag, SystemSettings, User } from "./lib/api";
+import { api, AgentConversation, AgentMessage, AgentResponse, AiInterviewPlan, AiSettings, AuditLog, BackgroundTask, BiOverview, BossInboxItem, Candidate, clearToken, DataIntegrity, EmployeeAnalysis, EmployeeProfile, EmployeeRecommendation, InterviewAssignment, InterviewFeedback, InterviewMessage, InterviewSpeechStatus, Job, LLMUsageSummary, MatchingWeights, MatchResult, notify, OfferRecord, OpsBackupStatus, OpsDataQuality, OpsDeployGates, OrganizationUnit, PipelineItem, PublicInterviewRoom, setToken, SkillTag, SystemSettings, TagQualityItem, User } from "./lib/api";
 
 const stageLabels: Record<string, string> = {
   pending: "待处理",
@@ -2855,6 +2855,10 @@ function TasksPage({ setView }: { setView: (view: View) => void }) {
   const [dataQuality, setDataQuality] = useState<OpsDataQuality | null>(null);
   const [deployGates, setDeployGates] = useState<OpsDeployGates | null>(null);
   const [opsBusy, setOpsBusy] = useState(false);
+  const [tagQuality, setTagQuality] = useState<{ items: TagQualityItem[]; overview: Record<string, number>; total: number; limit: number; offset: number; has_more: boolean } | null>(null);
+  const [tagIssue, setTagIssue] = useState("all");
+  const [tagQualityQuery, setTagQualityQuery] = useState("");
+  const [tagQualityBusy, setTagQualityBusy] = useState("");
 
   async function load(nextStatus = status, nextOffset = taskOffset, nextLimit = taskLimit, silent = false) {
     if (!silent) setLoadingTasks(true);
@@ -2883,10 +2887,20 @@ function TasksPage({ setView }: { setView: (view: View) => void }) {
     setDeployGates(gateData);
   }
 
+  async function loadTagQuality(nextIssue = tagIssue, nextOffset = tagQuality?.offset || 0, nextLimit = tagQuality?.limit || 30) {
+    const data = await api.tagQuality({ issue: nextIssue, q: tagQualityQuery || undefined, offset: nextOffset, limit: nextLimit });
+    setTagQuality(data);
+  }
+
   useEffect(() => {
     load(status, 0, taskLimit);
     loadOps();
+    loadTagQuality(tagIssue, 0).catch(() => undefined);
   }, [status]);
+
+  useEffect(() => {
+    loadTagQuality(tagIssue, 0).catch(() => undefined);
+  }, [tagIssue]);
 
   useEffect(() => {
     if (!autoRefresh) return;
@@ -2984,6 +2998,56 @@ function TasksPage({ setView }: { setView: (view: View) => void }) {
     }
   }
 
+  async function reparseTagCandidate(item: TagQualityItem) {
+    const key = `reparse-${item.candidate.id}`;
+    setTagQualityBusy(key);
+    try {
+      await api.retryParseResumeAsync(item.candidate.id);
+      notify("success", `${item.candidate.name_masked} 已加入重新解析队列`);
+      await Promise.all([load(status, 0, taskLimit), loadTagQuality(tagIssue, tagQuality?.offset || 0)]);
+    } catch (error) {
+      notify("error", error instanceof Error ? error.message : "重新解析失败");
+    } finally {
+      setTagQualityBusy("");
+    }
+  }
+
+  async function removeQualityTag(item: TagQualityItem) {
+    if (!window.confirm(`确认删除「${item.candidate.name_masked}」的标签「${item.tag.tag}」？删除后会清空该候选人的旧匹配结果。`)) return;
+    const key = `delete-${item.candidate.id}-${item.tag.tag}`;
+    setTagQualityBusy(key);
+    try {
+      await api.deleteCandidateTag(item.candidate.id, item.tag.tag);
+      notify("success", "标签已删除");
+      await loadTagQuality(tagIssue, tagQuality?.offset || 0);
+    } catch (error) {
+      notify("error", error instanceof Error ? error.message : "删除标签失败");
+    } finally {
+      setTagQualityBusy("");
+    }
+  }
+
+  async function confirmQualityTag(item: TagQualityItem) {
+    const note = window.prompt("请输入人工确认说明", item.tag.evidence?.[0] || "人工复核简历后确认保留该标签。");
+    if (note === null) return;
+    const key = `confirm-${item.candidate.id}-${item.tag.tag}`;
+    setTagQualityBusy(key);
+    try {
+      await api.confirmCandidateTag(item.candidate.id, item.tag.tag, note);
+      notify("success", "标签已人工确认");
+      await loadTagQuality(tagIssue, tagQuality?.offset || 0);
+    } catch (error) {
+      notify("error", error instanceof Error ? error.message : "人工确认失败");
+    } finally {
+      setTagQualityBusy("");
+    }
+  }
+
+  async function searchTagQuality(event?: React.FormEvent) {
+    event?.preventDefault();
+    await loadTagQuality(tagIssue, 0);
+  }
+
   const statuses = ["all", "queued", "running", "succeeded", "failed"];
   const totalRows = opsStatus ? Object.values(opsStatus.counts || {}).reduce((sum, value) => sum + Number(value || 0), 0) : 0;
   const moduleTarget: Record<string, View> = {
@@ -3020,6 +3084,88 @@ function TasksPage({ setView }: { setView: (view: View) => void }) {
             匹配数据校准
           </button>
         </div>
+      </div>
+
+      <div className="data-panel">
+        <div className="data-panel-head">
+          <div>
+            <h2>标签质量治理</h2>
+            <p>集中处理缺少证据、低置信和疑似误判标签，避免脏标签继续影响岗位匹配。</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button className="secondary-button" onClick={() => loadTagQuality(tagIssue, tagQuality?.offset || 0)}>
+              <RefreshCw size={17} />
+              刷新
+            </button>
+            <button className="secondary-button" onClick={createMatchingRecalibration} disabled={opsBusy}>
+              <ShieldCheck size={17} />
+              全量校准
+            </button>
+          </div>
+        </div>
+        <div className="grid gap-3 md:grid-cols-5">
+          <KpiMini label="标签总数" value={tagQuality?.overview.total_tags || 0} hint="当前权限范围" />
+          <KpiMini label="缺少证据" value={tagQuality?.overview.missing_evidence || 0} hint="需重解析或删除" />
+          <KpiMini label="疑似误判" value={tagQuality?.overview.suspected_mismatch || 0} hint="高分但无证据" />
+          <KpiMini label="低置信" value={tagQuality?.overview.low_confidence || 0} hint="分数 <= 2" />
+          <KpiMini label="人工确认" value={tagQuality?.overview.manual_confirmed || 0} hint="已复核保留" />
+        </div>
+        <form className="mt-4 flex flex-col gap-2 lg:flex-row" onSubmit={searchTagQuality}>
+          <select className="select" value={tagIssue} onChange={(event) => setTagIssue(event.target.value)}>
+            {["all", "suspected_mismatch", "missing_evidence", "low_confidence", "manual_confirmed", "verified"].map((item) => (
+              <option value={item} key={item}>{tagQualityIssueLabel(item)}</option>
+            ))}
+          </select>
+          <div className="relative min-w-0 flex-1">
+            <Search className="pointer-events-none absolute left-3 top-2.5 text-steel" size={16} />
+            <input className="input pl-9" value={tagQualityQuery} onChange={(event) => setTagQualityQuery(event.target.value)} placeholder="搜索候选人、职位、手机号、标签" />
+          </div>
+          <button className="primary-button" type="submit">
+            <Search size={17} />
+            查询
+          </button>
+        </form>
+        <div className="mt-4 data-list">
+          {!tagQuality ? (
+            <div className="p-4"><AntSpin tip="正在读取标签质量" /></div>
+          ) : tagQuality.items.length === 0 ? (
+            <EmptyState icon={<ShieldCheck size={22} />} text="当前筛选下没有需要治理的标签" />
+          ) : (
+            tagQuality.items.map((item) => (
+              <div className="data-row" key={`${item.candidate.id}-${item.tag.tag}-${item.primary_issue}`}>
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className={`badge ${tagQualityIssueTone(item.primary_issue)}`}>{tagQualityIssueLabel(item.primary_issue)}</span>
+                    <h3 className="font-semibold">{item.candidate.name_masked}</h3>
+                    <span className="badge muted">{item.candidate.title || "职位未识别"}</span>
+                    <span className="skill-chip"><span>{item.tag.tag}</span><strong>{item.tag.score}/5</strong></span>
+                  </div>
+                  <p className="mt-1 text-xs text-steel">{item.reasons.join("；") || "标签证据正常"} · 来源 {item.candidate.source} · 负责人 {item.candidate.owner_name}</p>
+                  <div className="mt-2 grid gap-1 text-[11px] text-steel">
+                    {(item.tag.evidence || []).length ? (item.tag.evidence || []).slice(0, 2).map((evidence, index) => <p className="truncate" key={index}>证据：{evidence}</p>) : <p>未找到直接证据片段</p>}
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button className="secondary-button" type="button" onClick={() => reparseTagCandidate(item)} disabled={Boolean(tagQualityBusy)}>
+                    <RefreshCw size={16} />
+                    {tagQualityBusy === `reparse-${item.candidate.id}` ? "排队中" : "重新解析"}
+                  </button>
+                  <button className="secondary-button" type="button" onClick={() => confirmQualityTag(item)} disabled={Boolean(tagQualityBusy)}>
+                    <Check size={16} />
+                    人工确认
+                  </button>
+                  <button className="secondary-button text-red-700" type="button" onClick={() => removeQualityTag(item)} disabled={Boolean(tagQualityBusy)}>
+                    <Trash2 size={16} />
+                    删除标签
+                  </button>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+        {tagQuality && (
+          <PaginationControls total={tagQuality.total} limit={tagQuality.limit} offset={tagQuality.offset} onChange={(offset, limit) => loadTagQuality(tagIssue, offset, limit)} />
+        )}
       </div>
 
       <div className="data-panel">
@@ -6095,6 +6241,27 @@ function taskTypeLabel(type: string) {
     employee_recommend_transfer: "员工调岗推荐",
     employee_recommend_replacement: "员工离职替补推荐"
   }[type] || type;
+}
+
+function tagQualityIssueLabel(issue: string) {
+  return {
+    all: "待治理",
+    suspected_mismatch: "疑似误判",
+    missing_evidence: "缺少证据",
+    low_confidence: "低置信",
+    manual_confirmed: "人工确认",
+    verified: "已校验"
+  }[issue] || issue;
+}
+
+function tagQualityIssueTone(issue: string) {
+  return {
+    suspected_mismatch: "danger",
+    missing_evidence: "warn",
+    low_confidence: "muted",
+    manual_confirmed: "success",
+    verified: "success"
+  }[issue] || "muted";
 }
 
 function taskFailureInfo(task: BackgroundTask): { label: string; tone: string } {

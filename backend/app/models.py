@@ -203,13 +203,32 @@ class CandidateTag(db.Model):
     tag = db.Column(db.String(64), nullable=False)
     score = db.Column(db.Integer, nullable=False)
     category = db.Column(db.String(32), nullable=False, default="其他")
+    evidence_override = db.Column(db.Boolean, nullable=False, default=False)
+    evidence_note = db.Column(db.String(255), nullable=False, default="")
+    confirmed_by = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=True)
+    confirmed_at = db.Column(db.DateTime(timezone=True), nullable=True)
+
+    confirmer = db.relationship("User", foreign_keys=[confirmed_by])
 
     def to_dict(self):
         evidence = tag_evidence_payload(self)
-        return {"tag": self.tag, "score": self.score, "category": self.category, **evidence}
+        return {
+            "tag": self.tag,
+            "score": self.score,
+            "category": self.category,
+            "evidence_override": bool(self.evidence_override),
+            "evidence_note": self.evidence_note or "",
+            "confirmed_by": self.confirmed_by,
+            "confirmed_by_name": self.confirmer.name if self.confirmer else "",
+            "confirmed_at": self.confirmed_at.isoformat() if self.confirmed_at else None,
+            **evidence,
+        }
 
 
 def tag_evidence_payload(candidate_tag):
+    if getattr(candidate_tag, "evidence_override", False):
+        note = getattr(candidate_tag, "evidence_note", "") or "人工确认该标签可用于匹配。"
+        return {"evidence": [note], "evidence_status": "manual_confirmed"}
     candidate = getattr(candidate_tag, "candidate", None)
     raw_text = getattr(candidate, "raw_text", "") if candidate else ""
     if not raw_text:

@@ -3151,6 +3151,30 @@ def test_candidate_tags_can_be_replaced_and_clear_matches(client, admin_headers,
         assert Match.query.filter_by(candidate_id=1).count() == 0
 
 
+def test_tag_quality_panel_can_confirm_and_delete_tags(client, admin_headers):
+    response = client.put(
+        "/api/candidates/1/tags",
+        headers=admin_headers,
+        json={"tags": [{"tag": "Python", "score": 2}, {"tag": "iOS", "score": 5}]},
+    )
+    assert response.status_code == 200
+
+    quality = client.get("/api/tags/quality?issue=all", headers=admin_headers)
+    assert quality.status_code == 200
+    data = quality.get_json()["data"]
+    assert data["overview"]["low_confidence"] >= 1
+    assert any(item["candidate"]["id"] == 1 and item["tag"]["tag"] == "iOS" and "suspected_mismatch" in item["issue_types"] for item in data["items"])
+
+    confirmed = client.post("/api/candidates/1/tags/iOS/confirm", headers=admin_headers, json={"note": "人工复核确认保留"})
+    assert confirmed.status_code == 200
+    ios_tag = next(tag for tag in confirmed.get_json()["data"]["tags"] if tag["tag"] == "iOS")
+    assert ios_tag["evidence_status"] == "manual_confirmed"
+
+    deleted = client.delete("/api/candidates/1/tags/iOS", headers=admin_headers)
+    assert deleted.status_code == 200
+    assert "iOS" not in {tag["tag"] for tag in deleted.get_json()["data"]["tags"]}
+
+
 def test_candidate_tags_reject_unknown_label(client, admin_headers):
     response = client.put("/api/candidates/1/tags", headers=admin_headers, json={"tags": [{"tag": "不存在标签", "score": 3}]})
 

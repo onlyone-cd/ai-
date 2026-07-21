@@ -1742,6 +1742,49 @@ def replace_candidate_tags(user, candidate_id):
     return ok(candidate.to_dict(detail=True), "候选人技能标签已更新")
 
 
+@api.delete("/candidates/<int:candidate_id>/tags/<path:tag_name>")
+@login_required
+@roles_required("admin", "manager", "recruiter")
+def delete_candidate_tag(user, candidate_id, tag_name):
+    candidate = db.session.get(Candidate, candidate_id)
+    if not candidate:
+        return error("候选人不存在", "NOT_FOUND", 404)
+    if not can_access_candidate(user, candidate):
+        return error("无权修改该候选人", "FORBIDDEN", 403)
+    tag = CandidateTag.query.filter_by(candidate_id=candidate.id, tag=str(tag_name or "").strip()).first()
+    if not tag:
+        return error("标签不存在", "NOT_FOUND", 404)
+    deleted_tag = tag.tag
+    db.session.delete(tag)
+    Match.query.filter_by(candidate_id=candidate.id).delete()
+    audit_log(user, "delete_tag", "candidate", candidate.id, candidate.name_masked, {"tag": deleted_tag})
+    db.session.commit()
+    return ok(candidate.to_dict(detail=True), "标签已删除")
+
+
+@api.post("/candidates/<int:candidate_id>/tags/<path:tag_name>/confirm")
+@login_required
+@roles_required("admin", "manager", "recruiter")
+def confirm_candidate_tag(user, candidate_id, tag_name):
+    candidate = db.session.get(Candidate, candidate_id)
+    if not candidate:
+        return error("候选人不存在", "NOT_FOUND", 404)
+    if not can_access_candidate(user, candidate):
+        return error("无权修改该候选人", "FORBIDDEN", 403)
+    tag = CandidateTag.query.filter_by(candidate_id=candidate.id, tag=str(tag_name or "").strip()).first()
+    if not tag:
+        return error("标签不存在", "NOT_FOUND", 404)
+    payload = request.get_json(silent=True) or {}
+    tag.evidence_override = True
+    tag.evidence_note = str(payload.get("note") or "人工已复核简历，该标签保留。").strip()[:255]
+    tag.confirmed_by = user.id
+    tag.confirmed_at = utcnow()
+    Match.query.filter_by(candidate_id=candidate.id).delete()
+    audit_log(user, "confirm_tag", "candidate", candidate.id, candidate.name_masked, {"tag": tag.tag, "note": tag.evidence_note})
+    db.session.commit()
+    return ok(candidate.to_dict(detail=True), "标签已人工确认")
+
+
 @api.delete("/candidates/<int:candidate_id>")
 @login_required
 @roles_required("admin", "manager", "recruiter")
@@ -3105,6 +3148,98 @@ def list_skill_tags(user):
     labels = [{"tag": item.tag, "category": item.category, "aliases": list(item.aliases)} for item in load_labels()]
     categories = sorted({item["category"] for item in labels})
     return ok({"items": labels, "categories": categories})
+
+
+@api.get("/tags/quality")
+@login_required
+@roles_required("admin", "manager", "recruiter")
+def tag_quality_report(user):
+    issue_filter = str(request.args.get("issue") or "all").strip()
+    keyword = str(request.args.get("q") or "").strip().lower()
+    query = CandidateTag.query.join(Candidate, CandidateTag.candidate_id == Candidate.id).order_by(CandidateTag.id.desc())
+    if user.role == "recruiter":
+        query = query.filter(Candidate.owner_hr_id == user.id)
+    rows = []
+    overview = {"total_tags": 0, "verified": 0, "missing_evidence": 0, "low_confidence": 0, "suspected_mismatch": 0, "manual_confirmed": 0}
+    for tag in query.all():
+        candidate = tag.candidate
+        if keyword:
+            haystack = " ".join([candidate.name_masked or "", candidate.title or "", candidate.phone_masked or "", candidate.email_masked or "", tag.tag, tag.category]).lower()
+            if keyword not in haystack:
+                continue
+        overview["total_tags"] += 1
+        item = build_tag_quality_item(tag)
+        status = item["tag"]["evidence_status"]
+        if status == "verified":
+            overview["verified"] += 1
+        if status == "manual_confirmed":
+            overview["manual_confirmed"] += 1
+        if "missing_evidence" in item["issue_types"]:
+            overview["missing_evidence"] += 1
+        if "low_confidence" in item["issue_types"]:
+            overview["low_confidence"] += 1
+        if "suspected_mismatch" in item["issue_types"]:
+            overview["suspected_mismatch"] += 1
+        if issue_filter == "all":
+            if item["issue_types"]:
+                rows.append(item)
+        elif issue_filter == "verified":
+            if status == "verified":
+                rows.append(item)
+        elif issue_filter == "manual_confirmed":
+            if status == "manual_confirmed":
+                rows.append(item)
+        elif issue_filter in item["issue_types"]:
+            rows.append(item)
+    rows.sort(key=lambda item: (tag_quality_priority(item), -item["tag"]["score"], item["candidate"]["name_masked"]))
+    page, meta = paginate_items(rows, default_limit=30, max_limit=200)
+    return ok({"items": page, "overview": overview, "issue": issue_filter, **meta})
+
+
+def build_tag_quality_item(tag):
+    candidate = tag.candidate
+    tag_data = tag.to_dict()
+    issue_types = []
+    reasons = []
+    if tag_data.get("evidence_status") not in {"verified", "manual_confirmed"}:
+        issue_types.append("missing_evidence")
+        reasons.append("标签未找到可直接证明的简历原文证据")
+        if int(tag.score or 0) >= 4:
+            issue_types.append("suspected_mismatch")
+            reasons.append("高分标签缺少证据，疑似历史脏标签或误判")
+    if int(tag.score or 0) <= 2:
+        issue_types.append("low_confidence")
+        reasons.append("标签分数较低，建议复核是否需要保留")
+    if tag_data.get("evidence_status") == "manual_confirmed":
+        reasons.append("该标签已由人工确认保留")
+    return {
+        "candidate": {
+            "id": candidate.id,
+            "name_masked": candidate.name_masked,
+            "title": candidate.title,
+            "city": candidate.city,
+            "source": candidate.source,
+            "owner_name": candidate.owner.name if candidate.owner else "",
+        },
+        "tag": tag_data,
+        "issue_types": list(dict.fromkeys(issue_types)),
+        "primary_issue": primary_tag_quality_issue(issue_types, tag_data.get("evidence_status")),
+        "reasons": reasons,
+    }
+
+
+def primary_tag_quality_issue(issue_types, evidence_status):
+    for issue in ["suspected_mismatch", "missing_evidence", "low_confidence"]:
+        if issue in issue_types:
+            return issue
+    if evidence_status == "manual_confirmed":
+        return "manual_confirmed"
+    return "verified"
+
+
+def tag_quality_priority(item):
+    priority = {"suspected_mismatch": 0, "missing_evidence": 1, "low_confidence": 2, "manual_confirmed": 3, "verified": 4}
+    return priority.get(item.get("primary_issue"), 9)
 
 
 @api.get("/boss/status")

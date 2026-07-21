@@ -70,12 +70,12 @@ function stateClass(state) {
 function setActionButtons(enabled, state = currentPageState) {
   $("bindCookieBtn").disabled = !enabled || !state?.is_boss_page;
   $("importBtn").disabled = !enabled || !state?.can_import_resume;
-  $("obtainedImportBtn").disabled = !enabled || !state?.can_import_obtained_resume;
+  $("obtainedImportBtn").disabled = !enabled || !state?.is_boss_page;
   $("autoListImportBtn").disabled = !enabled || !(state?.can_batch_import_candidates || state?.page_type === "candidate_list");
   $("syncJobsBtn").disabled = !enabled || !state?.can_sync_jobs;
   $("batchImportBtn").disabled = !enabled || !state?.can_batch_import_candidates;
   $("importBtn").title = state?.can_import_resume ? "" : "请打开 BOSS 在线简历详情";
-  $("obtainedImportBtn").title = state?.can_import_obtained_resume ? "" : "请打开已获得的在线简历或附件简历";
+  $("obtainedImportBtn").title = state?.is_boss_page ? "确认已登录 BOSS 后，从 BOSS 接口导入已获取简历" : "请先打开 BOSS 直聘页面";
   $("autoListImportBtn").title = state?.can_batch_import_candidates ? "" : "请打开 BOSS 沟通列表";
   $("syncJobsBtn").title = state?.can_sync_jobs ? "" : "请打开 BOSS 职位管理/岗位列表页";
   $("batchImportBtn").title = state?.can_batch_import_candidates ? "" : "请打开 BOSS 沟通列表或候选人列表";
@@ -235,11 +235,15 @@ $("bindCookieBtn").addEventListener("click", async () => {
 });
 
 $("obtainedImportBtn").addEventListener("click", async () => {
-  $("status").textContent = "正在启动后台导入已获得简历...";
+  $("status").textContent = "正在确认 BOSS 登录态并启动接口导入...";
 
   try {
-    requirePageCapability("can_import_obtained_resume", "当前未识别到已获得的在线简历或附件简历");
-    await startBackgroundImport("obtained_resume");
+    const tab = await getActiveBossTab();
+    const collected = await collectBossLoginCookie(tab);
+    if (collected.missing.length) {
+      throw new Error(`BOSS Cookie 不完整，缺少 ${collected.missing.join("、")}，请刷新 BOSS 页面后重试`);
+    }
+    await startBackgroundImport("obtained_resume", { cookies: collected.cookieText, limit: 20, labels: [0], interval_sec: 1.5 });
   } catch (error) {
     $("status").textContent = `失败：${error.message}`;
   }

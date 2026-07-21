@@ -20,6 +20,7 @@ from sqlalchemy.exc import IntegrityError
 
 from . import db, production_config_checks
 from .auth import hash_password, issue_token, login_required, roles_required, validate_password_strength, verify_password
+from .boss_cli_service import import_obtained_resumes
 from .job_service import ai_review_matches, build_jd_structured, clamp_score, ensure_jd_structured, enrich_match_reason, has_job_tag_hits, list_of_text, llm_failure_summary, persist_matches, preview_matches, truncate_text
 from .llm_client import LLMError, chat_json, llm_available, llm_status
 from .matching import match_candidate, parse_skill_tags
@@ -3772,6 +3773,42 @@ def boss_batch_import(user):
         imported.append(candidate.to_dict(detail=True))
     db.session.commit()
     return ok({"items": imported, "errors": errors}, "BOSS 候选人已导入人才库")
+
+
+@api.post("/boss/obtained-resumes/import")
+@login_required
+@roles_required("admin", "manager", "recruiter")
+def boss_obtained_resumes_import(user):
+    payload = request.get_json(force=True)
+    cookies = payload.get("cookies") or payload.get("cookie")
+    if not cookies:
+        return error("缺少 BOSS Cookie，请先确认浏览器已登录 BOSS", "VALIDATION_ERROR")
+    labels = payload.get("labels")
+    if not isinstance(labels, list):
+        labels = [0]
+    try:
+        labels = [int(label) for label in labels[:8]]
+    except (TypeError, ValueError):
+        labels = [0]
+    result = import_obtained_resumes(
+        cookies,
+        limit=int(payload.get("limit") or 20),
+        labels=labels,
+        interval_sec=float(payload.get("interval_sec") or 1.5),
+    )
+    if not result.get("ok"):
+        err = result.get("error") or {}
+        return error(err.get("message") or "BOSS 已获取简历导入失败", err.get("code") or "BOSS_IMPORT_FAILED", 409)
+    data = result.get("data") or {}
+    imported = import_boss_candidate_items(user, data.get("items", []), source="boss_cli_obtained")
+    combined_errors = [*(data.get("errors") or []), *(imported.get("errors") or [])]
+    response = {
+        **imported,
+        "errors": combined_errors,
+        "discovered": data.get("discovered", 0),
+        "downloaded": len(data.get("items") or []),
+    }
+    return ok(response, f"BOSS 已获取简历导入完成：成功 {len(imported.get('items') or [])} 份，失败 {len(combined_errors)} 份")
 
 
 @api.post("/boss/candidates/ai-screen")

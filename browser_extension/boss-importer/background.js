@@ -139,7 +139,21 @@ async function runBackgroundImport(task) {
   setTaskStatus({ ...task, status: "running", message: "后台任务已启动，可关闭插件窗口" });
   try {
     if (task.operation === "obtained_resume") {
-      setTaskStatus({ ...task, status: "running", message: "正在采集已获得简历..." });
+      if (task.options?.cookies) {
+        setTaskStatus({ ...task, status: "running", message: "已确认 BOSS 登录态，正在通过 BOSS 接口导入已获取简历..." });
+        const body = await postJson(task.baseUrl, task.token, "/api/boss/obtained-resumes/import", {
+          cookies: task.options.cookies,
+          limit: task.options.limit || 20,
+          labels: task.options.labels || [0],
+          interval_sec: task.options.interval_sec || 1.5
+        });
+        const imported = body.data?.items?.length || 0;
+        const failed = body.data?.errors?.length || 0;
+        setTaskStatus({ ...task, status: "succeeded", message: `BOSS 已获取简历导入完成：成功 ${imported} 份，失败 ${failed} 份` });
+        return;
+      }
+
+      setTaskStatus({ ...task, status: "running", message: "正在采集当前页面已获得简历..." });
       const collected = await sendTabMessage(task.tabId, { type: "collect-obtained-resumes" });
       const sourceTabs = collected?.source_tabs?.length ? `，来源：${collected.source_tabs.join("、")}` : "";
       const items = collected?.items || [];

@@ -2742,7 +2742,7 @@ def test_boss_extension_can_be_downloaded(client, admin_headers):
         assert "network_probe.js" in archive.namelist()
         manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
         assert "http://120.24.172.139/*" in manifest["host_permissions"]
-        assert manifest["version"] == "0.3.11"
+        assert manifest["version"] == "0.3.12"
         assert manifest["background"]["service_worker"] == "background.js"
         content = archive.read("content.js").decode("utf-8")
         assert "findResumeColumnBounds" in content
@@ -2772,8 +2772,54 @@ def test_boss_extension_can_be_downloaded(client, admin_headers):
         assert "start-background-import" in background
         assert "bossImportTaskStatus" in background
         assert "uploadResumeFiles" in background
+        assert "/api/boss/obtained-resumes/import" in background
+        assert "task.options?.cookies" in background
         assert "get-captured-boss-cookie" in background
         assert "webRequest.onBeforeSendHeaders" in background
+
+
+def test_boss_obtained_resumes_import_uses_backend_cli(client, admin_headers, monkeypatch):
+    def fake_import_obtained_resumes(cookies, limit=20, labels=None, interval_sec=1.5):
+        assert "wt2=token" in cookies
+        assert limit == 20
+        assert labels == [0]
+        return {
+            "ok": True,
+            "data": {
+                "discovered": 1,
+                "items": [
+                    {
+                        "external_id": "boss-cli-geek-1",
+                        "name": "已获简历候选人",
+                        "raw_text": "姓名：已获简历候选人\n男 13911112222\n4 年 Java 后端开发经验，熟悉 Spring Boot、MySQL、Redis。\n本科 计算机科学与技术。",
+                    }
+                ],
+                "errors": [],
+            },
+        }
+
+    monkeypatch.setattr("app.routes.import_obtained_resumes", fake_import_obtained_resumes)
+
+    response = client.post(
+        "/api/boss/obtained-resumes/import",
+        headers=admin_headers,
+        json={"cookies": "wt2=token; wbg=session; zp_at=auth"},
+    )
+
+    assert response.status_code == 200
+    data = response.get_json()["data"]
+    assert data["discovered"] == 1
+    assert data["downloaded"] == 1
+    assert data["items"][0]["source"] == "boss"
+    assert data["items"][0]["name_masked"] == "已获简历候选人"
+    assert {"Java", "MySQL", "Redis"} <= {tag["tag"] for tag in data["items"][0]["tags"]}
+
+
+def test_boss_obtained_resumes_import_requires_cookie(client, admin_headers):
+    response = client.post("/api/boss/obtained-resumes/import", headers=admin_headers, json={})
+
+    assert response.status_code == 400
+    assert response.get_json()["code"] == "VALIDATION_ERROR"
 
 
 def test_boss_screen_resume_import_creates_candidate_and_draft(client, admin_headers):

@@ -2624,6 +2624,31 @@ def test_agent_compares_candidates_for_same_job(client, admin_headers):
     assert "缺口" in data["answer"]
 
 
+def test_agent_can_queue_job_match_background_task(client, admin_headers):
+    response = client.post("/api/agent/chat", headers=admin_headers, json={"message": "后台匹配财务会计主管岗位"})
+
+    assert response.status_code == 200
+    data = response.get_json()["data"]
+    assert data["tool"] == "queue_background_task"
+    assert data["readonly"] is False
+    task = data["result"]["task"]
+    assert task["task_type"] == "job_match"
+    assert task["status"] == "queued"
+    assert data["result"]["job"]["title"] == "财务会计主管"
+
+
+def test_agent_can_queue_matching_recalibration_task(client, admin_headers):
+    response = client.post("/api/agent/chat", headers=admin_headers, json={"message": "执行匹配数据校准"})
+
+    assert response.status_code == 200
+    data = response.get_json()["data"]
+    assert data["tool"] == "queue_background_task"
+    task = data["result"]["task"]
+    assert task["task_type"] == "matching_recalibration"
+    assert task["payload"]["reparse_candidates"] is True
+    assert "校准" in data["answer"]
+
+
 def test_boss_draft_can_be_listed_and_reviewed(client, admin_headers):
     created = client.post("/api/boss/messages/draft", headers=admin_headers, json={"candidate_id": 1, "job_id": 1})
     assert created.status_code == 200

@@ -3945,6 +3945,7 @@ def agent_tool_catalog():
         {"name": "knowledge_lookup", "description": "查询候选人或内部员工画像、简历摘要、标签和背景"},
         {"name": "get_job_summary", "description": "查询岗位数量、开放/关闭状态和最近岗位"},
         {"name": "create_job", "description": "根据自然语言创建岗位草案并结构化 JD，写入前需要用户确认"},
+        {"name": "queue_background_task", "description": "显式创建岗位后台匹配、匹配数据校准等耗时任务"},
         {"name": "match_candidates_for_job", "description": "按岗位读取 JD 和简历，规则初排后结合 AI 复核推荐候选人"},
         {"name": "analyze_employee_resume", "description": "读取内部员工或人才库候选人简历和岗位 JD，推荐适合岗位、解释匹配理由并给出简历优化建议"},
         {"name": "get_pipeline_funnel", "description": "查询招聘流程漏斗"},
@@ -4127,6 +4128,8 @@ def infer_agent_tool_names(text, pending_action=None):
         return ["agent_plan"]
     if is_create_job_request(value):
         return ["create_job"]
+    if is_agent_background_task_request(value):
+        tools.append("queue_background_task")
     if is_candidate_comparison_question(value):
         tools.append("match_candidates_for_job")
     if is_candidate_job_match_question(value):
@@ -4285,6 +4288,9 @@ def summarize_agent_tool_result(result):
         return f"返回 {len(payload.get('items') or [])} 位候选人，覆盖 {len(payload.get('jobs') or []) or 1} 个岗位。"
     if tool == "analyze_employee_resume" and isinstance(payload, dict):
         return f"读取简历并推荐 {len(payload.get('items') or [])} 个岗位。"
+    if tool == "queue_background_task" and isinstance(payload, dict):
+        task = payload.get("task") or {}
+        return f"已创建后台任务 #{task.get('id')}：{task.get('task_type')}。"
     if tool == "agent_toolchain" and isinstance(payload, dict):
         return f"完成 {len(payload.get('chain') or [])} 个工具的连续调用。"
     if isinstance(payload, dict):
@@ -4536,6 +4542,10 @@ def run_agent_tool(user, message, pending_action=None, history=None):
 
     if is_create_job_request(text):
         return create_job_from_agent(user, text, suggestions)
+
+    background_task = answer_agent_background_task_request(user, text, suggestions, history=history)
+    if background_task:
+        return background_task
 
     clarification = agent_clarification_request(user, text, suggestions)
     if clarification:
@@ -6505,6 +6515,73 @@ def is_candidate_comparison_question(text):
     if not any(word in value for word in ["岗位", "职位", "JD", "jd", "匹配", "推荐", "适合"]):
         return False
     return len(find_candidates_for_agent_message(value, limit=4)[0]) >= 2
+
+
+def is_agent_background_task_request(text):
+    value = str(text or "")
+    task_words = ["后台", "任务", "排队", "重新匹配", "执行匹配", "重算匹配", "重新校准", "数据校准", "校准匹配", "重新解析标签"]
+    if not any(word in value for word in task_words):
+        return False
+    return any(word in value for word in ["匹配", "校准", "解析标签", "重算"])
+
+
+def answer_agent_background_task_request(user, text, suggestions, history=None):
+    if not is_agent_background_task_request(text):
+        return None
+    value = str(text or "")
+    if any(word in value for word in ["校准", "重算所有", "所有岗位", "全部岗位", "重新解析标签", "匹配数据"]):
+        if user.role not in {"admin", "manager"}:
+            return {
+                "answer": "匹配数据校准会批量重解析标签并重算岗位匹配，目前仅管理员和招聘经理可以创建该后台任务。",
+                "tool": "queue_background_task",
+                "result": {"allowed": False},
+                "suggestions": suggestions,
+                "readonly": False,
+            }
+        task_payload = {
+            "reparse_candidates": True,
+            "rematch_jobs": True,
+            "candidate_limit": 500,
+            "job_limit": 100,
+            "source": "agent",
+        }
+        task = enqueue_task("matching_recalibration", task_payload, created_by=user.id, max_attempts=1)
+        audit_log(user, "enqueue", "background_task", task.id, task.task_type, task_payload)
+        return {
+            "answer": f"已创建匹配数据校准后台任务 #{task.id}。它会重新解析候选人标签并重算在招岗位匹配，完成后可在后台任务查看结果，再到岗位匹配页刷新持久化结果。",
+            "tool": "queue_background_task",
+            "result": {"task": task.to_dict(), "scope": "matching_recalibration"},
+            "suggestions": ["打开后台任务", "查看岗位匹配结果", "查看数据质量", "继续分析匹配误判"],
+            "readonly": False,
+        }
+
+    job = find_job_for_agent_question(value, history=history)
+    if not job or is_internal_job(job):
+        return ask_agent_clarification(
+            value,
+            intent="queue_background_task",
+            missing=["job"],
+            selected_tools=["get_job_summary", "queue_background_task"],
+            answer="我可以创建岗位后台匹配任务，但需要先确认哪个在招岗位。请补充岗位名称，或说“所有岗位匹配数据校准”。",
+            suggestions=[item.title for item in Job.query.filter_by(status="active").order_by(Job.created_at.desc()).limit(6).all() if not is_internal_job(item)] or suggestions,
+        )
+    if job.status != "active":
+        return {
+            "answer": f"「{job.title}」当前是关闭状态，不能执行岗位匹配。请先恢复岗位后再创建后台匹配任务。",
+            "tool": "queue_background_task",
+            "result": {"job": job.to_dict(), "allowed": False},
+            "suggestions": ["恢复岗位", "选择其他开放岗位", "查看岗位列表"],
+            "readonly": False,
+        }
+    task = enqueue_task("job_match", {"job_id": job.id, "job_title": job.title, "source": "agent"}, created_by=user.id, max_attempts=2)
+    audit_log(user, "enqueue", "background_task", task.id, task.task_type, {"job_id": job.id, "source": "agent"})
+    return {
+        "answer": f"已为「{job.title}」创建岗位候选人匹配后台任务 #{task.id}。完成后系统会持久化匹配分、AI 复核和证据链，你可以在后台任务查看进度，或在岗位匹配页刷新结果。",
+        "tool": "queue_background_task",
+        "result": {"task": task.to_dict(), "job": job.to_dict(), "scope": "job_match"},
+        "suggestions": ["打开后台任务", "刷新岗位匹配结果", "查看第一名证据链", "继续比较候选人"],
+        "readonly": False,
+    }
 
 
 def find_job_for_agent_question(text, history=None):

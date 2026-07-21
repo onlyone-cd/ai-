@@ -157,6 +157,15 @@ const CITY_WORDS = [
   "\u4e1c\u839e"
 ];
 
+const CAPTURED_BOSS_API_PAYLOADS = [];
+const CAPTURE_LIMIT = 60;
+const CAPTURE_MAX_AGE_MS = 120000;
+
+window.addEventListener("message", (event) => {
+  if (event.source !== window || event.data?.type !== "hireinsight-boss-api") return;
+  rememberBossApiPayload(event.data);
+});
+
 async function collectResumeText() {
   const resumeRoot = findResumeRoot();
   const target = findScrollTarget(resumeRoot);
@@ -179,20 +188,25 @@ async function collectResumeText() {
     window.scrollTo(0, originalWindowTop);
   }
 
+  const apiText = bestCapturedResumeText();
   let rawText = normalizeResumeText([...chunks].join("\n"));
   const rootText = normalizeResumeText(resumeRoot?.innerText || "");
   if (rootText.length > rawText.length && hasResumeSignal(rootText)) {
     rawText = rootText;
+  }
+  if (apiText && (!hasResumeSignal(rawText) || apiText.length > rawText.length * 0.9)) {
+    rawText = normalizeResumeText(`${apiText}\n${rawText}`);
   }
   if (!hasResumeSignal(rawText)) {
     throw new Error("\u672a\u8bc6\u522b\u5230\u7b80\u5386\u6b63\u6587\uff0c\u8bf7\u6253\u5f00 BOSS \u5019\u9009\u4eba\u7b80\u5386\u8be6\u60c5\u9875\uff0c\u5e76\u786e\u4fdd\u4e2d\u95f4\u7b80\u5386\u533a\u57df\u53ef\u89c1");
   }
   return {
     raw_text: rawText,
-    chunk_count: chunks.size,
+    chunk_count: chunks.size + (apiText ? 1 : 0),
     text_length: rawText.length,
     page_url: location.href,
-    title: document.title
+    title: document.title,
+    source: apiText ? "boss_api_dom" : "dom"
   };
 }
 
@@ -523,6 +537,146 @@ function isRectInBounds(rect, bounds) {
   return centerX >= bounds.left && centerX <= bounds.right && centerY >= bounds.top - 40 && centerY <= bounds.bottom + 40;
 }
 
+function rememberBossApiPayload(payload) {
+  const body = String(payload.body || "");
+  if (!body || body.length < 40) return;
+  const parsed = parseCapturedJson(body);
+  const blocks = extractApiBlocks(parsed ?? body);
+  const text = normalizeResumeText(blocks.join("\n"));
+  const kind = classifyCapturedText(text, payload.url || "");
+  if (!kind) return;
+  CAPTURED_BOSS_API_PAYLOADS.unshift({
+    kind,
+    url: payload.url || location.href,
+    capturedAt: Number(payload.capturedAt) || Date.now(),
+    text,
+    blocks
+  });
+  const seen = new Set();
+  for (let index = CAPTURED_BOSS_API_PAYLOADS.length - 1; index >= 0; index -= 1) {
+    const item = CAPTURED_BOSS_API_PAYLOADS[index];
+    const key = `${item.kind}|${item.url}|${item.text.slice(0, 120)}`;
+    if (seen.has(key)) CAPTURED_BOSS_API_PAYLOADS.splice(index, 1);
+    else seen.add(key);
+  }
+  CAPTURED_BOSS_API_PAYLOADS.splice(CAPTURE_LIMIT);
+}
+
+function parseCapturedJson(body) {
+  try {
+    return JSON.parse(body);
+  } catch (_error) {
+    return null;
+  }
+}
+
+function extractApiBlocks(value) {
+  const blocks = [];
+  const objects = [];
+  collectApiObjects(value, objects, 0);
+  for (const object of objects) {
+    const lines = [];
+    flattenApiValue(object, lines, "", 0);
+    const text = normalizeResumeText(lines.join("\n"));
+    if (text.length >= 30) blocks.push(text);
+  }
+  if (!blocks.length) {
+    const lines = [];
+    flattenApiValue(value, lines, "", 0);
+    const text = normalizeResumeText(lines.join("\n"));
+    if (text.length >= 30) blocks.push(text);
+  }
+  return [...new Set(blocks)].slice(0, 80);
+}
+
+function collectApiObjects(value, objects, depth) {
+  if (!value || depth > 7 || objects.length > 160) return;
+  if (Array.isArray(value)) {
+    value.forEach((item) => collectApiObjects(item, objects, depth + 1));
+    return;
+  }
+  if (typeof value !== "object") return;
+  const lines = [];
+  flattenApiValue(value, lines, "", 0);
+  const text = lines.join("\n");
+  if (classifyCapturedText(text, "")) objects.push(value);
+  Object.values(value).forEach((item) => collectApiObjects(item, objects, depth + 1));
+}
+
+function flattenApiValue(value, lines, key, depth) {
+  if (lines.length > 900 || depth > 8 || value == null) return;
+  if (Array.isArray(value)) {
+    value.forEach((item) => flattenApiValue(item, lines, key, depth + 1));
+    return;
+  }
+  if (typeof value === "object") {
+    Object.entries(value).forEach(([childKey, childValue]) => {
+      if (isNoisyApiKey(childKey)) return;
+      flattenApiValue(childValue, lines, childKey, depth + 1);
+    });
+    return;
+  }
+  const text = cleanApiScalar(value);
+  if (!text) return;
+  const label = normalizeApiKey(key);
+  lines.push(label ? `${label}: ${text}` : text);
+}
+
+function cleanApiScalar(value) {
+  let text = String(value ?? "")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/\\u([0-9a-fA-F]{4})/g, (_match, code) => String.fromCharCode(parseInt(code, 16)))
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!text || text.length < 2 || text.length > 600) return "";
+  if (/^https?:\/\//i.test(text) || /^data:image\//i.test(text)) return "";
+  if (/^[A-Za-z0-9+/=_-]{80,}$/.test(text)) return "";
+  return text;
+}
+
+function isNoisyApiKey(key) {
+  return /token|cookie|secret|sign|security|captcha|encrypt|avatar|image|logo|url|href|path|html|style|script/i.test(String(key || ""));
+}
+
+function normalizeApiKey(key) {
+  const value = String(key || "").replace(/[_-]+/g, " ").trim();
+  if (!value || /^(id|uid|uuid|page|size|total|code|status|encrypt)$/i.test(value)) return "";
+  return value.slice(0, 40);
+}
+
+function classifyCapturedText(text, url) {
+  const value = normalizeResumeText(text).slice(0, 80000);
+  const lowerUrl = String(url || "").toLowerCase();
+  const resumeScore = countTextHits(value, RESUME_MARKERS) + countTextHits(value, ["\u5e74\u9f84", "\u5b66\u5386", "\u5de5\u4f5c\u5e74\u9650", "\u79bb\u804c", "\u5728\u804c", "\u968f\u65f6\u5230\u5c97", "\u85aa\u8d44", "\u671f\u671b"]);
+  const jobScore = countTextHits(value, JOB_LIST_MARKERS) + countTextHits(value, JOB_FIELD_WORDS) + countTextHits(value, ["JD", "\u4efb\u804c\u8981\u6c42", "\u5c97\u4f4d\u804c\u8d23"]);
+  if (/job|position/.test(lowerUrl) && jobScore >= 2 && !looksLikeResumeDetailBlock(value)) return "job";
+  if (/resume|geek|candidate|friend/.test(lowerUrl) && resumeScore >= 2) return "resume";
+  if (resumeScore >= 3 && !looksLikeJobBlock(value)) return "resume";
+  if (jobScore >= 3 && looksLikeJobBlock(value) && !looksLikeResumeDetailBlock(value)) return "job";
+  return "";
+}
+
+function recentCapturedPayloads(kind) {
+  const now = Date.now();
+  return CAPTURED_BOSS_API_PAYLOADS.filter((item) => item.kind === kind && now - item.capturedAt <= CAPTURE_MAX_AGE_MS);
+}
+
+function bestCapturedResumeText() {
+  const candidates = recentCapturedPayloads("resume")
+    .map((item) => item.text)
+    .filter((text) => text.length >= 60 && hasResumeSignal(text))
+    .sort((a, b) => b.length - a.length)
+    .slice(0, 2);
+  return normalizeResumeText(candidates.join("\n"));
+}
+
+function collectCapturedJobBlocks() {
+  return recentCapturedPayloads("job")
+    .flatMap((item) => item.blocks?.length ? item.blocks : [item.text])
+    .map((text) => normalizeJobText(text))
+    .filter((text) => text.length >= 12 && looksLikeJobBlock(text) && !looksLikeResumeDetailBlock(text));
+}
+
 function splitCleanLines(text) {
   return String(text || "")
     .replace(/\r/g, "\n")
@@ -598,6 +752,10 @@ async function collectBossJobs() {
       const key = normalizeJobKey(text);
       if (!seen.has(key)) seen.set(key, text);
     }
+  }
+  for (const text of collectCapturedJobBlocks()) {
+    const key = normalizeJobKey(text);
+    if (!seen.has(key)) seen.set(key, text);
   }
 
   const items = [...seen.values()].slice(0, 80).map((text, index) => ({

@@ -2739,9 +2739,10 @@ def test_boss_extension_can_be_downloaded(client, admin_headers):
         assert "manifest.json" in archive.namelist()
         assert "popup.js" in archive.namelist()
         assert "background.js" in archive.namelist()
+        assert "network_probe.js" in archive.namelist()
         manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
         assert "http://120.24.172.139/*" in manifest["host_permissions"]
-        assert manifest["version"] == "0.3.8"
+        assert manifest["version"] == "0.3.9"
         assert manifest["background"]["service_worker"] == "background.js"
         content = archive.read("content.js").decode("utf-8")
         assert "findResumeColumnBounds" in content
@@ -2750,8 +2751,13 @@ def test_boss_extension_can_be_downloaded(client, admin_headers):
         assert "hasOnlineResumeModal" in content
         assert "collectObtainedResumeText" in content
         assert "autoCollectCommunicationResumes" in content
+        assert "bestCapturedResumeText" in content
+        assert "collectCapturedJobBlocks" in content
         assert "can_import_obtained_resume" in content
         assert "\\u4e0d\\u80fd\\u91c7\\u96c6\\u5019\\u9009\\u4eba\\u7684\\u671f\\u671b\\u804c\\u4f4d" in content
+        probe = archive.read("network_probe.js").decode("utf-8")
+        assert "XMLHttpRequest" in probe
+        assert "window.fetch" in probe
         popup = archive.read("popup.js").decode("utf-8")
         assert "refreshPageState" in popup
         assert "can_sync_jobs" in popup

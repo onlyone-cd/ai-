@@ -356,6 +356,10 @@ textarea {
     @apply bg-red-50 text-red-700;
   }
 
+  .badge.warn {
+    @apply bg-orange-50 text-orange-700;
+  }
+
   .chip {
     @apply rounded border border-blue-100 bg-blue-50/60 px-1.5 py-0.5 text-[11px] text-blue-700;
   }
@@ -425,6 +429,42 @@ textarea {
 
   .skill-chip strong {
     @apply shrink-0 font-semibold text-blue-800;
+  }
+
+  .tag-evidence-list {
+    @apply mt-4 grid max-h-72 gap-2 overflow-auto pr-1;
+  }
+
+  .tag-evidence-item {
+    @apply rounded-md border border-line bg-white px-2 py-1.5 text-xs;
+  }
+
+  .tag-evidence-item.verified {
+    @apply border-emerald-100 bg-emerald-50/30;
+  }
+
+  .tag-evidence-item.warning {
+    @apply border-orange-100 bg-orange-50/30;
+  }
+
+  .tag-evidence-item summary {
+    @apply flex cursor-pointer list-none items-center justify-between gap-2;
+  }
+
+  .tag-evidence-item summary::-webkit-details-marker {
+    display: none;
+  }
+
+  .tag-evidence-status {
+    @apply inline-flex shrink-0 items-center gap-1 text-[11px] font-medium text-steel;
+  }
+
+  .tag-evidence-body {
+    @apply mt-2 space-y-1 border-t border-line pt-2 text-[11px] leading-5 text-steel;
+  }
+
+  .tag-evidence-body p {
+    @apply line-clamp-2;
   }
 
   .score-ring {

@@ -5619,17 +5619,39 @@ function SkillCategoryList({ tags }: { tags: Candidate["tags"] }) {
   const highScore = sorted.filter((tag) => tag.score >= 4);
   const visible = expanded ? sorted : (highScore.length ? highScore.slice(0, 16) : sorted.slice(0, 8));
   const hiddenCount = Math.max(sorted.length - visible.length, 0);
+  const verifiedCount = sorted.filter((tag) => tag.evidence_status === "verified").length;
+  const missingCount = sorted.filter((tag) => tag.evidence_status && tag.evidence_status !== "verified").length;
   return (
     <div className="resume-card">
       <ResumeSectionTitle icon={<Database size={18} />} title="标签明细" />
-      <p className="mt-2 text-xs text-steel">数字为熟练度评分，范围 1-5；5/5 表示简历中有较强实践证据。</p>
-      <div className="mt-4 flex max-h-40 flex-wrap gap-2 overflow-auto pr-1">
+      <div className="mt-2 flex flex-wrap gap-1.5 text-xs text-steel">
+        <span>数字为熟练度评分，范围 1-5。</span>
+        <span className="badge muted">证据通过 {verifiedCount}</span>
+        {!!missingCount && <span className="badge warn">待校验 {missingCount}</span>}
+      </div>
+      <div className="tag-evidence-list">
         {visible.map((tag) => (
-          <span className="skill-chip" title={tag.category} key={`${tag.category}-${tag.tag}`}>
-            <span>{tag.tag}</span>
-            <strong>{tag.score}/5</strong>
-          </span>
+          <details className={`tag-evidence-item ${tag.evidence_status === "verified" ? "verified" : "warning"}`} key={`${tag.category}-${tag.tag}`}>
+            <summary>
+              <span className="skill-chip" title={tag.category}>
+                <span>{tag.tag}</span>
+                <strong>{tag.score}/5</strong>
+              </span>
+              <span className="tag-evidence-status">
+                <ShieldCheck size={12} />
+                {evidenceStatusLabel(tag.evidence_status)}
+              </span>
+            </summary>
+            <div className="tag-evidence-body">
+              {(tag.evidence || []).length ? (
+                tag.evidence?.slice(0, 3).map((item, index) => <p key={index}>{item}</p>)
+              ) : (
+                <p>当前简历原文未找到可直接证明该标签的片段，建议重新解析或人工校正。</p>
+              )}
+            </div>
+          </details>
         ))}
+        {!visible.length && <div className="resume-empty">暂无通过证据校验的标签</div>}
       </div>
       {hiddenCount > 0 && (
         <button className="secondary-button mt-4 w-full" type="button" onClick={() => setExpanded(!expanded)}>
@@ -5946,6 +5968,14 @@ function SettingsPage() {
   );
 }
 
+function evidenceStatusLabel(status?: string) {
+  if (status === "verified") return "已校验";
+  if (status === "missing_resume") return "缺少简历";
+  if (status === "unknown_label") return "标签库缺失";
+  if (status === "error") return "校验异常";
+  return "缺少证据";
+}
+
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <label>
@@ -5980,13 +6010,17 @@ function MobileTabs({ view, setView, isAdmin, canUseTasks }: { view: View; setVi
   );
 }
 
-function TagList({ tags, limit = 8, compact = false }: { tags: { tag: string; score: number; category: string }[]; limit?: number; compact?: boolean }) {
+function TagList({ tags, limit = 8, compact = false }: { tags: Candidate["tags"]; limit?: number; compact?: boolean }) {
   const sorted = [...tags].sort((a, b) => b.score - a.score || a.tag.localeCompare(b.tag));
   const visible = sorted.slice(0, limit);
   const hiddenCount = Math.max(0, sorted.length - visible.length);
   return (
     <div className={`${compact ? "tag-list-compact" : "mt-3 flex flex-wrap gap-1.5"}`}>
-      {visible.map((tag) => <span className="chip" key={tag.tag}>{tag.tag} · {tag.score}/5</span>)}
+      {visible.map((tag) => (
+        <span className={`chip ${tag.evidence_status === "verified" ? "good" : ""}`} title={(tag.evidence || [tag.category]).slice(0, 2).join("；")} key={tag.tag}>
+          {tag.tag} · {tag.score}/5
+        </span>
+      ))}
       {hiddenCount > 0 && <span className="chip muted">+{hiddenCount}</span>}
     </div>
   );

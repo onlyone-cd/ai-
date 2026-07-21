@@ -3109,6 +3109,10 @@ def test_resume_upload_updates_duplicate_by_phone(client, admin_headers):
     assert len(matches) == 1
     assert matches[0].name_masked == "重复二"
     assert CandidateTag.query.filter_by(candidate_id=matches[0].id, tag="Python").count() == 1
+    detail = client.get(f"/api/candidates/{matches[0].id}", headers=admin_headers).get_json()["data"]
+    python_tag = next(tag for tag in detail["tags"] if tag["tag"] == "Python")
+    assert python_tag["evidence_status"] == "verified"
+    assert python_tag["evidence"]
 
 
 def test_candidate_basic_info_can_be_updated(client, admin_headers):

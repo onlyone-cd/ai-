@@ -205,7 +205,25 @@ class CandidateTag(db.Model):
     category = db.Column(db.String(32), nullable=False, default="其他")
 
     def to_dict(self):
-        return {"tag": self.tag, "score": self.score, "category": self.category}
+        evidence = tag_evidence_payload(self)
+        return {"tag": self.tag, "score": self.score, "category": self.category, **evidence}
+
+
+def tag_evidence_payload(candidate_tag):
+    candidate = getattr(candidate_tag, "candidate", None)
+    raw_text = getattr(candidate, "raw_text", "") if candidate else ""
+    if not raw_text:
+        return {"evidence": [], "evidence_status": "missing_resume"}
+    try:
+        from .tag_library import evidence_terms_for, label_map, valid_evidence_contexts
+
+        label = label_map().get(candidate_tag.tag)
+        if not label:
+            return {"evidence": [], "evidence_status": "unknown_label"}
+        evidence = valid_evidence_contexts(label, raw_text, evidence_terms_for(label), radius=70)[:3]
+        return {"evidence": evidence, "evidence_status": "verified" if evidence else "missing_evidence"}
+    except Exception:
+        return {"evidence": [], "evidence_status": "error"}
 
 
 class Job(db.Model):

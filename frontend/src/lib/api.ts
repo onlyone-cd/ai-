@@ -1,7 +1,7 @@
 const API_BASE = "/api";
 
 export type User = { id: number; username: string; name: string; role: string; active: boolean; permissions?: string[] };
-export type CandidateTag = { tag: string; score: number; category: string };
+export type CandidateTag = { tag: string; score: number; category: string; evidence?: string[]; evidence_status?: string };
 export type PaginationMeta = { total: number; limit: number; offset: number; has_more: boolean };
 export type Candidate = {
   id: number;

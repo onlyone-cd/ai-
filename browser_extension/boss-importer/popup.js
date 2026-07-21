@@ -55,7 +55,7 @@ function renderPageState(state) {
 }
 
 function stateClass(state) {
-  if (state?.can_import_resume || state?.can_sync_jobs || state?.can_batch_import_candidates) return "ok";
+  if (state?.can_import_resume || state?.can_import_obtained_resume || state?.can_sync_jobs || state?.can_batch_import_candidates) return "ok";
   if (state?.page_type === "resume" || state?.page_type === "job_list" || state?.page_type === "candidate_list") return "ok";
   if (state?.page_type === "invalid" || state?.is_boss_page === false) return "bad";
   return "warn";
@@ -64,15 +64,33 @@ function stateClass(state) {
 function setActionButtons(enabled, state = currentPageState) {
   $("bindCookieBtn").disabled = !enabled || !state?.is_boss_page;
   $("importBtn").disabled = !enabled || !state?.can_import_resume;
+  $("obtainedImportBtn").disabled = !enabled || !state?.can_import_obtained_resume;
   $("syncJobsBtn").disabled = !enabled || !state?.can_sync_jobs;
   $("batchImportBtn").disabled = !enabled || !state?.can_batch_import_candidates;
-  $("importBtn").title = state?.can_import_resume ? "" : "请打开 BOSS 候选人简历详情页";
+  $("importBtn").title = state?.can_import_resume ? "" : "请打开 BOSS 在线简历详情";
+  $("obtainedImportBtn").title = state?.can_import_obtained_resume ? "" : "请打开已获得的在线简历或附件简历";
   $("syncJobsBtn").title = state?.can_sync_jobs ? "" : "请打开 BOSS 职位管理/岗位列表页";
   $("batchImportBtn").title = state?.can_batch_import_candidates ? "" : "请打开 BOSS 沟通列表或候选人列表";
 }
 
 function requirePageCapability(capability, message) {
   if (!currentPageState?.[capability]) throw new Error(message);
+}
+
+async function uploadResumePayload(baseUrl, token, collected, successPrefix) {
+  if (!collected?.raw_text || collected.raw_text.length < 30) throw new Error("未采集到足够的简历正文");
+  const response = await fetch(`${baseUrl}/api/boss/screen-resume/import`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${token}`
+    },
+    body: JSON.stringify(collected)
+  });
+  const body = await response.json();
+  if (!response.ok) throw new Error(body.error || "导入失败");
+  const name = body.data.candidate?.name_masked || "候选人";
+  $("status").textContent = `${successPrefix}：${name}\n文本长度：${body.data.text_length}`;
 }
 
 $("bindCookieBtn").addEventListener("click", async () => {
@@ -102,30 +120,32 @@ $("bindCookieBtn").addEventListener("click", async () => {
   }
 });
 
-$("importBtn").addEventListener("click", async () => {
+$("obtainedImportBtn").addEventListener("click", async () => {
   const { baseUrl, token } = saveConfig();
-  $("status").textContent = "正在采集当前 BOSS 简历正文...";
+  $("status").textContent = "正在导入已获得简历...";
 
   try {
-    requirePageCapability("can_import_resume", "当前不是简历详情页，不能采集简历");
+    requirePageCapability("can_import_obtained_resume", "当前未识别到已获得的在线简历或附件简历");
+    const tab = await getActiveBossTab();
+    const collected = await chrome.tabs.sendMessage(tab.id, { type: "collect-obtained-resumes" });
+    const sourceTabs = collected.source_tabs?.length ? `\n来源：${collected.source_tabs.join("、")}` : "";
+    $("status").textContent = `已采集 ${collected.chunk_count || 1} 段${sourceTabs}\n正在上传解析...`;
+    await uploadResumePayload(baseUrl, token, collected, "已获得简历导入成功");
+  } catch (error) {
+    $("status").textContent = `失败：${error.message}`;
+  }
+});
+
+$("importBtn").addEventListener("click", async () => {
+  const { baseUrl, token } = saveConfig();
+  $("status").textContent = "正在采集当前 BOSS 在线简历...";
+
+  try {
+    requirePageCapability("can_import_resume", "当前不是在线简历详情，不能采集简历");
     const tab = await getActiveBossTab();
     const collected = await chrome.tabs.sendMessage(tab.id, { type: "collect-resume" });
-    if (!collected?.raw_text || collected.raw_text.length < 30) throw new Error("未采集到足够的简历正文");
-
-    $("status").textContent = `已采集 ${collected.chunk_count} 段，正在上传解析...`;
-    const response = await fetch(`${baseUrl}/api/boss/screen-resume/import`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${token}`
-      },
-      body: JSON.stringify(collected)
-    });
-    const body = await response.json();
-    if (!response.ok) throw new Error(body.error || "导入失败");
-
-    const name = body.data.candidate?.name_masked || "候选人";
-    $("status").textContent = `导入成功：${name}\n文本长度：${body.data.text_length}`;
+    $("status").textContent = `已采集 ${collected.chunk_count || 1} 段，正在上传解析...`;
+    await uploadResumePayload(baseUrl, token, collected, "在线简历导入成功");
   } catch (error) {
     $("status").textContent = `失败：${error.message}`;
   }

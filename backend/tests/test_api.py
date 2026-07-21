@@ -2740,16 +2740,19 @@ def test_boss_extension_can_be_downloaded(client, admin_headers):
         assert "popup.js" in archive.namelist()
         manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
         assert "http://120.24.172.139/*" in manifest["host_permissions"]
-        assert manifest["version"] == "0.3.4"
+        assert manifest["version"] == "0.3.5"
         content = archive.read("content.js").decode("utf-8")
         assert "findResumeColumnBounds" in content
         assert "assertBossJobListPage" in content
         assert "inspectBossPage" in content
         assert "hasOnlineResumeModal" in content
+        assert "collectObtainedResumeText" in content
+        assert "can_import_obtained_resume" in content
         assert "\\u4e0d\\u80fd\\u91c7\\u96c6\\u5019\\u9009\\u4eba\\u7684\\u671f\\u671b\\u804c\\u4f4d" in content
         popup = archive.read("popup.js").decode("utf-8")
         assert "refreshPageState" in popup
         assert "can_sync_jobs" in popup
+        assert "obtainedImportBtn" in popup
 
 
 def test_boss_screen_resume_import_creates_candidate_and_draft(client, admin_headers):

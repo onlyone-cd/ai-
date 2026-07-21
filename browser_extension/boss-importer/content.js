@@ -192,6 +192,78 @@ async function collectResumeText() {
   };
 }
 
+async function collectObtainedResumeText() {
+  const collected = [];
+  const tabs = findResumeTabButtons();
+  const originalActive = tabs.find((item) => isActiveTabButton(item.button));
+
+  if (!tabs.length) {
+    return collectResumeText();
+  }
+
+  for (const item of tabs) {
+    if (!item.available) continue;
+    item.button.click();
+    await sleep(500);
+    try {
+      const result = await collectResumeText();
+      if (result.raw_text) {
+        collected.push({ label: item.label, text: result.raw_text, chunks: result.chunk_count || 1 });
+      }
+    } catch (_error) {
+      // Some attachment resumes are image/PDF previews with no selectable text.
+    }
+  }
+
+  if (originalActive?.button) {
+    originalActive.button.click();
+    await sleep(200);
+  }
+
+  if (!collected.length) {
+    return collectResumeText();
+  }
+
+  const rawText = normalizeResumeText(collected.map((item) => `【${item.label}】\n${item.text}`).join("\n\n"));
+  return {
+    raw_text: rawText,
+    chunk_count: collected.reduce((sum, item) => sum + item.chunks, 0),
+    text_length: rawText.length,
+    page_url: location.href,
+    title: document.title,
+    source_tabs: collected.map((item) => item.label)
+  };
+}
+
+function findResumeTabButtons() {
+  const keywords = ["\u5728\u7ebf\u7b80\u5386", "\u9644\u4ef6\u7b80\u5386", "\u5df2\u83b7\u5f97\u7b80\u5386"];
+  const nodes = [...document.querySelectorAll("button,a,div,span")]
+    .filter(isVisibleElement)
+    .map((node) => {
+      const button = node.closest?.("button,a,[role='tab'],[role='button']") || node;
+      return { button, label: (node.innerText || node.textContent || "").replace(/\s+/g, " ").trim() };
+    })
+    .filter((item) => item.label && keywords.some((word) => item.label.includes(word)));
+  const seen = new Set();
+  return nodes
+    .filter((item) => {
+      const key = `${item.label}|${Math.round(item.button.getBoundingClientRect().left)}|${Math.round(item.button.getBoundingClientRect().top)}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .map((item) => ({
+      ...item,
+      available: !item.button.matches?.("[disabled],.disabled,[aria-disabled='true']") && !/\u672a\u83b7\u5f97|\u672a\u5f00\u901a|\u65e0/.test(item.label)
+    }));
+}
+
+function isActiveTabButton(node) {
+  const text = node?.innerText || node?.textContent || "";
+  const cls = node?.className || "";
+  return /active|selected|current/.test(String(cls)) || text.includes("\u5728\u7ebf\u7b80\u5386");
+}
+
 function findResumeRoot() {
   const selectors = [
     "[class*='resume']",
@@ -430,14 +502,19 @@ async function collectBossJobs() {
 function inspectBossPage() {
   const pageText = (document.body.innerText || "").slice(0, 6000);
   const pageSignal = `${location.href}\n${document.title}\n${pageText}`;
+  const resumeRoot = findResumeRoot();
+  const resumeRootText = (resumeRoot?.innerText || "").slice(0, 6000);
+  const resumeRootSignals = countTextHits(resumeRootText, ["\u5de5\u4f5c\u7ecf\u5386", "\u6559\u80b2\u7ecf\u5386", "\u671f\u671b\u804c\u4f4d", "\u6c42\u804c\u671f\u671b", "\u4e2a\u4eba\u4f18\u52bf", "\u9879\u76ee\u7ecf\u5386"]);
   const resumeSignals = countTextHits(pageSignal, ["\u5de5\u4f5c\u7ecf\u5386", "\u6559\u80b2\u7ecf\u5386", "\u671f\u671b\u804c\u4f4d", "\u6c42\u804c\u671f\u671b", "\u4e2a\u4eba\u4f18\u52bf", "\u9879\u76ee\u7ecf\u5386"]);
   const jobSignals = countTextHits(pageSignal, JOB_LIST_MARKERS) + countTextHits(pageSignal, ["\u62db\u8058\u4e2d", "\u5f85\u5f00\u653e", "\u5df2\u5173\u95ed", "\u804c\u4f4d\u540d\u79f0", "\u62db\u8058\u4eba\u6570", "\u53d1\u5e03\u804c\u4f4d", "\u5237\u65b0\u804c\u4f4d", "\u7f16\u8f91\u804c\u4f4d"]);
   const candidateListSignals = countTextHits(pageSignal, ["\u6c9f\u901a\u5217\u8868", "\u725b\u4eba\u5217\u8868", "\u63a8\u8350\u725b\u4eba", "\u5019\u9009\u4eba", "\u5df2\u6c9f\u901a", "\u610f\u5411\u6c9f\u901a"]);
   const hasJobCards = collectJobBlocks().length > 0;
-  const hasOnlineResumeModal = countTextHits(pageSignal, ["\u671f\u671b\u804c\u4f4d", "\u5de5\u4f5c\u7ecf\u5386"]) >= 2;
-  const hasProfileHeader = /(\d+\s*\u5c81|\u5c81).*(\u5927\u4e13|\u672c\u79d1|\u7855\u58eb|\u535a\u58eb|\u5e74\u4ee5\u4e0a|\u79bb\u804c|\u6d3b\u8dc3)/s.test(pageSignal);
+  const resumeTabs = findResumeTabButtons();
+  const hasResumeTabs = resumeTabs.length > 0;
+  const hasOnlineResumeModal = countTextHits(`${pageSignal}\n${resumeRootText}`, ["\u671f\u671b\u804c\u4f4d", "\u5de5\u4f5c\u7ecf\u5386"]) >= 2 || hasResumeTabs;
+  const hasProfileHeader = /(\d+\s*\u5c81|\u5c81).*(\u5927\u4e13|\u672c\u79d1|\u7855\u58eb|\u535a\u58eb|\u5e74\u4ee5\u4e0a|\u79bb\u804c|\u6d3b\u8dc3)/s.test(`${pageSignal}\n${resumeRootText}`);
   const isBossPage = /(^|\.)zhipin\.com$/i.test(location.hostname);
-  const isResumePage = isBossPage && jobSignals < 2 && (resumeSignals >= 3 || hasOnlineResumeModal || (resumeSignals >= 2 && hasProfileHeader));
+  const isResumePage = isBossPage && (resumeRootSignals >= 2 || resumeSignals >= 3 || hasOnlineResumeModal || (resumeSignals >= 2 && hasProfileHeader));
   const isJobListPage = isBossPage && !isResumePage && (jobSignals >= 2 || ((/\/job|\/position|position|job/i.test(location.href)) && hasJobCards));
   const isCandidateListPage = isBossPage && !isResumePage && !isJobListPage && candidateListSignals >= 1;
   let pageType = "unknown";
@@ -465,11 +542,14 @@ function inspectBossPage() {
     label,
     message,
     can_import_resume: isResumePage,
+    can_import_obtained_resume: isResumePage || hasResumeTabs,
     can_sync_jobs: isJobListPage,
     can_batch_import_candidates: isCandidateListPage,
     resume_signals: resumeSignals,
+    resume_root_signals: resumeRootSignals,
     job_signals: jobSignals,
     candidate_list_signals: candidateListSignals,
+    resume_tabs: resumeTabs.map((item) => ({ label: item.label, available: item.available })),
     url: location.href,
     title: document.title
   };
@@ -648,6 +728,10 @@ function sleep(ms) {
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type === "collect-resume") {
     collectResumeText().then(sendResponse).catch((error) => sendResponse({ error: error.message }));
+    return true;
+  }
+  if (message?.type === "collect-obtained-resumes") {
+    collectObtainedResumeText().then(sendResponse).catch((error) => sendResponse({ error: error.message }));
     return true;
   }
   if (message?.type === "collect-boss-candidates") {

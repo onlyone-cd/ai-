@@ -2738,6 +2738,10 @@ def test_boss_extension_can_be_downloaded(client, admin_headers):
     with zipfile.ZipFile(BytesIO(response.data)) as archive:
         assert "manifest.json" in archive.namelist()
         assert "popup.js" in archive.namelist()
+        manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
+        assert "http://120.24.172.139/*" in manifest["host_permissions"]
+        content = archive.read("content.js").decode("utf-8")
+        assert "findResumeRoot" in content
 
 
 def test_boss_screen_resume_import_creates_candidate_and_draft(client, admin_headers):

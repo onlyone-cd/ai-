@@ -1,6 +1,7 @@
 async function collectResumeText() {
   const chunks = new Set();
-  const target = findScrollTarget();
+  const resumeRoot = findResumeRoot();
+  const target = findScrollTarget(resumeRoot);
   const maxScroll = Math.max(target.scrollHeight - target.clientHeight, 0);
   const step = Math.max(Math.floor(target.clientHeight * 0.75), 420);
 
@@ -8,17 +9,95 @@ async function collectResumeText() {
     target.scrollTop = Math.min(top, maxScroll);
     window.scrollTo(0, Math.min(top, document.documentElement.scrollHeight));
     await new Promise((resolve) => setTimeout(resolve, 260));
-    const text = (target.innerText || document.body.innerText || "").trim();
+    const text = normalizeResumeText(resumeRoot.innerText || "");
     if (text) chunks.add(text);
   }
 
+  const rawText = normalizeResumeText([...chunks].join("\n\n"));
   return {
-    raw_text: [...chunks].join("\n\n"),
+    raw_text: rawText,
     chunk_count: chunks.size,
-    text_length: [...chunks].join("").length,
+    text_length: rawText.length,
     page_url: location.href,
     title: document.title
   };
+}
+
+function findResumeRoot() {
+  const selectors = [
+    "[class*='resume']",
+    "[class*='geek']",
+    "[class*='detail']",
+    "[class*='dialog']",
+    "[class*='modal']",
+    "main",
+    "section",
+    "article",
+    "div"
+  ];
+  const nodes = [...document.querySelectorAll(selectors.join(","))];
+  let best = null;
+  let bestScore = -Infinity;
+
+  for (const node of nodes) {
+    if (!isVisibleNode(node)) continue;
+    const rect = node.getBoundingClientRect();
+    if (rect.width < 360 || rect.height < 220) continue;
+    const text = (node.innerText || "").trim();
+    if (text.length < 120) continue;
+    const score = scoreResumeRoot(text, rect);
+    if (score > bestScore) {
+      best = node;
+      bestScore = score;
+    }
+  }
+  return best || document.body;
+}
+
+function scoreResumeRoot(text, rect) {
+  const includeHits = countMatches(text, /(工作经历|项目经历|教育经历|期望职位|个人优势|资格证书|自我评价|求职状态|学历|经验|负责|熟悉|本科|大专|硕士|博士|会计|开发|运营|销售|设计|测试)/g);
+  const noiseHits = countMatches(text, /(BOSS直聘|职位管理|推荐牛人|账号权益|续费VIP|我的客服|招聘规范|招聘数据|道具|工具箱|意向沟通|互动|收藏|转发|举报|不合适|发送|继续沟通)/g);
+  const dateHits = countMatches(text, /\d{4}[./-]\d{1,2}\s*[-至]\s*(\d{4}[./-]\d{1,2}|至今|今)/g);
+  const contactHits = countMatches(text, /(1[3-9]\d{9}|[\w.+-]+@[\w.-]+)/g);
+  const centerPenalty = rect.left < 120 ? 8 : 0;
+  const rightPanelPenalty = rect.width > Math.min(window.innerWidth * 0.78, 980) ? 4 : 0;
+  return includeHits * 8 + dateHits * 6 + contactHits * 4 + Math.min(text.length / 220, 10) - noiseHits * 5 - centerPenalty - rightPanelPenalty;
+}
+
+function countMatches(text, pattern) {
+  return ((text || "").match(pattern) || []).length;
+}
+
+function isVisibleNode(node) {
+  const rect = node.getBoundingClientRect();
+  const style = window.getComputedStyle(node);
+  return rect.width > 0 && rect.height > 0 && style.display !== "none" && style.visibility !== "hidden";
+}
+
+function normalizeResumeText(text) {
+  const seen = new Set();
+  return String(text || "")
+    .replace(/\r/g, "\n")
+    .split(/\n+/)
+    .map((line) => line.replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+    .filter((line) => !isBossNavigationLine(line))
+    .filter((line) => {
+      const key = line.replace(/\s+/g, "");
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .join("\n");
+}
+
+function isBossNavigationLine(line) {
+  const compact = line.replace(/\s+/g, "");
+  if (/^(BOSS直聘|职位管理|推荐牛人|搜索|沟通|意向沟通|互动|牛人管理|道具|工具箱|更多|附件简历|不合适|发送|收藏|转发|举报)$/.test(compact)) return true;
+  if (/^(未处理|已处理).*(沟通|会计|开发|岗位)/.test(compact)) return true;
+  if (/(招聘规范|账号权益|续费VIP|我的客服|招聘数据|首充礼|隐私保护|平台相关提交|在线浏览牛人简历)/.test(compact)) return true;
+  if (/^继续沟通$/.test(compact)) return true;
+  return false;
 }
 
 async function collectBossCandidates() {
@@ -130,8 +209,18 @@ function guessCity(text) {
   return match?.[1] || "";
 }
 
-function findScrollTarget() {
-  const elements = [document.scrollingElement, document.documentElement, document.body, ...document.querySelectorAll("main, section, div")].filter(Boolean);
+function findScrollTarget(root = document.body) {
+  const rootAncestors = [];
+  let current = root;
+  while (current && current !== document.body) {
+    rootAncestors.push(current);
+    current = current.parentElement;
+  }
+  if (root && root !== document.body) {
+    const localScrollable = [root, ...rootAncestors].find((el) => el.scrollHeight - el.clientHeight > 100);
+    if (localScrollable) return localScrollable;
+  }
+  const elements = [root, ...rootAncestors, document.scrollingElement, document.documentElement, document.body, ...document.querySelectorAll("main, section, div")].filter(Boolean);
   return elements.reduce((best, el) => {
     const score = (el.scrollHeight - el.clientHeight) + ((el.innerText || "").length / 20);
     const bestScore = (best.scrollHeight - best.clientHeight) + ((best.innerText || "").length / 20);

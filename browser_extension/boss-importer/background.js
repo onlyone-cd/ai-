@@ -83,6 +83,58 @@ async function importResume(baseUrl, token, collected, successPrefix) {
   return `${successPrefix}：${name}，文本长度 ${body.data?.text_length || collected.raw_text.length}`;
 }
 
+async function importCandidateItems(baseUrl, token, items, source) {
+  if (!items?.length) return { imported: 0, failed: 0 };
+  const body = await postJson(baseUrl, token, "/api/boss/candidates/batch-import", { items, source });
+  return {
+    imported: body.data?.items?.length || 0,
+    failed: body.data?.errors?.length || 0
+  };
+}
+
+async function uploadResumeFiles(baseUrl, token, files) {
+  const unique = [];
+  const seen = new Set();
+  for (const file of files || []) {
+    if (!file?.url || seen.has(file.url)) continue;
+    seen.add(file.url);
+    unique.push(file);
+  }
+  if (!unique.length) return { imported: 0, failed: 0, errors: [] };
+
+  const form = new FormData();
+  const errors = [];
+  for (const file of unique.slice(0, 20)) {
+    try {
+      const response = await fetch(file.url, { credentials: "include" });
+      if (!response.ok) throw new Error(`下载失败 HTTP ${response.status}`);
+      const blob = await response.blob();
+      if (!blob.size) throw new Error("下载文件为空");
+      const filename = file.filename || `boss-resume-${Date.now()}.pdf`;
+      form.append("files", blob, filename);
+    } catch (error) {
+      errors.push({ filename: file.filename || file.url, error: error.message });
+    }
+  }
+  if (![...form.keys()].length) return { imported: 0, failed: errors.length, errors };
+
+  const response = await fetch(`${baseUrl}/api/resume/upload`, {
+    method: "POST",
+    headers: { "Authorization": `Bearer ${token}` },
+    body: form
+  });
+  const body = await response.json();
+  if (!response.ok) {
+    const uploadErrors = body.details?.errors || body.data?.errors || [{ error: body.error || "上传解析失败" }];
+    return { imported: 0, failed: errors.length + uploadErrors.length, errors: [...errors, ...uploadErrors] };
+  }
+  return {
+    imported: body.data?.success_count || body.data?.candidates?.length || 0,
+    failed: errors.length + (body.data?.failed_count || body.data?.errors?.length || 0),
+    errors: [...errors, ...(body.data?.errors || [])]
+  };
+}
+
 async function runBackgroundImport(task) {
   setTaskStatus({ ...task, status: "running", message: "后台任务已启动，可关闭插件窗口" });
   try {
@@ -90,9 +142,21 @@ async function runBackgroundImport(task) {
       setTaskStatus({ ...task, status: "running", message: "正在采集已获得简历..." });
       const collected = await sendTabMessage(task.tabId, { type: "collect-obtained-resumes" });
       const sourceTabs = collected?.source_tabs?.length ? `，来源：${collected.source_tabs.join("、")}` : "";
-      setTaskStatus({ ...task, status: "running", message: `已采集 ${collected?.chunk_count || 1} 段${sourceTabs}，正在导入系统...` });
-      const message = await importResume(task.baseUrl, task.token, collected, "已获得简历导入成功");
-      setTaskStatus({ ...task, status: "succeeded", message });
+      const items = collected?.items || [];
+      const files = collected?.files || [];
+      if (items.length || files.length) {
+        setTaskStatus({ ...task, status: "running", message: `已采集 ${items.length} 条简历文本、${files.length} 个附件${sourceTabs}，正在导入系统...` });
+        const itemResult = await importCandidateItems(task.baseUrl, task.token, items, "extension_obtained_resume");
+        const fileResult = await uploadResumeFiles(task.baseUrl, task.token, files);
+        const imported = itemResult.imported + fileResult.imported;
+        const failed = itemResult.failed + fileResult.failed + (collected?.errors?.length || 0);
+        if (!imported) throw new Error(fileResult.errors?.[0]?.error || collected?.errors?.[0]?.error || "未成功导入已获取简历");
+        setTaskStatus({ ...task, status: "succeeded", message: `已获取简历导入完成：成功 ${imported} 份，失败 ${failed} 份` });
+      } else {
+        setTaskStatus({ ...task, status: "running", message: `已采集 ${collected?.chunk_count || 1} 段${sourceTabs}，正在导入系统...` });
+        const message = await importResume(task.baseUrl, task.token, collected, "已获得简历导入成功");
+        setTaskStatus({ ...task, status: "succeeded", message });
+      }
       return;
     }
 

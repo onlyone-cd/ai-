@@ -3,6 +3,7 @@
   window.__hireinsightBossNetworkProbeInstalled = true;
 
   const MAX_CAPTURE_TEXT = 350000;
+  const FILE_URL_MARKERS = ["resume", "attachment", "annex", "file", "download", "pdf", "doc", "简历", "附件"];
   const MARKERS = [
     "resume",
     "geek",
@@ -54,6 +55,18 @@
     }, "*");
   }
 
+  function emitFileUrl(url, contentType) {
+    if (!isBossUrl(url)) return;
+    const value = String(url || "").toLowerCase();
+    if (!FILE_URL_MARKERS.some((marker) => value.includes(marker))) return;
+    window.postMessage({
+      type: "hireinsight-boss-file",
+      url,
+      contentType: contentType || "",
+      capturedAt: Date.now()
+    }, "*");
+  }
+
   const nativeFetch = window.fetch;
   if (typeof nativeFetch === "function") {
     window.fetch = async function hireinsightFetch(input, init) {
@@ -64,6 +77,9 @@
         try {
           const clone = response.clone();
           const contentType = clone.headers?.get?.("content-type") || "";
+          if (/pdf|msword|officedocument|octet-stream/i.test(contentType) || /\.(pdf|docx?|txt)(\?|$)/i.test(String(url || ""))) {
+            emitFileUrl(url, contentType);
+          }
           if (/json|text|javascript|html/i.test(contentType) || !contentType) {
             clone.text().then((body) => emitCapture({ url, method, status: response.status, body })).catch(() => {});
           }
@@ -88,6 +104,9 @@
           const url = this.responseURL || this.__hireinsightBossUrl;
           if (!isBossUrl(url)) return;
           const contentType = this.getResponseHeader?.("content-type") || "";
+          if (/pdf|msword|officedocument|octet-stream/i.test(contentType) || /\.(pdf|docx?|txt)(\?|$)/i.test(String(url || ""))) {
+            emitFileUrl(url, contentType);
+          }
           if (!/json|text|javascript|html/i.test(contentType) && contentType) return;
           if (typeof this.responseText === "string") {
             emitCapture({ url, method: this.__hireinsightBossMethod, status: this.status, body: this.responseText });

@@ -158,12 +158,14 @@ const CITY_WORDS = [
 ];
 
 const CAPTURED_BOSS_API_PAYLOADS = [];
+const CAPTURED_BOSS_FILES = [];
 const CAPTURE_LIMIT = 60;
 const CAPTURE_MAX_AGE_MS = 120000;
 
 window.addEventListener("message", (event) => {
-  if (event.source !== window || event.data?.type !== "hireinsight-boss-api") return;
-  rememberBossApiPayload(event.data);
+  if (event.source !== window) return;
+  if (event.data?.type === "hireinsight-boss-api") rememberBossApiPayload(event.data);
+  if (event.data?.type === "hireinsight-boss-file") rememberBossFile(event.data);
 });
 
 async function collectResumeText() {
@@ -263,6 +265,9 @@ async function autoCollectCommunicationResumes(options = {}) {
 }
 
 async function collectObtainedResumeText() {
+  if (isObtainedResumeListPage()) {
+    return collectObtainedResumeList();
+  }
   const collected = [];
   const tabs = findResumeTabButtons();
   const originalActive = tabs.find((item) => isActiveTabButton(item.button));
@@ -302,6 +307,77 @@ async function collectObtainedResumeText() {
     page_url: location.href,
     title: document.title,
     source_tabs: collected.map((item) => item.label)
+  };
+}
+
+async function collectObtainedResumeList() {
+  const cards = findObtainedResumeCards().slice(0, 30);
+  const items = [];
+  const files = [];
+  const errors = [];
+  const seen = new Set();
+  const targets = cards.length ? cards : [null];
+
+  for (let index = 0; index < targets.length; index += 1) {
+    const card = targets[index];
+    const label = compactCandidateLabel(card?.innerText || card?.textContent || getCurrentObtainedResumeHeader() || `resume-${index + 1}`);
+    const key = label.slice(0, 80);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    try {
+      if (card) {
+        card.scrollIntoView({ block: "center", inline: "nearest" });
+        await sleep(180);
+        card.click();
+        await waitForDetailPaneChange(label);
+      }
+      await openOnlineResumeTab();
+      await clickAttachmentPreview();
+      await sleep(500);
+
+      const fileLinks = collectAttachmentFileLinks(label);
+      for (const file of fileLinks) {
+        if (!files.some((item) => item.url === file.url)) files.push(file);
+      }
+
+      let result = null;
+      try {
+        result = await collectResumeText();
+      } catch (_error) {
+        result = null;
+      }
+      const detailText = normalizeResumeText(`${getCurrentObtainedResumeHeader()}\n${result?.raw_text || ""}`);
+      if (detailText && hasResumeSignal(detailText)) {
+        items.push({
+          external_id: `boss-obtained-${Date.now()}-${index}`,
+          name: guessName(detailText),
+          title: guessTitle(detailText),
+          summary: detailText.slice(0, 260),
+          raw_text: detailText,
+          page_url: location.href,
+          source: "boss_obtained_resume"
+        });
+      } else if (!fileLinks.length) {
+        const fallback = buildCandidateListFallbackItem(card || document.body, index);
+        if (fallback) items.push({ ...fallback, source: "boss_obtained_list_fallback" });
+        else throw new Error("未识别到在线简历正文或附件下载地址");
+      }
+    } catch (error) {
+      errors.push({ index: index + 1, label, error: error.message });
+    }
+  }
+
+  const rawText = normalizeResumeText(items.map((item) => item.raw_text).join("\n\n"));
+  return {
+    raw_text: rawText,
+    items,
+    files,
+    errors,
+    chunk_count: items.length + files.length,
+    text_length: rawText.length,
+    page_url: location.href,
+    title: document.title,
+    source_tabs: ["已获取简历"]
   };
 }
 
@@ -349,6 +425,34 @@ function findResumeTabButtons() {
     }));
 }
 
+function isObtainedResumeListPage() {
+  const text = `${location.href}\n${document.title}\n${(document.body.innerText || "").slice(0, 5000)}`;
+  return countTextHits(text, ["\u5df2\u83b7\u53d6\u7b80\u5386", "\u9644\u4ef6\u7b80\u5386", "\u5728\u7ebf\u7b80\u5386"]) >= 2 && countTextHits(text, ["\u6c9f\u901a", "\u6c9f\u901a\u4e2d", "\u5df2\u4ea4\u6362\u7535\u8bdd", "\u5df2\u4ea4\u6362\u5fae\u4fe1"]) >= 1;
+}
+
+function findObtainedResumeCards() {
+  const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 1200;
+  const nodes = [...document.querySelectorAll("[class*='card'],[class*='item'],[class*='friend'],[class*='geek'],li,[role='listitem']")]
+    .filter(isVisibleElement)
+    .filter((node) => {
+      const rect = node.getBoundingClientRect();
+      if (rect.left > viewportWidth * 0.45 || rect.width < 120 || rect.height < 40) return false;
+      const text = normalizeResumeText(node.innerText || node.textContent || "");
+      if (text.length < 4 || text.length > 800) return false;
+      if (isBossNavigationLine(text)) return false;
+      return /\.pdf|\.docx?|简历|本科|大专|硕士|博士|开发|工程师|会计|运营|销售|产品|设计|测试/i.test(text);
+    });
+  const seen = new Set();
+  return nodes.filter((node) => {
+    const rect = node.getBoundingClientRect();
+    const text = compactCandidateLabel(node.innerText || node.textContent || "");
+    const key = `${text.slice(0, 60)}|${Math.round(rect.top)}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
 function isResumeOpenActionText(text) {
   const value = String(text || "").replace(/\s+/g, "");
   if (!value || value.length > 80) return false;
@@ -374,10 +478,95 @@ function scoreResumeOpenAction(node, text) {
   return score;
 }
 
+async function clickAttachmentPreview() {
+  const candidates = [...document.querySelectorAll("button,a,div,span")]
+    .filter(isVisibleElement)
+    .map((node) => ({ node, text: (node.innerText || node.textContent || "").replace(/\s+/g, " ").trim() }))
+    .filter((item) => {
+      const compact = item.text.replace(/\s+/g, "");
+      return compact.length <= 100 && (compact.includes("\u9644\u4ef6\u7b80\u5386") || compact.includes("\u9884\u89c8\u9644\u4ef6") || compact.includes("\u70b9\u51fb\u9884\u89c8") || /\.(pdf|docx?)/i.test(compact));
+    })
+    .sort((a, b) => scoreAttachmentAction(b.node, b.text) - scoreAttachmentAction(a.node, a.text));
+  if (!candidates[0]) return false;
+  (candidates[0].node.closest?.("button,a,[role='button'],[role='tab']") || candidates[0].node).click();
+  await sleep(1000);
+  return true;
+}
+
+function scoreAttachmentAction(node, text) {
+  const rect = node.getBoundingClientRect();
+  let score = 0;
+  if (text.includes("\u9644\u4ef6\u7b80\u5386")) score += 30;
+  if (text.includes("\u70b9\u51fb\u9884\u89c8") || text.includes("\u9884\u89c8")) score += 20;
+  if (/\.(pdf|docx?)/i.test(text)) score += 18;
+  if (rect.left > (window.innerWidth || 1200) * 0.35) score += 10;
+  return score;
+}
+
+function collectAttachmentFileLinks(label) {
+  const files = [];
+  const candidates = [...document.querySelectorAll("a[href],[data-url],[data-href],[data-download-url],[data-file-url]")]
+    .filter(isVisibleElement)
+    .map((node) => {
+      const url = node.getAttribute("href") || node.dataset?.url || node.dataset?.href || node.dataset?.downloadUrl || node.dataset?.fileUrl || "";
+      const text = node.getAttribute("download") || node.getAttribute("title") || node.innerText || node.textContent || "";
+      return buildAttachmentFileDescriptor(url, text || label);
+    })
+    .filter(Boolean);
+  for (const file of [...candidates, ...recentCapturedFiles(label)]) {
+    if (!files.some((item) => item.url === file.url)) files.push(file);
+  }
+  return files;
+}
+
+function buildAttachmentFileDescriptor(url, label) {
+  if (!url || /^javascript:/i.test(url) || url === "#") return null;
+  let absolute = "";
+  try {
+    absolute = new URL(url, location.href).href;
+  } catch (_error) {
+    return null;
+  }
+  if (!/^https:\/\/([^/]+\.)?zhipin\.com\//i.test(absolute)) return null;
+  const inferred = decodeURIComponent((absolute.split("?")[0].split("/").pop() || "").slice(0, 120));
+  const cleanLabel = String(label || inferred || "boss-resume").replace(/[\\/:*?"<>|]+/g, " ").replace(/\s+/g, " ").trim();
+  let filename = /\.(pdf|docx?|txt)$/i.test(cleanLabel) ? cleanLabel : inferred;
+  if (!/\.(pdf|docx?|txt)$/i.test(filename)) filename = `${cleanLabel || "boss-resume"}.pdf`;
+  return { url: absolute, filename: filename.slice(0, 120), label: cleanLabel };
+}
+
+function rememberBossFile(payload) {
+  const file = buildAttachmentFileDescriptor(payload.url, payload.url);
+  if (!file) return;
+  CAPTURED_BOSS_FILES.unshift({ ...file, capturedAt: Number(payload.capturedAt) || Date.now(), contentType: payload.contentType || "" });
+  const seen = new Set();
+  for (let index = CAPTURED_BOSS_FILES.length - 1; index >= 0; index -= 1) {
+    if (seen.has(CAPTURED_BOSS_FILES[index].url)) CAPTURED_BOSS_FILES.splice(index, 1);
+    else seen.add(CAPTURED_BOSS_FILES[index].url);
+  }
+  CAPTURED_BOSS_FILES.splice(CAPTURE_LIMIT);
+}
+
+function recentCapturedFiles(label) {
+  const now = Date.now();
+  return CAPTURED_BOSS_FILES
+    .filter((item) => now - item.capturedAt <= CAPTURE_MAX_AGE_MS)
+    .map((item) => ({ url: item.url, filename: item.filename, label: label || item.label }));
+}
+
+function getCurrentObtainedResumeHeader() {
+  const root = findResumeRoot();
+  const text = normalizeResumeText(root?.innerText || document.body.innerText || "");
+  return splitCleanLines(text)
+    .filter((line) => !isBossNavigationLine(line) && !isActionOnlyLine(line))
+    .slice(0, 12)
+    .join("\n");
+}
+
 function buildCandidateListFallbackItem(card, index) {
   const text = normalizeResumeText(card.innerText || card.textContent || "");
   if (!text || text.length < 10) return null;
-  const rawText = normalizeResumeText(`简历来源：BOSS 沟通列表\n候选人：${guessName(text)}\n求职信息：${text}\n备注：插件未能自动打开在线简历，已先导入列表可见信息，建议后续重新补全完整简历。`);
+  const rawText = normalizeResumeText(`简历来源：BOSS 沟通列表\n候选人：${guessName(text)}\n求职期望/工作经历：${text}\n备注：插件未能自动打开在线简历，已先导入列表可见信息，建议后续重新补全完整简历。`);
   if (!hasResumeSignal(rawText)) return null;
   return {
     external_id: `boss-list-${Date.now()}-${index}`,
@@ -840,6 +1029,7 @@ function inspectBossPage() {
   const hasJobCards = collectJobBlocks().length > 0;
   const resumeTabs = findResumeTabButtons();
   const hasResumeTabs = resumeTabs.length > 0;
+  const hasObtainedResumeList = isObtainedResumeListPage();
   const hasOnlineResumeModal = countTextHits(`${pageSignal}\n${resumeRootText}`, ["\u671f\u671b\u804c\u4f4d", "\u5de5\u4f5c\u7ecf\u5386"]) >= 2 || hasResumeTabs;
   const hasProfileHeader = /(\d+\s*\u5c81|\u5c81).*(\u5927\u4e13|\u672c\u79d1|\u7855\u58eb|\u535a\u58eb|\u5e74\u4ee5\u4e0a|\u79bb\u804c|\u6d3b\u8dc3)/s.test(`${pageSignal}\n${resumeRootText}`);
   const isBossPage = /(^|\.)zhipin\.com$/i.test(location.hostname);
@@ -862,8 +1052,8 @@ function inspectBossPage() {
     message = "\u53ef\u540c\u6b65\u5c97\u4f4d\u5217\u8868\uff1b\u5f53\u524d\u4e0d\u662f\u7b80\u5386\u8be6\u60c5\u9875";
   } else if (isCandidateListPage) {
     pageType = "candidate_list";
-    label = "\u6c9f\u901a/\u5019\u9009\u4eba\u5217\u8868";
-    message = "\u53ef\u4f7f\u7528\u81ea\u52a8\u6253\u5f00\u6c9f\u901a\u5217\u8868\u5bfc\u5165\u6216\u6279\u91cf\u5019\u9009\u4eba\uff1b\u5355\u4efd\u7b80\u5386\u8bf7\u6253\u5f00\u7b80\u5386\u8be6\u60c5";
+    label = hasObtainedResumeList ? "\u5df2\u83b7\u53d6\u7b80\u5386\u5217\u8868" : "\u6c9f\u901a/\u5019\u9009\u4eba\u5217\u8868";
+    message = hasObtainedResumeList ? "\u53ef\u4e00\u952e\u5bfc\u5165\u5df2\u83b7\u53d6\u7684\u5728\u7ebf/\u9644\u4ef6\u7b80\u5386" : "\u53ef\u4f7f\u7528\u81ea\u52a8\u6253\u5f00\u6c9f\u901a\u5217\u8868\u5bfc\u5165\u6216\u6279\u91cf\u5019\u9009\u4eba\uff1b\u5355\u4efd\u7b80\u5386\u8bf7\u6253\u5f00\u7b80\u5386\u8be6\u60c5";
   }
   return {
     is_boss_page: isBossPage,
@@ -871,13 +1061,14 @@ function inspectBossPage() {
     label,
     message,
     can_import_resume: isResumePage,
-    can_import_obtained_resume: isResumePage,
+    can_import_obtained_resume: isResumePage || hasObtainedResumeList,
     can_sync_jobs: isJobListPage,
     can_batch_import_candidates: isCandidateListPage,
     resume_signals: resumeSignals,
     resume_root_signals: resumeRootSignals,
     job_signals: jobSignals,
     candidate_list_signals: candidateListSignals,
+    obtained_resume_list: hasObtainedResumeList,
     resume_tabs: resumeTabs.map((item) => ({ label: item.label, available: item.available })),
     url: location.href,
     title: document.title

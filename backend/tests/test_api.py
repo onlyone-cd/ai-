@@ -2742,7 +2742,7 @@ def test_boss_extension_can_be_downloaded(client, admin_headers):
         assert "network_probe.js" in archive.namelist()
         manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
         assert "http://120.24.172.139/*" in manifest["host_permissions"]
-        assert manifest["version"] == "0.3.10"
+        assert manifest["version"] == "0.3.11"
         assert manifest["background"]["service_worker"] == "background.js"
         content = archive.read("content.js").decode("utf-8")
         assert "findResumeColumnBounds" in content
@@ -2755,6 +2755,8 @@ def test_boss_extension_can_be_downloaded(client, admin_headers):
         assert "collectCapturedJobBlocks" in content
         assert "boss_list_fallback" in content
         assert "buildCandidateListFallbackItem" in content
+        assert "collectObtainedResumeList" in content
+        assert "isObtainedResumeListPage" in content
         assert "can_import_obtained_resume" in content
         assert "\\u4e0d\\u80fd\\u91c7\\u96c6\\u5019\\u9009\\u4eba\\u7684\\u671f\\u671b\\u804c\\u4f4d" in content
         probe = archive.read("network_probe.js").decode("utf-8")
@@ -2769,6 +2771,7 @@ def test_boss_extension_can_be_downloaded(client, admin_headers):
         background = archive.read("background.js").decode("utf-8")
         assert "start-background-import" in background
         assert "bossImportTaskStatus" in background
+        assert "uploadResumeFiles" in background
         assert "get-captured-boss-cookie" in background
         assert "webRequest.onBeforeSendHeaders" in background
 

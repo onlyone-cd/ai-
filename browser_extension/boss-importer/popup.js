@@ -100,6 +100,77 @@ function sendRuntimeMessage(message) {
   });
 }
 
+function mergeCookieHeader(map, header) {
+  String(header || "").split(";").forEach((part) => {
+    const index = part.indexOf("=");
+    if (index <= 0) return;
+    const key = part.slice(0, index).trim();
+    const value = part.slice(index + 1).trim();
+    if (key && value && !map.has(key)) map.set(key, value);
+  });
+}
+
+function formatCookieHeader(map) {
+  const preferred = ["wt2", "wbg", "zp_at", "__zp_stoken__"];
+  const keys = [...preferred.filter((key) => map.has(key)), ...[...map.keys()].filter((key) => !preferred.includes(key)).sort()];
+  return keys.map((key) => `${key}=${map.get(key)}`).join("; ");
+}
+
+async function collectBossLoginCookie(tab) {
+  const cookieMap = new Map();
+  const sources = [];
+
+  const captured = await sendRuntimeMessage({ type: "get-captured-boss-cookie" }).catch(() => null);
+  if (captured?.cookie_header) {
+    mergeCookieHeader(cookieMap, captured.cookie_header);
+    sources.push("请求头");
+  }
+
+  const cookieQueries = [
+    { url: tab.url },
+    { url: "https://www.zhipin.com/" },
+    { url: "https://zhipin.com/" },
+    { domain: "zhipin.com" }
+  ];
+  for (const query of cookieQueries) {
+    try {
+      const cookies = await chrome.cookies.getAll(query);
+      for (const item of cookies) {
+        if (item.name && item.value && !cookieMap.has(item.name)) cookieMap.set(item.name, item.value);
+      }
+      if (cookies.length) sources.push(query.domain ? "Cookie 域" : "Cookie API");
+    } catch (_error) {
+      // Ignore a failed fallback source and keep the stronger sources.
+    }
+  }
+
+  if (!cookieMap.has("__zp_stoken__")) {
+    try {
+      const response = await chrome.tabs.sendMessage(tab.id, { type: "get-boss-stoken" });
+      if (response?.stoken) {
+        cookieMap.set("__zp_stoken__", response.stoken);
+        sources.push("页面 token");
+      }
+    } catch (_error) {
+      // The token is optional for current backend login binding.
+    }
+  }
+
+  const required = ["wt2", "wbg", "zp_at"];
+  const missing = required.filter((key) => !cookieMap.has(key));
+  const cookieText = formatCookieHeader(cookieMap);
+  if (cookieText.length < 20 || missing.length === required.length) {
+    throw new Error("未读取到有效 BOSS 登录态，请确认已登录招聘端，并刷新 BOSS 页面或点开沟通/推荐后重试");
+  }
+  return {
+    cookieText,
+    count: cookieMap.size,
+    missing,
+    hasStoken: cookieMap.has("__zp_stoken__"),
+    sources: [...new Set(sources)]
+  };
+}
+
 async function startBackgroundImport(operation, options = {}) {
   const { baseUrl, token } = saveConfig();
   const tab = await getActiveBossTab();
@@ -137,9 +208,7 @@ $("bindCookieBtn").addEventListener("click", async () => {
 
   try {
     const tab = await getActiveBossTab();
-    const cookies = await chrome.cookies.getAll({ url: tab.url });
-    const cookieText = cookies.map((item) => `${item.name}=${item.value}`).join("; ");
-    if (cookieText.length < 20) throw new Error("未读取到有效 Cookie，请确认已登录 BOSS");
+    const collected = await collectBossLoginCookie(tab);
 
     const response = await fetch(`${baseUrl}/api/boss/login/browser-cookie`, {
       method: "POST",
@@ -147,12 +216,19 @@ $("bindCookieBtn").addEventListener("click", async () => {
         "Content-Type": "application/json",
         "Authorization": `Bearer ${token}`
       },
-      body: JSON.stringify({ account: new URL(tab.url).hostname, cookie: cookieText })
+      body: JSON.stringify({
+        account: new URL(tab.url).hostname,
+        label: `浏览器导入 ${new Date().toLocaleString()}`,
+        cookie: collected.cookieText,
+        cookies: collected.cookieText
+      })
     });
     const body = await response.json();
     if (!response.ok) throw new Error(body.error || "绑定失败");
 
-    $("status").textContent = `登录态已绑定：${body.data.account.account}\n系统只保存 Cookie 指纹，不保存明文 Cookie。`;
+    const warning = collected.missing.length ? `\n提醒：缺少 ${collected.missing.join("、")}，如后续 BOSS 接口不可用请刷新 BOSS 后重新绑定。` : "";
+    const stokenWarning = collected.hasStoken ? "" : "\n提醒：未检测到 __zp_stoken__，已按会话 Cookie 绑定。";
+    $("status").textContent = `登录态已绑定：${body.data.account.account}\n采集来源：${collected.sources.join("、") || "Cookie"}，Cookie ${collected.count} 个。${warning}${stokenWarning}\n系统只保存 Cookie 指纹，不保存明文 Cookie。`;
   } catch (error) {
     $("status").textContent = `失败：${error.message}`;
   }

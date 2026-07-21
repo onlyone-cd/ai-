@@ -2741,7 +2741,7 @@ def test_boss_extension_can_be_downloaded(client, admin_headers):
         assert "background.js" in archive.namelist()
         manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
         assert "http://120.24.172.139/*" in manifest["host_permissions"]
-        assert manifest["version"] == "0.3.7"
+        assert manifest["version"] == "0.3.8"
         assert manifest["background"]["service_worker"] == "background.js"
         content = archive.read("content.js").decode("utf-8")
         assert "findResumeColumnBounds" in content
@@ -2761,6 +2761,8 @@ def test_boss_extension_can_be_downloaded(client, admin_headers):
         background = archive.read("background.js").decode("utf-8")
         assert "start-background-import" in background
         assert "bossImportTaskStatus" in background
+        assert "get-captured-boss-cookie" in background
+        assert "webRequest.onBeforeSendHeaders" in background
 
 
 def test_boss_screen_resume_import_creates_candidate_and_draft(client, admin_headers):

@@ -837,6 +837,142 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function extractBossStoken() {
+  return getStokenFromDocumentCookie() || getStokenFromStorage(localStorage) || getStokenFromStorage(sessionStorage) || getStokenFromWindowState() || getStokenFromDom() || await getStokenFromPageContext();
+}
+
+function getStokenFromDocumentCookie() {
+  try {
+    const match = document.cookie.match(/(?:^|;\s*)__zp_stoken__=([^;]+)/);
+    return match?.[1] || "";
+  } catch (_error) {
+    return "";
+  }
+}
+
+function getStokenFromStorage(storage) {
+  try {
+    for (let index = 0; index < storage.length; index += 1) {
+      const key = storage.key(index) || "";
+      if (!/stoken|zp_stoken|token/i.test(key)) continue;
+      const value = storage.getItem(key) || "";
+      if (value.length > 10 && value.length < 800) return value;
+    }
+  } catch (_error) {
+    return "";
+  }
+  return "";
+}
+
+function getStokenFromWindowState() {
+  const candidates = ["__INITIAL_STATE__", "__NEXT_DATA__", "__NUXT__", "__APP_DATA__", "__zhipin_state__", "__BOSS__", "__store__"];
+  try {
+    for (const key of candidates) {
+      const value = deepFindStoken(window[key], 0);
+      if (value) return value;
+    }
+    for (const key of Object.keys(window)) {
+      if (!key.startsWith("__") || !key.endsWith("__")) continue;
+      const value = deepFindStoken(window[key], 0);
+      if (value) return value;
+    }
+  } catch (_error) {
+    return "";
+  }
+  return "";
+}
+
+function deepFindStoken(value, depth) {
+  if (!value || depth > 4) return "";
+  if (typeof value === "string") return "";
+  if (typeof value !== "object") return "";
+  try {
+    if (typeof value.__zp_stoken__ === "string") return value.__zp_stoken__;
+    for (const key of Object.keys(value)) {
+      if (/stoken|zp_stoken/i.test(key) && typeof value[key] === "string" && value[key].length > 10) return value[key];
+      const nested = deepFindStoken(value[key], depth + 1);
+      if (nested) return nested;
+    }
+  } catch (_error) {
+    return "";
+  }
+  return "";
+}
+
+function getStokenFromDom() {
+  try {
+    const nodes = document.querySelectorAll("meta[name*='token'],meta[name*='stoken'],input[type='hidden'][name*='token'],input[type='hidden'][name*='stoken'],[data-stoken],[data-token],[data-zp-stoken]");
+    for (const node of nodes) {
+      const value = node.getAttribute("content") || node.value || node.dataset?.stoken || node.dataset?.token || node.dataset?.zpStoken || "";
+      if (value.length > 10) return value;
+    }
+  } catch (_error) {
+    return "";
+  }
+  return "";
+}
+
+function getStokenFromPageContext() {
+  return new Promise((resolve) => {
+    const requestId = `hireinsight-stoken-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    let settled = false;
+    const cleanup = () => {
+      window.removeEventListener("message", onMessage);
+      settled = true;
+    };
+    const finish = (value) => {
+      if (settled) return;
+      cleanup();
+      resolve(value || "");
+    };
+    const onMessage = (event) => {
+      if (event.source !== window || event.data?.type !== "hireinsight-boss-stoken" || event.data?.requestId !== requestId) return;
+      finish(event.data.stoken || "");
+    };
+    window.addEventListener("message", onMessage);
+    const script = document.createElement("script");
+    script.textContent = `(() => {
+      const requestId = ${JSON.stringify(requestId)};
+      const deepFind = (value, depth = 0) => {
+        if (!value || depth > 4 || typeof value !== "object") return "";
+        try {
+          if (typeof value.__zp_stoken__ === "string") return value.__zp_stoken__;
+          for (const key of Object.keys(value)) {
+            if (/stoken|zp_stoken/i.test(key) && typeof value[key] === "string" && value[key].length > 10) return value[key];
+            const nested = deepFind(value[key], depth + 1);
+            if (nested) return nested;
+          }
+        } catch (_error) {}
+        return "";
+      };
+      const readStorage = (storage) => {
+        try {
+          for (let index = 0; index < storage.length; index += 1) {
+            const key = storage.key(index) || "";
+            if (!/stoken|zp_stoken|token/i.test(key)) continue;
+            const value = storage.getItem(key) || "";
+            if (value.length > 10 && value.length < 800) return value;
+          }
+        } catch (_error) {}
+        return "";
+      };
+      const fromCookie = ((document.cookie || "").match(/(?:^|;\\s*)__zp_stoken__=([^;]+)/) || [])[1] || "";
+      const globals = ["__INITIAL_STATE__", "__NEXT_DATA__", "__NUXT__", "__APP_DATA__", "__zhipin_state__", "__BOSS__", "__store__"];
+      let fromGlobal = "";
+      try {
+        for (const key of globals) {
+          fromGlobal = deepFind(window[key]);
+          if (fromGlobal) break;
+        }
+      } catch (_error) {}
+      window.postMessage({ type: "hireinsight-boss-stoken", requestId, stoken: fromCookie || readStorage(localStorage) || readStorage(sessionStorage) || fromGlobal || "" }, "*");
+    })();`;
+    (document.documentElement || document.head || document.body).appendChild(script);
+    script.remove();
+    window.setTimeout(() => finish(""), 1200);
+  });
+}
+
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type === "collect-resume") {
     collectResumeText().then(sendResponse).catch((error) => sendResponse({ error: error.message }));
@@ -860,6 +996,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
   if (message?.type === "inspect-page") {
     Promise.resolve(inspectBossPage()).then(sendResponse).catch((error) => sendResponse({ error: error.message }));
+    return true;
+  }
+  if (message?.type === "get-boss-stoken") {
+    extractBossStoken().then((stoken) => sendResponse({ stoken: stoken || "" })).catch(() => sendResponse({ stoken: "" }));
     return true;
   }
   return false;

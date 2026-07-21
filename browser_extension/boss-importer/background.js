@@ -1,4 +1,49 @@
 const TASK_STATUS_KEY = "bossImportTaskStatus";
+const REQUIRED_BOSS_COOKIES = ["wt2", "wbg", "zp_at"];
+const ZHIPIN_FILTER = { urls: ["https://zhipin.com/*", "https://*.zhipin.com/*"] };
+let lastBossCookieHeader = "";
+let lastBossCookieCapturedAt = 0;
+
+function parseCookieHeader(header) {
+  const cookies = {};
+  String(header || "").split(";").forEach((part) => {
+    const index = part.indexOf("=");
+    if (index <= 0) return;
+    const key = part.slice(0, index).trim();
+    const value = part.slice(index + 1).trim();
+    if (key && value) cookies[key] = value;
+  });
+  return cookies;
+}
+
+function buildCookieStatus(header) {
+  const cookies = parseCookieHeader(header);
+  const names = Object.keys(cookies);
+  return {
+    cookie_header: header || "",
+    captured_at: lastBossCookieCapturedAt,
+    count: names.length,
+    missing_required: REQUIRED_BOSS_COOKIES.filter((name) => !cookies[name]),
+    has_stoken: Boolean(cookies.__zp_stoken__),
+    names
+  };
+}
+
+try {
+  chrome.webRequest.onBeforeSendHeaders.addListener(
+    (details) => {
+      const cookie = (details.requestHeaders || []).find((header) => header.name.toLowerCase() === "cookie")?.value || "";
+      if (cookie && (cookie.includes("zp_at=") || cookie.includes("wt2=") || cookie.includes("wbg="))) {
+        lastBossCookieHeader = cookie;
+        lastBossCookieCapturedAt = Date.now();
+      }
+    },
+    ZHIPIN_FILTER,
+    ["requestHeaders", "extraHeaders"]
+  );
+} catch (error) {
+  console.warn("BOSS Cookie request listener unavailable", error);
+}
 
 function setTaskStatus(patch) {
   const status = {
@@ -90,6 +135,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
   if (message?.type === "get-background-task-status") {
     chrome.storage.local.get([TASK_STATUS_KEY], (saved) => sendResponse(saved[TASK_STATUS_KEY] || null));
+    return true;
+  }
+  if (message?.type === "get-captured-boss-cookie") {
+    sendResponse(buildCookieStatus(lastBossCookieHeader));
     return true;
   }
   return false;

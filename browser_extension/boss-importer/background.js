@@ -149,7 +149,12 @@ async function runBackgroundImport(task) {
         });
         const imported = body.data?.items?.length || 0;
         const failed = body.data?.errors?.length || 0;
-        setTaskStatus({ ...task, status: "succeeded", message: `BOSS 已获取简历导入完成：成功 ${imported} 份，失败 ${failed} 份` });
+        const firstError = body.data?.errors?.[0];
+        const errorText = typeof firstError === "string"
+          ? firstError
+          : (firstError?.error?.message || firstError?.error || firstError?.message || "");
+        const suffix = errorText ? `\n失败原因：${String(errorText).slice(0, 180)}` : "";
+        setTaskStatus({ ...task, status: imported ? "succeeded" : "failed", message: `BOSS 已获取简历导入完成：成功 ${imported} 份，失败 ${failed} 份${suffix}` });
         return;
       }
 

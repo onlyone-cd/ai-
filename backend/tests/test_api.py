@@ -2742,7 +2742,7 @@ def test_boss_extension_can_be_downloaded(client, admin_headers):
         assert "network_probe.js" in archive.namelist()
         manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
         assert "http://120.24.172.139/*" in manifest["host_permissions"]
-        assert manifest["version"] == "0.3.12"
+        assert manifest["version"] == "0.3.13"
         assert manifest["background"]["service_worker"] == "background.js"
         content = archive.read("content.js").decode("utf-8")
         assert "findResumeColumnBounds" in content
@@ -2813,6 +2813,35 @@ def test_boss_obtained_resumes_import_uses_backend_cli(client, admin_headers, mo
     assert data["items"][0]["source"] == "boss"
     assert data["items"][0]["name_masked"] == "已获简历候选人"
     assert {"Java", "MySQL", "Redis"} <= {tag["tag"] for tag in data["items"][0]["tags"]}
+
+
+def test_boss_cli_inbox_normalizes_encrypt_uid():
+    from app.boss_cli_service import normalize_inbox_items
+
+    items = normalize_inbox_items(
+        {
+            "friendList": [
+                {
+                    "name": "候选人A",
+                    "encryptUid": "uid-a",
+                    "encryptFriendId": "friend-a",
+                    "friendId": 123,
+                    "securityId": "sec-a",
+                    "encryptJobId": "job-a",
+                }
+            ]
+        }
+    )
+
+    assert items == [
+        {
+            "geek_id": "uid-a",
+            "security_id": "sec-a",
+            "job": "job-a",
+            "friend_id": "123",
+            "name": "候选人A",
+        }
+    ]
 
 
 def test_boss_obtained_resumes_import_requires_cookie(client, admin_headers):

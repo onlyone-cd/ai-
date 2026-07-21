@@ -164,11 +164,22 @@ def iter_records(value: Any) -> list[dict[str, Any]]:
     return records
 
 
-GEEK_KEYS = ("geek_id", "geekId", "encrypt_geek_id", "encryptGeekId", "encryptedGeekId", "encryptGeekIdStr")
+GEEK_KEYS = (
+    "geek_id",
+    "geekId",
+    "encrypt_geek_id",
+    "encryptGeekId",
+    "encryptedGeekId",
+    "encryptGeekIdStr",
+    "encryptUid",
+    "encrypt_uid",
+    "encryptFriendId",
+    "encrypt_friend_id",
+)
 SECURITY_KEYS = ("security_id", "securityId", "securityID", "lid", "encryptSecurityId")
-JOB_KEYS = ("job", "job_id", "jobId", "encrypt_job_id", "encryptJobId")
+JOB_KEYS = ("job", "job_id", "jobId", "encrypt_job_id", "encryptJobId", "encrypt_jobId", "encryptJobIdStr")
 FRIEND_KEYS = ("friend_id", "friendId", "encryptFriendId")
-NAME_KEYS = ("name", "geekName", "userName", "candidateName")
+NAME_KEYS = ("name", "geekName", "userName", "candidateName", "geek_name")
 
 
 def find_first(value: Any, keys: tuple[str, ...]) -> str:

@@ -4796,6 +4796,25 @@ def compact_agent_tool_payload(payload):
     return compact
 
 
+def answer_module_resume_confusion(text, suggestions):
+    value = str(text or "")
+    module_terms = ["职位管理", "岗位管理", "人才库", "流程看板", "后台任务", "面试管理", "Offer", "BOSS"]
+    asks_resume = any(word in value for word in ["简历", "候选人", "档案"])
+    matched_module = next((word for word in module_terms if word in value), "")
+    if not matched_module or not asks_resume:
+        return None
+    return {
+        "answer": (
+            f"“{matched_module}”是系统功能模块，不是候选人姓名，所以我不会把它当作简历来回答。\n"
+            "如果你要查看某个人的简历，请输入候选人姓名、手机号或邮箱；如果你要查看岗位里的候选人，请告诉我具体岗位名称。"
+        ),
+        "tool": "chat",
+        "result": {"type": "module_name_guard", "module": matched_module},
+        "suggestions": ["查看人才库候选人列表", "按候选人姓名查简历", "查看开放岗位", "按岗位推荐候选人"],
+        "readonly": True,
+    }
+
+
 def run_agent_tool(user, message, pending_action=None, history=None):
     text = (message or "").strip()
     lowered = text.lower()
@@ -4827,6 +4846,10 @@ def run_agent_tool(user, message, pending_action=None, history=None):
     background_task = answer_agent_background_task_request(user, text, suggestions, history=history)
     if background_task:
         return background_task
+
+    module_hint = answer_module_resume_confusion(text, suggestions)
+    if module_hint:
+        return module_hint
 
     clarification = agent_clarification_request(user, text, suggestions)
     if clarification:

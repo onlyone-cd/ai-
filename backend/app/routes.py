@@ -3525,6 +3525,26 @@ def emit_boss_sync_notification(user, sync_job):
     )
 
 
+def looks_like_boss_job_text(title, text):
+    value = re.sub(r"\s+", " ", f"{title or ''} {text or ''}").strip()
+    if len(value) < 12:
+        return False, "岗位内容过短"
+    resume_markers = ["工作经历", "项目经历", "教育经历", "期望职位", "求职期望", "个人优势", "资格证书", "随时到岗", "离职", "在职"]
+    job_markers = ["招聘", "岗位", "职位", "岗位职责", "职位描述", "任职要求", "薪资", "月薪", "年薪", "学历", "经验", "招聘人数"]
+    resume_hits = sum(1 for word in resume_markers if word in value)
+    job_hits = sum(1 for word in job_markers if word in value)
+    has_salary_or_city = bool(re.search(r"(\d+\s*[kK]|元/月|北京|上海|广州|深圳|杭州|南京|苏州|成都|武汉|长沙)", value))
+    has_job_title = bool(re.search(r"(工程师|开发|前端|后端|Java|Python|测试|产品|运营|会计|财务|销售|客服|人事|行政|经理|主管|总监|架构师|分析师|专员)", value, re.I))
+    has_candidate_contact = bool(re.search(r"1[3-9]\d{9}|[\w.+-]+@[\w.-]+", value))
+    if resume_hits >= 2 and ("期望职位" in value or "求职期望" in value or has_candidate_contact):
+        return False, "疑似候选人简历/期望职位内容，不能作为 BOSS 岗位导入"
+    if not has_job_title:
+        return False, "未识别到岗位名称"
+    if job_hits < 1 and not has_salary_or_city:
+        return False, "未识别到岗位列表字段"
+    return True, ""
+
+
 def import_boss_job_items(user, items, source="api", parent_sync_job_id=None):
     items = list(items or [])
     sync_job = create_boss_sync_job(user, "job_batch", source, {"items": items}, len(items), parent_sync_job_id)
@@ -3540,6 +3560,12 @@ def import_boss_job_items(user, items, source="api", parent_sync_job_id=None):
             continue
         try:
             text = str(item.get("jd_text") or item.get("summary") or title).strip()
+            is_valid_job, invalid_reason = looks_like_boss_job_text(title, text)
+            if not is_valid_job:
+                err = {"title": title, "error": invalid_reason}
+                errors.append(err)
+                add_boss_sync_item(sync_job, "job", item, "failed", error_message=err["error"], external_id=external_id)
+                continue
             city = str(item.get("city") or "").strip()[:64]
             external_id = external_id or hashlib.sha1(f"{title}|{city}|{text}".encode("utf-8")).hexdigest()[:12]
             job_code = f"BOSS-{re.sub(r'[^A-Za-z0-9_-]+', '-', external_id)[:48]}"

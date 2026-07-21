@@ -2740,8 +2740,11 @@ def test_boss_extension_can_be_downloaded(client, admin_headers):
         assert "popup.js" in archive.namelist()
         manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
         assert "http://120.24.172.139/*" in manifest["host_permissions"]
+        assert manifest["version"] == "0.3.2"
         content = archive.read("content.js").decode("utf-8")
-        assert "findResumeRoot" in content
+        assert "findResumeColumnBounds" in content
+        assert "assertBossJobListPage" in content
+        assert "不能采集候选人的期望职位" in content
 
 
 def test_boss_screen_resume_import_creates_candidate_and_draft(client, admin_headers):
@@ -2862,6 +2865,28 @@ def test_boss_jobs_can_be_synced_and_recommend_boss_candidates(client, admin_hea
     items = recommendations.get_json()["data"]["items"]
     assert items[0]["candidate_id"] == imported_candidate["id"]
     assert all(item["candidate"]["source"] == "boss" for item in items)
+
+
+def test_boss_job_import_rejects_resume_expected_position(client, admin_headers):
+    response = client.post(
+        "/api/boss/jobs/batch-import",
+        headers=admin_headers,
+        json={
+            "items": [
+                {
+                    "external_id": "resume-expected-job",
+                    "title": "会计",
+                    "jd_text": "期望职位：会计\n工作经历：负责财务报表和纳税申报\n教育经历：本科\n电话 13600002222",
+                }
+            ]
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.get_json()["data"]
+    assert data["items"] == []
+    assert data["errors"][0]["error"] == "疑似候选人简历/期望职位内容，不能作为 BOSS 岗位导入"
+    assert not Job.query.filter_by(job_code="BOSS-resume-expected-job").first()
 
 
 def test_boss_sync_jobs_are_logged_and_failed_items_can_retry(client, admin_headers):

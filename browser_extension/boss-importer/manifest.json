@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "HireInsight BOSS 简历导入",
-  "version": "0.3.5",
+  "version": "0.3.6",
   "description": "从当前 BOSS 页面采集可见岗位和候选人文本，同步到 HireInsight。",
   "permissions": ["activeTab", "cookies", "scripting", "storage"],
   "host_permissions": [

@@ -179,7 +179,11 @@ async function collectResumeText() {
     window.scrollTo(0, originalWindowTop);
   }
 
-  const rawText = normalizeResumeText([...chunks].join("\n"));
+  let rawText = normalizeResumeText([...chunks].join("\n"));
+  const rootText = normalizeResumeText(resumeRoot?.innerText || "");
+  if (rootText.length > rawText.length && hasResumeSignal(rootText)) {
+    rawText = rootText;
+  }
   if (!hasResumeSignal(rawText)) {
     throw new Error("\u672a\u8bc6\u522b\u5230\u7b80\u5386\u6b63\u6587\uff0c\u8bf7\u6253\u5f00 BOSS \u5019\u9009\u4eba\u7b80\u5386\u8be6\u60c5\u9875\uff0c\u5e76\u786e\u4fdd\u4e2d\u95f4\u7b80\u5386\u533a\u57df\u53ef\u89c1");
   }
@@ -190,6 +194,51 @@ async function collectResumeText() {
     page_url: location.href,
     title: document.title
   };
+}
+
+async function autoCollectCommunicationResumes(options = {}) {
+  const limit = Math.min(Math.max(Number(options.limit) || 20, 1), 50);
+  const cards = findCommunicationCandidateCards().slice(0, limit);
+  const items = [];
+  const errors = [];
+  const seen = new Set();
+
+  if (!cards.length) {
+    throw new Error("\u672a\u627e\u5230\u6c9f\u901a\u5217\u8868\u5019\u9009\u4eba\uff0c\u8bf7\u5148\u6253\u5f00 BOSS \u6c9f\u901a\u5217\u8868");
+  }
+
+  for (let index = 0; index < cards.length; index += 1) {
+    const card = cards[index];
+    const label = compactCandidateLabel(card.innerText || card.textContent || `candidate-${index + 1}`);
+    const key = label.slice(0, 60);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    try {
+      card.scrollIntoView({ block: "center", inline: "nearest" });
+      await sleep(260);
+      card.click();
+      await sleep(850);
+      await openOnlineResumeTab();
+      const result = await collectObtainedResumeText();
+      if (!result.raw_text || result.raw_text.length < 30) throw new Error("\u672a\u91c7\u96c6\u5230\u8db3\u591f\u7684\u7b80\u5386\u6b63\u6587");
+      items.push({
+        external_id: `boss-auto-${Date.now()}-${index}`,
+        name: guessName(result.raw_text),
+        title: guessTitle(result.raw_text),
+        summary: result.raw_text.slice(0, 260),
+        raw_text: result.raw_text,
+        page_url: location.href
+      });
+      closeResumeOverlay();
+      await sleep(220);
+    } catch (error) {
+      errors.push({ index: index + 1, label, error: error.message });
+      closeResumeOverlay();
+      await sleep(180);
+    }
+  }
+
+  return { items, errors, count: items.length, attempted_count: cards.length, page_url: location.href, title: document.title };
 }
 
 async function collectObtainedResumeText() {
@@ -235,6 +284,26 @@ async function collectObtainedResumeText() {
   };
 }
 
+async function openOnlineResumeTab() {
+  const tabs = findResumeTabButtons();
+  const online = tabs.find((item) => item.available && item.label.includes("\u5728\u7ebf\u7b80\u5386")) || tabs.find((item) => item.available);
+  if (online?.button) {
+    online.button.click();
+    await sleep(650);
+    return true;
+  }
+  const buttons = [...document.querySelectorAll("button,a,div,span")]
+    .filter(isVisibleElement)
+    .map((node) => ({ node, text: (node.innerText || node.textContent || "").replace(/\s+/g, " ").trim() }))
+    .filter((item) => item.text.includes("\u5728\u7ebf\u7b80\u5386") || item.text.includes("\u67e5\u770b\u7b80\u5386"));
+  if (buttons[0]?.node) {
+    (buttons[0].node.closest?.("button,a,[role='button']") || buttons[0].node).click();
+    await sleep(850);
+    return true;
+  }
+  return false;
+}
+
 function findResumeTabButtons() {
   const keywords = ["\u5728\u7ebf\u7b80\u5386", "\u9644\u4ef6\u7b80\u5386", "\u5df2\u83b7\u5f97\u7b80\u5386"];
   const nodes = [...document.querySelectorAll("button,a,div,span")]
@@ -256,6 +325,49 @@ function findResumeTabButtons() {
       ...item,
       available: !item.button.matches?.("[disabled],.disabled,[aria-disabled='true']") && !/\u672a\u83b7\u5f97|\u672a\u5f00\u901a|\u65e0/.test(item.label)
     }));
+}
+
+function findCommunicationCandidateCards() {
+  const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 1200;
+  const nodes = [...document.querySelectorAll("[class*='geek'],[class*='friend'],[class*='chat'],[class*='card'],[class*='item'],li,[role='listitem']")]
+    .filter(isVisibleElement)
+    .filter((node) => {
+      const rect = node.getBoundingClientRect();
+      if (rect.width < 120 || rect.height < 36 || rect.left > viewportWidth * 0.55) return false;
+      const text = (node.innerText || node.textContent || "").replace(/\s+/g, " ").trim();
+      if (text.length < 2 || text.length > 1000) return false;
+      if (isBossNavigationLine(text)) return false;
+      return /(\d+\s*\u5c81|\u672c\u79d1|\u5927\u4e13|\u7855\u58eb|\u535a\u58eb|\u5e74\u4ee5\u4e0a|\u79bb\u804c|\u5728\u804c|\u521a\u521a\u6d3b\u8dc3|\u6d3b\u8dc3|\u4f1a\u8ba1|Java|\u5f00\u53d1|\u8fd0\u8425|\u9500\u552e)/.test(text);
+    });
+  const seen = new Set();
+  return nodes.filter((node) => {
+    const text = compactCandidateLabel(node.innerText || node.textContent || "");
+    const rect = node.getBoundingClientRect();
+    const key = `${text.slice(0, 50)}|${Math.round(rect.top)}`;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function compactCandidateLabel(text) {
+  return String(text || "").replace(/\s+/g, " ").trim() || "\u5019\u9009\u4eba";
+}
+
+function closeResumeOverlay() {
+  const closeButton = [...document.querySelectorAll("button,a,span,div")]
+    .filter(isVisibleElement)
+    .find((node) => {
+      const text = (node.innerText || node.textContent || "").replace(/\s+/g, "").trim();
+      const label = node.getAttribute?.("aria-label") || "";
+      const rect = node.getBoundingClientRect();
+      return (text === "\u5173\u95ed" || text === "\u00d7" || label.includes("\u5173\u95ed")) && rect.left > (window.innerWidth || 1200) * 0.45;
+    });
+  if (closeButton) {
+    (closeButton.closest?.("button,a,[role='button']") || closeButton).click();
+    return;
+  }
+  document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true }));
 }
 
 function isActiveTabButton(node) {
@@ -732,6 +844,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
   if (message?.type === "collect-obtained-resumes") {
     collectObtainedResumeText().then(sendResponse).catch((error) => sendResponse({ error: error.message }));
+    return true;
+  }
+  if (message?.type === "auto-collect-communication-resumes") {
+    autoCollectCommunicationResumes(message.options || {}).then(sendResponse).catch((error) => sendResponse({ error: error.message }));
     return true;
   }
   if (message?.type === "collect-boss-candidates") {

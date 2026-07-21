@@ -65,10 +65,12 @@ function setActionButtons(enabled, state = currentPageState) {
   $("bindCookieBtn").disabled = !enabled || !state?.is_boss_page;
   $("importBtn").disabled = !enabled || !state?.can_import_resume;
   $("obtainedImportBtn").disabled = !enabled || !state?.can_import_obtained_resume;
+  $("autoListImportBtn").disabled = !enabled || !(state?.can_batch_import_candidates || state?.page_type === "candidate_list");
   $("syncJobsBtn").disabled = !enabled || !state?.can_sync_jobs;
   $("batchImportBtn").disabled = !enabled || !state?.can_batch_import_candidates;
   $("importBtn").title = state?.can_import_resume ? "" : "请打开 BOSS 在线简历详情";
   $("obtainedImportBtn").title = state?.can_import_obtained_resume ? "" : "请打开已获得的在线简历或附件简历";
+  $("autoListImportBtn").title = state?.can_batch_import_candidates ? "" : "请打开 BOSS 沟通列表";
   $("syncJobsBtn").title = state?.can_sync_jobs ? "" : "请打开 BOSS 职位管理/岗位列表页";
   $("batchImportBtn").title = state?.can_batch_import_candidates ? "" : "请打开 BOSS 沟通列表或候选人列表";
 }
@@ -146,6 +148,43 @@ $("importBtn").addEventListener("click", async () => {
     const collected = await chrome.tabs.sendMessage(tab.id, { type: "collect-resume" });
     $("status").textContent = `已采集 ${collected.chunk_count || 1} 段，正在上传解析...`;
     await uploadResumePayload(baseUrl, token, collected, "在线简历导入成功");
+  } catch (error) {
+    $("status").textContent = `失败：${error.message}`;
+  }
+});
+
+$("autoListImportBtn").addEventListener("click", async () => {
+  const { baseUrl, token } = saveConfig();
+  $("status").textContent = "正在自动打开沟通列表候选人并采集在线简历...";
+
+  try {
+    if (!currentPageState?.can_batch_import_candidates && currentPageState?.page_type !== "candidate_list") {
+      throw new Error("请先打开 BOSS 沟通列表，再执行自动导入");
+    }
+    const tab = await getActiveBossTab();
+    const collected = await chrome.tabs.sendMessage(tab.id, {
+      type: "auto-collect-communication-resumes",
+      options: { limit: 20 }
+    });
+    const items = collected?.items || [];
+    const errors = collected?.errors || [];
+    if (!items.length) throw new Error(errors[0]?.error || "未自动采集到可导入简历");
+
+    $("status").textContent = `已自动采集 ${items.length} 份简历，失败 ${errors.length} 份，正在导入系统...`;
+    const response = await fetch(`${baseUrl}/api/boss/candidates/batch-import`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${token}`
+      },
+      body: JSON.stringify({ items, source: "extension_auto_list" })
+    });
+    const body = await response.json();
+    if (!response.ok) throw new Error(body.error || "自动批量导入失败");
+
+    const imported = body.data.items?.length || 0;
+    const failed = (body.data.errors?.length || 0) + errors.length;
+    $("status").textContent = `自动导入完成：成功 ${imported} 份，失败 ${failed} 份。`;
   } catch (error) {
     $("status").textContent = `失败：${error.message}`;
   }

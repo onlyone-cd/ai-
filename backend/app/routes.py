@@ -4134,7 +4134,8 @@ def infer_agent_tool_names(text, pending_action=None):
         tools.append("match_candidates_for_job")
     if is_candidate_job_match_question(value):
         tools.append("match_candidates_for_job")
-    if is_employee_resume_agent_request(value):
+    profile_analysis_request = is_employee_resume_agent_request(value)
+    if profile_analysis_request:
         tools.append("analyze_employee_resume")
     if is_profile_knowledge_lookup_request(value):
         tools.append("knowledge_lookup")
@@ -4154,7 +4155,7 @@ def infer_agent_tool_names(text, pending_action=None):
         tools.append("get_job_summary")
     if "经验" in value or "档位" in value or "年限" in value:
         tools.append("get_candidate_experience_stats")
-    if "推荐" in value or "匹配" in value or "最佳候选人" in value:
+    if ("推荐" in value or "匹配" in value or "最佳候选人" in value) and not profile_analysis_request:
         tools.append("match_candidates_for_job")
     if "候选人" in value or "人才" in value or "找" in value or "搜索" in value:
         tools.append("search_candidates")
@@ -6502,6 +6503,9 @@ def is_candidate_job_match_question(text):
     if not any(word in value for word in ["适合", "不适合", "为什么", "匹配原因", "推荐理由", "证据链", "匹配详情"]):
         return False
     if not any(word in value for word in ["岗位", "职位", "JD", "jd", "匹配", "推荐"]):
+        return False
+    has_job_reference = bool(find_job_from_message(value)) or any(word in value for word in ["该岗位", "这个岗位", "当前岗位", "JD", "jd"])
+    if not has_job_reference:
         return False
     candidate, _ = find_candidate_for_agent_message(value)
     employee, _ = find_employee_for_agent_message(value)

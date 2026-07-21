@@ -23,6 +23,8 @@ DOMAIN_SIGNALS = {
     "零售/门店": ["门店管理", "店长", "收银", "导购", "商品陈列"],
     "工程/制造": ["机械设计", "机械工程", "结构设计", "零部件", "图纸", "制图", "工艺", "公差", "设备", "制造"],
     "设计/工程": ["机械设计", "机械工程", "结构设计", "三维建模", "图纸", "制图", "CAD", "AutoCAD", "SolidWorks"],
+    "移动端": ["移动端开发", "iOS开发", "Android开发", "安卓开发", "App开发", "客户端开发", "Swift开发", "Kotlin开发", "Objective-C", "Xcode"],
+    "技术方向": ["移动端开发", "iOS开发", "Android开发", "安卓开发", "App开发", "客户端开发", "Swift开发", "Kotlin开发", "Objective-C", "Xcode"],
     "编程语言": [
         "开发",
         "后端",
@@ -63,6 +65,12 @@ LABEL_CONTEXT_REQUIREMENTS = {
     "CAD": ["CAD", "AutoCAD", "制图", "工程图", "图纸", "机械设计", "结构设计"],
     "SolidWorks": ["SolidWorks", "三维建模", "机械设计", "结构设计", "工程图"],
     "AutoCAD": ["AutoCAD", "CAD", "制图", "工程图", "图纸"],
+    "移动端开发": ["移动端开发", "客户端开发", "App开发", "iOS开发", "Android开发", "安卓开发", "Objective-C", "Swift", "Kotlin", "Xcode", "Android Studio"],
+    "Android": ["Android开发", "安卓开发", "Kotlin", "Java Android", "Android Studio", "客户端开发", "移动端开发"],
+    "iOS": ["iOS开发", "Objective-C", "Swift", "UIKit", "Xcode", "客户端开发", "移动端开发"],
+    "小程序": ["小程序开发", "微信小程序开发", "支付宝小程序开发", "前端开发", "uni-app", "Taro"],
+    "Swift": ["Swift开发", "iOS开发", "UIKit", "Xcode", "Objective-C", "移动端开发"],
+    "Kotlin": ["Kotlin开发", "Android开发", "安卓开发", "Android Studio", "移动端开发"],
 }
 
 TAG_SCORE_CAPS = {
@@ -85,6 +93,106 @@ ROLE_EVIDENCE_TERMS = {
     "监理": ("监理员", "监理工程师", "工程监理经验", "施工现场", "工地", "房建", "市政", "土建", "负责监理"),
     "项目管理": ("项目经理", "项目负责人", "进度管理", "风险管理", "交付管理", "项目管理经验", "负责项目管理", "统筹项目"),
 }
+POSITIVE_EVIDENCE_WORDS = (
+    "技能",
+    "技术",
+    "技术栈",
+    "能力",
+    "经验",
+    "经历",
+    "熟悉",
+    "熟练",
+    "精通",
+    "掌握",
+    "负责",
+    "参与",
+    "主导",
+    "独立",
+    "开发",
+    "设计",
+    "实现",
+    "使用",
+    "建设",
+    "搭建",
+    "维护",
+    "优化",
+    "上线",
+    "交付",
+    "编写",
+    "课程",
+    "学习",
+    "培训",
+    "证书",
+    "certified",
+    "experience",
+    "experienced",
+    "skill",
+    "skills",
+    "familiar",
+    "proficient",
+    "develop",
+    "development",
+    "developer",
+    "designed",
+    "built",
+    "implemented",
+    "maintained",
+)
+NEGATIVE_EVIDENCE_WORDS = (
+    "无",
+    "没有",
+    "未",
+    "不具备",
+    "缺少",
+    "不会",
+    "不了解",
+    "不熟悉",
+    "无相关",
+    "没有相关",
+    "无关",
+    "未涉及",
+    "未做过",
+    "不参与",
+    "非本人",
+    "not",
+    "no",
+    "without",
+)
+NOISE_CONTEXT_WORDS = (
+    "岗位推荐",
+    "职位推荐",
+    "推荐岗位",
+    "招聘信息",
+    "职位详情",
+    "职位列表",
+    "页面导航",
+    "导航",
+    "菜单",
+    "筛选条件",
+    "搜索条件",
+    "聊天记录",
+    "沟通记录",
+    "系统菜单",
+)
+
+MOBILE_DEVELOPMENT_TAGS = {"移动端开发", "Android", "iOS", "小程序", "Swift", "Kotlin"}
+MOBILE_DEVELOPMENT_EVIDENCE = (
+    "移动端开发",
+    "客户端开发",
+    "App开发",
+    "APP开发",
+    "iOS开发",
+    "Android开发",
+    "安卓开发",
+    "小程序开发",
+    "微信小程序开发",
+    "Swift开发",
+    "Kotlin开发",
+    "Objective-C",
+    "Xcode",
+    "Android Studio",
+    "UIKit",
+)
 
 
 @dataclass(frozen=True)
@@ -125,7 +233,7 @@ def candidate_labels_for_text(text, limit=120):
     hits = []
     for label in load_labels():
         matched_terms = [term for term in evidence_terms_for(label) if term and term_in_text(term, text)]
-        if matched_terms and label_has_required_context(label, text, matched_terms):
+        if matched_terms and label_has_valid_evidence(label, text, matched_terms):
             hits.append(label)
     return hits[:limit]
 
@@ -138,11 +246,11 @@ def rule_based_tags(text, limit=50):
         matched_terms = [term for term in evidence_terms_for(label) if term and term_in_text(term, text)]
         if not matched_terms:
             continue
-        if not label_has_required_context(label, text, matched_terms):
+        if not label_has_valid_evidence(label, text, matched_terms):
             continue
         score = capped_score(label, evidence_score(matched_terms, text), text, matched_terms)
         tags.append({"tag": label.tag, "score": score, "category": label.category})
-    return dedupe_tags(tags)[:limit] or [{"tag": "沟通", "score": 2, "category": "通用能力"}]
+    return dedupe_tags(tags)[:limit]
 
 
 def normalize_llm_tags(items, text, min_score=2, limit=50):
@@ -162,7 +270,7 @@ def normalize_llm_tags(items, text, min_score=2, limit=50):
         matched_terms = [term for term in evidence_terms_for(label) if term and term_in_text(term, text)]
         if evidence and evidence.lower() in text.lower():
             matched_terms.append(evidence)
-        if not label_has_required_context(label, text, matched_terms):
+        if not label_has_valid_evidence(label, text, matched_terms, evidence=evidence):
             continue
         if not has_category_context(label.category, text):
             continue
@@ -199,6 +307,92 @@ def term_in_text(term, text):
 
 def evidence_terms_for(label):
     return (*label.evidence_terms, *EXTRA_EVIDENCE_TERMS.get(label.tag, ()))
+
+
+def label_has_valid_evidence(label, text, matched_terms, evidence=""):
+    if not label or not text or not matched_terms:
+        return False
+    if not label_has_required_context(label, text, matched_terms):
+        return False
+    return bool(valid_evidence_contexts(label, text, matched_terms, evidence=evidence))
+
+
+def valid_evidence_contexts(label, text, matched_terms, evidence="", radius=90):
+    contexts = []
+    for term in matched_terms:
+        contexts.extend(term_contexts(term, text, radius=radius))
+    if evidence and str(evidence).lower() in str(text or "").lower():
+        contexts.extend(term_contexts(evidence, text, radius=radius))
+
+    valid = []
+    for context in contexts:
+        if not context or is_noise_context(context):
+            continue
+        if is_negative_evidence_context(context, matched_terms):
+            continue
+        if not has_positive_evidence_context(label, context, matched_terms):
+            continue
+        cleaned = re.sub(r"\s+", " ", context).strip()
+        if cleaned and cleaned not in valid:
+            valid.append(cleaned)
+    return valid
+
+
+def is_noise_context(context):
+    return has_any(context, NOISE_CONTEXT_WORDS)
+
+
+def is_negative_evidence_context(context, terms):
+    value = str(context or "")
+    for term in terms:
+        if not term or not term_in_text(term, value):
+            continue
+        clauses = [part for part in re.split(r"[。；;，,\n\r]+", value) if term_in_text(term, part)]
+        clauses = clauses or [value]
+        for clause in clauses:
+            if has_negative_evidence_marker(clause, term):
+                return True
+    return False
+
+
+def has_negative_evidence_marker(clause, term):
+    value = str(clause or "").lower()
+    escaped = re.escape(str(term or "").lower())
+    if not escaped:
+        return False
+    gap = r"[^。；;，,\n\r]{0,24}"
+    prefix_words = tuple(word for word in NEGATIVE_EVIDENCE_WORDS if word not in {"无", "未"})
+    prefix = "|".join(re.escape(word.lower()) for word in prefix_words)
+    patterns = [
+        rf"(?:{prefix}){gap}{escaped}",
+        rf"无{gap}{escaped}[^。；;，,\n\r]{{0,10}}(?:经验|经历|能力|基础|证书|项目|实践)",
+        rf"未{gap}{escaped}[^。；;，,\n\r]{{0,10}}(?:经验|经历|项目|开发|实践)",
+        rf"{escaped}{gap}(?:经验|经历|能力|基础|证书|项目|实践)?(?:不足|欠缺|不会|不熟悉|不了解|未涉及|未做过|无关)",
+    ]
+    return any(re.search(pattern, value, re.I) for pattern in patterns)
+
+
+def has_positive_evidence_context(label, context, terms):
+    if label.tag in MOBILE_DEVELOPMENT_TAGS or label.category == "移动端":
+        return has_mobile_development_evidence(context)
+
+    value = str(context or "")
+    if has_any(value, POSITIVE_EVIDENCE_WORDS):
+        return True
+
+    for term in terms:
+        if term and has_any(term, POSITIVE_EVIDENCE_WORDS):
+            return True
+    return False
+
+
+def has_mobile_development_evidence(context):
+    value = str(context or "")
+    if has_any(value, MOBILE_DEVELOPMENT_EVIDENCE):
+        return True
+    lowered = value.lower()
+    has_mobile_language = any(term.lower() in lowered for term in ("swift", "kotlin", "objective-c", "uikit", "xcode"))
+    return has_mobile_language and has_any(value, ("开发", "客户端", "iOS", "Android", "App", "APP"))
 
 
 def label_has_required_context(label, text, matched_terms):

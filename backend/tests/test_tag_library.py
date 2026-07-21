@@ -1,4 +1,4 @@
-from app.tag_library import candidate_labels_for_text, rule_based_tags
+from app.tag_library import candidate_labels_for_text, normalize_llm_tags, rule_based_tags
 
 
 def test_sales_tags_are_loaded_and_matched():
@@ -34,3 +34,38 @@ def test_tag_scores_follow_evidence_context_not_frequency():
 
     assert repeated["score"] <= 2
     assert delivered["score"] == 5
+
+
+def test_mobile_tags_need_direct_development_evidence():
+    text = "王成都 项目经理，负责业务需求、供应商协调，没有 iOS 和移动端开发经验。"
+    tags = {item["tag"] for item in rule_based_tags(text)}
+
+    assert {"iOS", "移动端开发", "Android", "Swift", "Kotlin"}.isdisjoint(tags)
+
+
+def test_mobile_product_or_team_context_is_not_development_evidence():
+    text = "负责 App 产品需求、移动端团队对接和验收，不参与 iOS 开发。"
+    labels = {label.tag for label in candidate_labels_for_text(text)}
+    tags = {item["tag"] for item in rule_based_tags(text)}
+
+    assert {"iOS", "移动端开发", "Android"}.isdisjoint(labels)
+    assert {"iOS", "移动端开发", "Android"}.isdisjoint(tags)
+
+
+def test_mobile_development_evidence_is_kept():
+    text = "3 年 iOS开发经验，使用 Swift、UIKit、Xcode 开发客户端。"
+    tags = {item["tag"] for item in rule_based_tags(text)}
+
+    assert {"iOS", "Swift", "移动端开发"} <= tags
+
+
+def test_llm_tags_are_rejected_when_evidence_is_negative():
+    text = "王成都 项目经理，负责业务需求、供应商协调，没有 iOS 和移动端开发经验。"
+
+    tags = normalize_llm_tags([{"tag": "iOS", "score": 5, "evidence": "没有 iOS 经验"}], text)
+
+    assert tags == []
+
+
+def test_empty_text_does_not_create_fake_communication_tag():
+    assert rule_based_tags("候选人姓名：张三") == []

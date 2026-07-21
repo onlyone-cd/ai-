@@ -1,6 +1,6 @@
 import re
 
-from .tag_library import evidence_terms_for, has_category_context, label_map, term_contexts
+from .tag_library import evidence_terms_for, has_category_context, label_map, valid_evidence_contexts
 
 RELATED_SETS = [
     ({"会计", "总账会计", "财务核算", "财务报表"}, 0.85),
@@ -212,12 +212,6 @@ def tag_evidence(tag, text):
     labels = label_map()
     label = labels.get(tag)
     terms = evidence_terms_for(label) if label else (tag,)
-    snippets = []
-    for term in terms:
-        for context in term_contexts(term, text, radius=54):
-            cleaned = re.sub(r"\s+", " ", context).strip()
-            if cleaned and cleaned not in snippets:
-                snippets.append(cleaned)
-            if len(snippets) >= 2:
-                return snippets
-    return snippets
+    if not label:
+        return []
+    return valid_evidence_contexts(label, text, terms, radius=54)[:2]

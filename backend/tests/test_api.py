@@ -3185,6 +3185,34 @@ def test_tag_quality_panel_can_confirm_and_delete_tags(client, admin_headers):
     assert "iOS" not in {tag["tag"] for tag in deleted.get_json()["data"]["tags"]}
 
 
+def test_tag_quality_panel_supports_batch_actions(client, admin_headers):
+    response = client.put(
+        "/api/candidates/1/tags",
+        headers=admin_headers,
+        json={"tags": [{"tag": "Python", "score": 2}, {"tag": "Java", "score": 5}]},
+    )
+    assert response.status_code == 200
+    items = [{"candidate_id": 1, "tag": "Python"}, {"candidate_id": 1, "tag": "Java"}]
+
+    reparse = client.post("/api/tags/quality/reparse-batch", headers=admin_headers, json={"items": items})
+    assert reparse.status_code == 200
+    reparse_data = reparse.get_json()["data"]
+    assert reparse_data["queued_count"] == 1
+    assert reparse_data["tasks"][0]["payload"]["before_tags"]
+
+    confirm = client.post("/api/tags/quality/confirm-batch", headers=admin_headers, json={"items": items, "note": "批量确认"})
+    assert confirm.status_code == 200
+    assert confirm.get_json()["data"]["confirmed_count"] == 2
+    detail = client.get("/api/candidates/1", headers=admin_headers).get_json()["data"]
+    assert {tag["evidence_status"] for tag in detail["tags"]} == {"manual_confirmed"}
+
+    deleted = client.post("/api/tags/quality/delete-batch", headers=admin_headers, json={"items": items})
+    assert deleted.status_code == 200
+    assert deleted.get_json()["data"]["deleted_count"] == 2
+    detail = client.get("/api/candidates/1", headers=admin_headers).get_json()["data"]
+    assert detail["tags"] == []
+
+
 def test_candidate_tags_reject_unknown_label(client, admin_headers):
     response = client.put("/api/candidates/1/tags", headers=admin_headers, json={"tags": [{"tag": "不存在标签", "score": 3}]})
 

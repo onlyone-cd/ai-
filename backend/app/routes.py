@@ -1785,6 +1785,101 @@ def confirm_candidate_tag(user, candidate_id, tag_name):
     return ok(candidate.to_dict(detail=True), "标签已人工确认")
 
 
+@api.post("/tags/quality/reparse-batch")
+@login_required
+@roles_required("admin", "manager", "recruiter")
+def batch_reparse_quality_tags(user):
+    targets, validation_error = parse_quality_tag_targets(user)
+    if validation_error:
+        return validation_error
+    tasks = []
+    seen_candidate_ids = set()
+    for candidate, _tag_name, _tag in targets:
+        if candidate.id in seen_candidate_ids:
+            continue
+        seen_candidate_ids.add(candidate.id)
+        task = enqueue_task("resume_retry_parse", {"candidate_id": candidate.id, "before_tags": candidate_tag_snapshot(candidate)}, created_by=user.id)
+        tasks.append(task)
+    audit_log(user, "batch_reparse_tags", "candidate_tag", None, "tag_quality", {"candidate_ids": sorted(seen_candidate_ids), "task_ids": [task.id for task in tasks]})
+    db.session.commit()
+    return ok({"tasks": [task.to_dict() for task in tasks], "queued_count": len(tasks)}, "已批量加入重新解析队列")
+
+
+@api.post("/tags/quality/delete-batch")
+@login_required
+@roles_required("admin", "manager", "recruiter")
+def batch_delete_quality_tags(user):
+    targets, validation_error = parse_quality_tag_targets(user)
+    if validation_error:
+        return validation_error
+    deleted = []
+    affected_candidate_ids = set()
+    for candidate, tag_name, tag in targets:
+        deleted.append({"candidate_id": candidate.id, "candidate_name": candidate.name_masked, "tag": tag_name})
+        affected_candidate_ids.add(candidate.id)
+        db.session.delete(tag)
+    if affected_candidate_ids:
+        Match.query.filter(Match.candidate_id.in_(affected_candidate_ids)).delete(synchronize_session=False)
+    audit_log(user, "batch_delete_tags", "candidate_tag", None, "tag_quality", {"items": deleted, "candidate_ids": sorted(affected_candidate_ids)})
+    db.session.commit()
+    return ok({"deleted": deleted, "deleted_count": len(deleted)}, "已批量删除标签")
+
+
+@api.post("/tags/quality/confirm-batch")
+@login_required
+@roles_required("admin", "manager", "recruiter")
+def batch_confirm_quality_tags(user):
+    targets, validation_error = parse_quality_tag_targets(user)
+    if validation_error:
+        return validation_error
+    payload = request.get_json(silent=True) or {}
+    note = str(payload.get("note") or "人工批量复核后确认保留该标签。").strip()[:255]
+    confirmed = []
+    affected_candidate_ids = set()
+    for candidate, tag_name, tag in targets:
+        tag.evidence_override = True
+        tag.evidence_note = note
+        tag.confirmed_by = user.id
+        tag.confirmed_at = utcnow()
+        confirmed.append({"candidate_id": candidate.id, "candidate_name": candidate.name_masked, "tag": tag_name})
+        affected_candidate_ids.add(candidate.id)
+    if affected_candidate_ids:
+        Match.query.filter(Match.candidate_id.in_(affected_candidate_ids)).delete(synchronize_session=False)
+    audit_log(user, "batch_confirm_tags", "candidate_tag", None, "tag_quality", {"items": confirmed, "note": note, "candidate_ids": sorted(affected_candidate_ids)})
+    db.session.commit()
+    return ok({"confirmed": confirmed, "confirmed_count": len(confirmed)}, "已批量人工确认标签")
+
+
+def parse_quality_tag_targets(user):
+    payload = request.get_json(silent=True) or {}
+    raw_items = payload.get("items") or []
+    if not isinstance(raw_items, list) or not raw_items:
+        return [], error("请选择需要处理的标签", "NO_TAG_SELECTED", 400)
+    targets = []
+    seen = set()
+    for raw in raw_items[:200]:
+        if not isinstance(raw, dict):
+            continue
+        candidate_id = int(raw.get("candidate_id") or 0)
+        tag_name = str(raw.get("tag") or "").strip()
+        key = (candidate_id, tag_name)
+        if not candidate_id or not tag_name or key in seen:
+            continue
+        seen.add(key)
+        candidate = db.session.get(Candidate, candidate_id)
+        if not candidate:
+            return [], error("候选人不存在", "NOT_FOUND", 404, {"candidate_id": candidate_id})
+        if not can_access_candidate(user, candidate):
+            return [], error("无权处理该候选人的标签", "FORBIDDEN", 403, {"candidate_id": candidate_id})
+        tag = CandidateTag.query.filter_by(candidate_id=candidate.id, tag=tag_name).first()
+        if not tag:
+            return [], error("标签不存在", "NOT_FOUND", 404, {"candidate_id": candidate_id, "tag": tag_name})
+        targets.append((candidate, tag_name, tag))
+    if not targets:
+        return [], error("请选择有效标签", "NO_VALID_TAG", 400)
+    return targets, None
+
+
 @api.delete("/candidates/<int:candidate_id>")
 @login_required
 @roles_required("admin", "manager", "recruiter")

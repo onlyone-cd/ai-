@@ -2859,6 +2859,7 @@ function TasksPage({ setView }: { setView: (view: View) => void }) {
   const [tagIssue, setTagIssue] = useState("all");
   const [tagQualityQuery, setTagQualityQuery] = useState("");
   const [tagQualityBusy, setTagQualityBusy] = useState("");
+  const [selectedQualityTags, setSelectedQualityTags] = useState<Set<string>>(() => new Set());
 
   async function load(nextStatus = status, nextOffset = taskOffset, nextLimit = taskLimit, silent = false) {
     if (!silent) setLoadingTasks(true);
@@ -2890,6 +2891,7 @@ function TasksPage({ setView }: { setView: (view: View) => void }) {
   async function loadTagQuality(nextIssue = tagIssue, nextOffset = tagQuality?.offset || 0, nextLimit = tagQuality?.limit || 30) {
     const data = await api.tagQuality({ issue: nextIssue, q: tagQualityQuery || undefined, offset: nextOffset, limit: nextLimit });
     setTagQuality(data);
+    setSelectedQualityTags((current) => new Set([...current].filter((key) => data.items.some((item) => qualityTagKey(item) === key))));
   }
 
   useEffect(() => {
@@ -3065,6 +3067,82 @@ function TasksPage({ setView }: { setView: (view: View) => void }) {
     await loadTagQuality(tagIssue, 0);
   }
 
+  function toggleQualityTagSelected(item: TagQualityItem, checked: boolean) {
+    const key = qualityTagKey(item);
+    setSelectedQualityTags((current) => {
+      const next = new Set(current);
+      if (checked) next.add(key);
+      else next.delete(key);
+      return next;
+    });
+  }
+
+  function selectedQualityTargets() {
+    return (tagQuality?.items || [])
+      .filter((item) => selectedQualityTags.has(qualityTagKey(item)))
+      .map((item) => ({ candidate_id: item.candidate.id, tag: item.tag.tag }));
+  }
+
+  async function batchReparseQualityTags() {
+    const items = selectedQualityTargets();
+    if (!items.length) {
+      notify("error", "请先选择需要重新解析的标签");
+      return;
+    }
+    setTagQualityBusy("batch-reparse");
+    try {
+      const data = await api.reparseQualityTags(items);
+      notify("success", `已加入 ${data.queued_count} 个重新解析任务`);
+      if (data.tasks[0]) setSelectedTask(data.tasks[0]);
+      await Promise.all([load(status, 0, taskLimit), loadTagQuality(tagIssue, tagQuality?.offset || 0)]);
+    } catch (error) {
+      notify("error", error instanceof Error ? error.message : "批量重新解析失败");
+    } finally {
+      setTagQualityBusy("");
+    }
+  }
+
+  async function batchConfirmQualityTags() {
+    const items = selectedQualityTargets();
+    if (!items.length) {
+      notify("error", "请先选择需要确认的标签");
+      return;
+    }
+    const note = window.prompt("请输入批量人工确认说明", "人工批量复核后确认保留该标签。");
+    if (note === null) return;
+    setTagQualityBusy("batch-confirm");
+    try {
+      const data = await api.confirmQualityTags(items, note);
+      notify("success", `已确认 ${data.confirmed_count} 个标签`);
+      setSelectedQualityTags(new Set());
+      await loadTagQuality(tagIssue, tagQuality?.offset || 0);
+    } catch (error) {
+      notify("error", error instanceof Error ? error.message : "批量人工确认失败");
+    } finally {
+      setTagQualityBusy("");
+    }
+  }
+
+  async function batchDeleteQualityTags() {
+    const items = selectedQualityTargets();
+    if (!items.length) {
+      notify("error", "请先选择需要删除的标签");
+      return;
+    }
+    if (!window.confirm(`确认删除已选 ${items.length} 个标签？删除后会清空相关候选人的旧匹配结果。`)) return;
+    setTagQualityBusy("batch-delete");
+    try {
+      const data = await api.deleteQualityTags(items);
+      notify("success", `已删除 ${data.deleted_count} 个标签`);
+      setSelectedQualityTags(new Set());
+      await loadTagQuality(tagIssue, tagQuality?.offset || 0);
+    } catch (error) {
+      notify("error", error instanceof Error ? error.message : "批量删除标签失败");
+    } finally {
+      setTagQualityBusy("");
+    }
+  }
+
   const statuses = ["all", "queued", "running", "succeeded", "failed"];
   const totalRows = opsStatus ? Object.values(opsStatus.counts || {}).reduce((sum, value) => sum + Number(value || 0), 0) : 0;
   const moduleTarget: Record<string, View> = {
@@ -3118,6 +3196,18 @@ function TasksPage({ setView }: { setView: (view: View) => void }) {
               <ShieldCheck size={17} />
               全量校准
             </button>
+            <button className="secondary-button" onClick={batchReparseQualityTags} disabled={Boolean(tagQualityBusy) || selectedQualityTags.size === 0}>
+              <RefreshCw size={17} />
+              批量解析 {selectedQualityTags.size || ""}
+            </button>
+            <button className="secondary-button" onClick={batchConfirmQualityTags} disabled={Boolean(tagQualityBusy) || selectedQualityTags.size === 0}>
+              <Check size={17} />
+              批量确认
+            </button>
+            <button className="secondary-button text-red-700" onClick={batchDeleteQualityTags} disabled={Boolean(tagQualityBusy) || selectedQualityTags.size === 0}>
+              <Trash2 size={17} />
+              批量删除
+            </button>
           </div>
         </div>
         <div className="grid gap-3 md:grid-cols-5">
@@ -3142,6 +3232,21 @@ function TasksPage({ setView }: { setView: (view: View) => void }) {
             查询
           </button>
         </form>
+        {tagQuality && tagQuality.items.length > 0 && (
+          <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-steel">
+            <button
+              className="secondary-button"
+              type="button"
+              onClick={() => setSelectedQualityTags(new Set(tagQuality.items.map((item) => qualityTagKey(item))))}
+            >
+              选择本页
+            </button>
+            <button className="secondary-button" type="button" onClick={() => setSelectedQualityTags(new Set())}>
+              清空选择
+            </button>
+            <span>已选 {selectedQualityTags.size} 个标签</span>
+          </div>
+        )}
         <div className="mt-4 data-list">
           {!tagQuality ? (
             <div className="p-4"><AntSpin tip="正在读取标签质量" /></div>
@@ -3150,6 +3255,13 @@ function TasksPage({ setView }: { setView: (view: View) => void }) {
           ) : (
             tagQuality.items.map((item) => (
               <div className="data-row" key={`${item.candidate.id}-${item.tag.tag}-${item.primary_issue}`}>
+                <input
+                  aria-label="选择标签"
+                  checked={selectedQualityTags.has(qualityTagKey(item))}
+                  className="mt-1"
+                  type="checkbox"
+                  onChange={(event) => toggleQualityTagSelected(item, event.target.checked)}
+                />
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-2">
                     <span className={`badge ${tagQualityIssueTone(item.primary_issue)}`}>{tagQualityIssueLabel(item.primary_issue)}</span>
@@ -6245,6 +6357,10 @@ function titleFor(view: View) {
     audit: "操作日志",
     users: "用户管理"
   }[view];
+}
+
+function qualityTagKey(item: TagQualityItem) {
+  return `${item.candidate.id}::${item.tag.tag}`;
 }
 
 function TaskTagDiff({ task }: { task: BackgroundTask }) {

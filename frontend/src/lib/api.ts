@@ -801,6 +801,12 @@ export const api = {
   retryParseResume: (id: number) => request<{ candidate: Candidate }>(`/resume/${id}/retry-parse`, { method: "POST" }),
   retryParseResumeAsync: (id: number) => request<{ task: BackgroundTask }>(`/resume/${id}/retry-parse?async=1`, { method: "POST" }),
   tagQuality: (params?: { issue?: string; q?: string; limit?: number; offset?: number }) => request<TagQualityReport>(`/tags/quality${queryString(params)}`),
+  reparseQualityTags: (items: { candidate_id: number; tag: string }[]) =>
+    request<{ tasks: BackgroundTask[]; queued_count: number }>("/tags/quality/reparse-batch", { method: "POST", body: JSON.stringify({ items }) }),
+  deleteQualityTags: (items: { candidate_id: number; tag: string }[]) =>
+    request<{ deleted: { candidate_id: number; candidate_name: string; tag: string }[]; deleted_count: number }>("/tags/quality/delete-batch", { method: "POST", body: JSON.stringify({ items }) }),
+  confirmQualityTags: (items: { candidate_id: number; tag: string }[], note?: string) =>
+    request<{ confirmed: { candidate_id: number; candidate_name: string; tag: string }[]; confirmed_count: number }>("/tags/quality/confirm-batch", { method: "POST", body: JSON.stringify({ items, note }) }),
   deleteCandidateTag: (candidateId: number, tag: string) => request<Candidate>(`/candidates/${candidateId}/tags/${encodeURIComponent(tag)}`, { method: "DELETE" }),
   confirmCandidateTag: (candidateId: number, tag: string, note?: string) =>
     request<Candidate>(`/candidates/${candidateId}/tags/${encodeURIComponent(tag)}/confirm`, { method: "POST", body: JSON.stringify({ note }) }),

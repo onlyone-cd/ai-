@@ -23,7 +23,7 @@ from .auth import hash_password, issue_token, login_required, roles_required, va
 from .job_service import ai_review_matches, build_jd_structured, clamp_score, ensure_jd_structured, enrich_match_reason, has_job_tag_hits, list_of_text, llm_failure_summary, persist_matches, preview_matches, truncate_text
 from .llm_client import LLMError, chat_json, llm_available, llm_status
 from .matching import match_candidate, parse_skill_tags
-from .models import AgentConversation, AgentMessage, AuditLog, BackgroundTask, BossAccount, BossDraft, BossSyncItem, BossSyncJob, Candidate, CandidateTag, EmployeeAnalysis, EmployeeCompensation, EmployeeProfile, EmployeeRecommendation, InterviewAssignment, InterviewFeedback, InterviewSpeechLog, Job, LLMUsage, Match, NotificationChannel, NotificationEvent, NotificationLog, OfferRecord, OrganizationUnit, PipelineStage, ResumeAttachment, UploadBatch, User, utcnow, years_between
+from .models import AgentConversation, AgentMessage, AuditLog, BackgroundTask, BossAccount, BossDraft, BossSyncItem, BossSyncJob, Candidate, CandidateTag, EmployeeAnalysis, EmployeeCompensation, EmployeeProfile, EmployeeRecommendation, InterviewAssignment, InterviewFeedback, InterviewSpeechLog, Job, LLMUsage, Match, NotificationChannel, NotificationEvent, NotificationLog, OfferRecord, OrganizationUnit, PipelineStage, ResumeAttachment, UploadBatch, User, tag_evidence_payload, utcnow, years_between
 from .ops_service import build_data_quality_report, build_deploy_gate_report, list_backup_packages, migration_status, storage_status, table_counts
 from .rbac import ROLES, role_permissions
 from .resume_service import ARCHIVE_EXTENSIONS, parse_and_save_archive, parse_and_save_resume, parse_and_save_text, reparse_candidate, rescan_attachment, resume_upload_dir
@@ -4635,9 +4635,9 @@ def execute_agent_readonly_tool(user, text, tool_name, history=None):
         requested = requested_segments(text)
         if requested:
             parts = [f"{stats['segments'][segment]['label']} {stats['segments'][segment]['count']} 人" for segment in requested]
-            answer = f"当前人才库共 {stats['total']} 人，其中" + "，".join(parts) + "。"
+            answer = f"当前人才库共 {stats['total']} 人。按主职业去重统计，" + "，".join(parts) + "。"
         else:
-            answer = f"当前人才库共 {stats['total']} 人，软件开发 {stats['segments']['software']['count']} 人，会计/财务 {stats['segments']['accounting']['count']} 人。"
+            answer = f"当前人才库共 {stats['total']} 人。按主职业去重统计，软件开发 {stats['segments']['software']['count']} 人，会计/财务 {stats['segments']['accounting']['count']} 人。"
         return {"answer": answer, "tool": "get_candidate_segment_stats", "result": stats, "suggestions": suggestions, "readonly": True}
     if tool_name == "get_candidate_experience_stats":
         data = experience_stats(Candidate.query.all())
@@ -4829,10 +4829,10 @@ def run_agent_tool(user, message, pending_action=None, history=None):
         requested = requested_segments(text)
         if requested:
             parts = [f"{stats['segments'][segment]['label']} {stats['segments'][segment]['count']} 人" for segment in requested]
-            answer = f"当前人才库共 {stats['total']} 人，其中" + "，".join(parts) + "。"
+            answer = f"当前人才库共 {stats['total']} 人。按主职业去重统计，" + "，".join(parts) + "。"
         else:
             answer = (
-                f"当前人才库共 {stats['total']} 人，软件开发 {stats['segments']['software']['count']} 人，"
+                f"当前人才库共 {stats['total']} 人。按主职业去重统计，软件开发 {stats['segments']['software']['count']} 人，"
                 f"会计/财务 {stats['segments']['accounting']['count']} 人，HR {stats['segments']['hr']['count']} 人，"
                 f"销售/商务 {stats['segments']['sales']['count']} 人。"
             )
@@ -6685,10 +6685,11 @@ def candidate_segment_stats():
     buckets = {key: [] for key in segment_meta}
     for candidate in candidates:
         segments = classify_candidate_segments(candidate)
-        for segment in segments or ["other"]:
-            buckets[segment].append(candidate.to_dict())
+        segment = segments[0] if segments else "other"
+        buckets[segment].append(candidate.to_dict())
     return {
         "total": len(candidates),
+        "classification_mode": "primary_occupation_deduplicated",
         "segments": {
             key: {"label": label, "count": len(buckets[key]), "items": buckets[key][:8]}
             for key, label in segment_meta.items()
@@ -6697,22 +6698,89 @@ def candidate_segment_stats():
 
 
 def classify_candidate_segments(candidate):
-    text = " ".join(
-        [
-            candidate.title or "",
-            candidate.raw_text or "",
-            " ".join(tag.tag for tag in candidate.tags),
-            " ".join(tag.category for tag in candidate.tags),
-        ]
-    ).lower()
-    rules = {
-        "software": ["软件", "开发", "前端", "后端", "全栈", "java", "python", "react", "typescript", "javascript", "flask", "fastapi"],
-        "accounting": ["会计", "财务", "税务", "纳税", "总账", "出纳", "金蝶", "用友"],
-        "hr": ["招聘", "人力", "hr", "薪酬", "绩效", "员工关系", "面试安排"],
-        "sales": ["销售", "商务", "客户成功", "渠道", "大客户", "bd"],
-        "data": ["数据", "分析", "bi", "sql", "报表", "看板"],
+    title = (candidate.title or "").lower()
+    raw_text = (candidate.raw_text or "").lower()
+    verified_tags = [
+        tag
+        for tag in candidate.tags
+        if tag_evidence_payload(tag).get("evidence_status") in {"verified", "manual_confirmed"}
+    ]
+    tag_text = " ".join(tag.tag for tag in verified_tags).lower()
+    category_text = " ".join(tag.category for tag in verified_tags).lower()
+    evidence_text = " ".join([title, tag_text, category_text, raw_text])
+
+    scores = {
+        "software": segment_score(
+            title,
+            tag_text,
+            category_text,
+            evidence_text,
+            title_terms=["软件", "开发", "前端", "后端", "全栈", "java", "python", "程序", "工程师", "架构师", "测试", "运维", "算法"],
+            tag_terms=["java", "python", "react", "typescript", "javascript", "vue", "flask", "fastapi", "spring", "mybatis", "kafka", "软件开发", "后端开发", "前端开发"],
+            category_terms=["软件开发", "技术", "后端", "前端"],
+            context_terms=["软件开发", "系统开发", "项目开发", "后端开发", "前端开发", "开发工程师", "程序员"],
+        ),
+        "accounting": segment_score(
+            title,
+            tag_text,
+            category_text,
+            evidence_text,
+            title_terms=["会计", "财务", "出纳", "税务", "审计", "总账", "核算"],
+            tag_terms=["会计", "财务会计", "总账会计", "成本会计", "财务核算", "财务报表", "纳税申报", "出纳", "审计"],
+            category_terms=["财务/会计"],
+            context_terms=["会计经验", "财务工作", "账务处理", "纳税申报", "总账会计", "财务核算", "财务报表"],
+        ),
+        "hr": segment_score(
+            title,
+            tag_text,
+            category_text,
+            evidence_text,
+            title_terms=["招聘", "人力", "hr", "薪酬", "绩效", "员工关系", "人事"],
+            tag_terms=["招聘", "人力资源", "薪酬", "绩效", "员工关系", "面试安排"],
+            category_terms=["人力资源"],
+            context_terms=["招聘工作", "人力资源", "员工关系", "薪酬绩效"],
+        ),
+        "sales": segment_score(
+            title,
+            tag_text,
+            category_text,
+            evidence_text,
+            title_terms=["销售", "商务", "客户成功", "渠道", "大客户", "bd"],
+            tag_terms=["销售", "商务", "客户成功", "渠道", "大客户", "bd"],
+            category_terms=["销售"],
+            context_terms=["销售经验", "客户开发", "商务拓展", "渠道拓展"],
+        ),
+        "data": segment_score(
+            title,
+            tag_text,
+            category_text,
+            evidence_text,
+            title_terms=["数据", "分析", "bi", "报表", "看板"],
+            tag_terms=["数据分析", "bi", "sql", "报表", "看板", "tableau", "powerbi"],
+            category_terms=["数据"],
+            context_terms=["数据分析", "bi看板", "报表分析", "经营分析"],
+        ),
     }
-    return [segment for segment, keywords in rules.items() if any(keyword in text for keyword in keywords)]
+
+    if scores["software"] >= 4:
+        scores["accounting"] = max(0, scores["accounting"] - 3)
+    ranked = sorted(scores.items(), key=lambda item: item[1], reverse=True)
+    if not ranked or ranked[0][1] <= 0:
+        return []
+    return [ranked[0][0]]
+
+
+def segment_score(title, tag_text, category_text, evidence_text, title_terms, tag_terms, category_terms, context_terms):
+    score = 0
+    if any(term.lower() in title for term in title_terms):
+        score += 5
+    if any(term.lower() in tag_text for term in tag_terms):
+        score += 3
+    if any(term.lower() in category_text for term in category_terms):
+        score += 2
+    if any(term.lower() in evidence_text for term in context_terms):
+        score += 1
+    return score
 
 
 def find_job_from_message(message):

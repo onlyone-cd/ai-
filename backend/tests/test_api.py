@@ -2201,6 +2201,34 @@ def test_agent_counts_candidate_segments_and_can_create_job_after_confirmation(c
     assert {"SQL", "Python"} <= {skill["tag"] for skill in create_data["result"]["job"]["jd_structured"]["skills"]}
 
 
+def test_agent_candidate_segment_stats_use_primary_occupation(client, admin_headers):
+    before = client.post("/api/agent/chat", headers=admin_headers, json={"message": "现在人才库有多少人？软件开发和会计分别多少？"})
+    assert before.status_code == 200
+    before_stats = before.get_json()["data"]["result"]["segments"]
+    candidate = Candidate(
+        owner_hr_id=1,
+        name_masked="Java财务系统开发候选人",
+        title="Java 开发工程师",
+        city="长沙",
+        raw_text="Java 开发工程师，负责金蝶财务系统接口和报表系统开发，不负责会计核算、纳税申报或账务处理。",
+        resume_json={},
+    )
+    db.session.add(candidate)
+    db.session.flush()
+    db.session.add(CandidateTag(candidate_id=candidate.id, tag="Java", score=5, category="软件开发"))
+    db.session.add(CandidateTag(candidate_id=candidate.id, tag="金蝶", score=3, category="工具"))
+    db.session.commit()
+
+    response = client.post("/api/agent/chat", headers=admin_headers, json={"message": "现在人才库有多少人？软件开发和会计分别多少？"})
+    assert response.status_code == 200
+    data = response.get_json()["data"]
+    stats = data["result"]
+    assert stats["classification_mode"] == "primary_occupation_deduplicated"
+    assert stats["segments"]["software"]["count"] == before_stats["software"]["count"] + 1
+    assert stats["segments"]["accounting"]["count"] == before_stats["accounting"]["count"]
+    assert "按主职业去重统计" in data["answer"]
+
+
 def test_agent_tool_calls_are_audited_without_message_content(client, admin_headers):
     message = "现在人才库有多少人？"
     response = client.post("/api/agent/chat", headers=admin_headers, json={"message": message})

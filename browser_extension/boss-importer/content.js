@@ -427,15 +427,58 @@ async function collectBossJobs() {
   return { items, count: items.length, page_url: location.href, title: document.title };
 }
 
-function assertBossJobListPage() {
+function inspectBossPage() {
   const pageText = (document.body.innerText || "").slice(0, 6000);
   const pageSignal = `${location.href}\n${document.title}\n${pageText}`;
   const resumeSignals = countTextHits(pageSignal, ["\u5de5\u4f5c\u7ecf\u5386", "\u6559\u80b2\u7ecf\u5386", "\u671f\u671b\u804c\u4f4d", "\u6c42\u804c\u671f\u671b", "\u4e2a\u4eba\u4f18\u52bf", "\u9879\u76ee\u7ecf\u5386"]);
   const jobSignals = countTextHits(pageSignal, JOB_LIST_MARKERS) + countTextHits(pageSignal, ["\u62db\u8058\u4e2d", "\u5f85\u5f00\u653e", "\u5df2\u5173\u95ed", "\u804c\u4f4d\u540d\u79f0", "\u62db\u8058\u4eba\u6570", "\u53d1\u5e03\u804c\u4f4d", "\u5237\u65b0\u804c\u4f4d", "\u7f16\u8f91\u804c\u4f4d"]);
-  if (resumeSignals >= 3 && jobSignals < 2) {
+  const candidateListSignals = countTextHits(pageSignal, ["\u6c9f\u901a\u5217\u8868", "\u725b\u4eba\u5217\u8868", "\u63a8\u8350\u725b\u4eba", "\u5019\u9009\u4eba", "\u5df2\u6c9f\u901a", "\u610f\u5411\u6c9f\u901a"]);
+  const hasJobCards = collectJobBlocks().length > 0;
+  const isBossPage = /(^|\.)zhipin\.com$/i.test(location.hostname);
+  const isResumePage = isBossPage && resumeSignals >= 3 && jobSignals < 2;
+  const isJobListPage = isBossPage && !isResumePage && (jobSignals >= 2 || ((/\/job|\/position|position|job/i.test(location.href)) && hasJobCards));
+  const isCandidateListPage = isBossPage && !isResumePage && !isJobListPage && candidateListSignals >= 1;
+  let pageType = "unknown";
+  let label = "\u672a\u8bc6\u522b\u9875\u9762";
+  let message = "\u8bf7\u6253\u5f00 BOSS \u5019\u9009\u4eba\u7b80\u5386\u8be6\u60c5\u3001\u6c9f\u901a\u5217\u8868\u6216\u804c\u4f4d\u7ba1\u7406\u9875";
+  if (!isBossPage) {
+    label = "\u975e BOSS \u9875\u9762";
+    message = "\u8bf7\u5148\u6253\u5f00 BOSS \u76f4\u8058\u9875\u9762";
+  } else if (isResumePage) {
+    pageType = "resume";
+    label = "\u5019\u9009\u4eba\u7b80\u5386\u9875";
+    message = "\u53ef\u91c7\u96c6\u7b80\u5386\uff1b\u4e0d\u53ef\u540c\u6b65\u5c97\u4f4d\uff0c\u907f\u514d\u628a\u671f\u671b\u804c\u4f4d\u5f53\u6210\u5c97\u4f4d";
+  } else if (isJobListPage) {
+    pageType = "job_list";
+    label = "BOSS \u5c97\u4f4d\u5217\u8868";
+    message = "\u53ef\u540c\u6b65\u5c97\u4f4d\u5217\u8868\uff1b\u5f53\u524d\u4e0d\u662f\u7b80\u5386\u8be6\u60c5\u9875";
+  } else if (isCandidateListPage) {
+    pageType = "candidate_list";
+    label = "\u6c9f\u901a/\u5019\u9009\u4eba\u5217\u8868";
+    message = "\u53ef\u6279\u91cf\u91c7\u96c6\u5019\u9009\u4eba\uff1b\u5355\u4efd\u7b80\u5386\u8bf7\u6253\u5f00\u7b80\u5386\u8be6\u60c5";
+  }
+  return {
+    is_boss_page: isBossPage,
+    page_type: pageType,
+    label,
+    message,
+    can_import_resume: isResumePage,
+    can_sync_jobs: isJobListPage,
+    can_batch_import_candidates: isCandidateListPage,
+    resume_signals: resumeSignals,
+    job_signals: jobSignals,
+    candidate_list_signals: candidateListSignals,
+    url: location.href,
+    title: document.title
+  };
+}
+
+function assertBossJobListPage() {
+  const page = inspectBossPage();
+  if (page.page_type === "resume") {
     throw new Error("\u5f53\u524d\u662f\u5019\u9009\u4eba\u7b80\u5386\u9875\u3002\u540c\u6b65\u5c97\u4f4d\u8bf7\u6253\u5f00 BOSS \u804c\u4f4d\u7ba1\u7406/\u5c97\u4f4d\u5217\u8868\u9875\uff0c\u4e0d\u80fd\u91c7\u96c6\u5019\u9009\u4eba\u7684\u671f\u671b\u804c\u4f4d");
   }
-  if (jobSignals < 2 && !/\/job|\/position|position|job/i.test(location.href)) {
+  if (!page.can_sync_jobs) {
     throw new Error("\u672a\u8bc6\u522b\u5230 BOSS \u5c97\u4f4d\u5217\u8868\u3002\u8bf7\u5148\u6253\u5f00 BOSS \u804c\u4f4d\u7ba1\u7406/\u5c97\u4f4d\u5217\u8868\u9875\u540e\u518d\u540c\u6b65\u5c97\u4f4d");
   }
 }
@@ -611,6 +654,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
   if (message?.type === "collect-boss-jobs") {
     collectBossJobs().then(sendResponse).catch((error) => sendResponse({ error: error.message }));
+    return true;
+  }
+  if (message?.type === "inspect-page") {
+    Promise.resolve(inspectBossPage()).then(sendResponse).catch((error) => sendResponse({ error: error.message }));
     return true;
   }
   return false;

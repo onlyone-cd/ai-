@@ -145,9 +145,22 @@ async function importObtainedFromCurrentPage(task) {
   if (files.length) {
     setTaskStatus({ ...task, status: "running", message: `已发现 ${files.length} 个附件简历${sourceTabs}，正在下载并按完整附件解析...` });
     const fileResult = await uploadResumeFiles(task.baseUrl, task.token, files);
-    if (!fileResult.imported) {
+    if (!fileResult.imported && !items.length) {
       const message = fileResult.errors?.[0]?.error || "附件简历下载或解析失败";
       throw new Error(message);
+    }
+    if (!fileResult.imported && items.length) {
+      setTaskStatus({ ...task, status: "running", message: `附件下载失败，改用当前页面在线简历文本导入${sourceTabs}...` });
+      const itemResult = await importCandidateItems(task.baseUrl, task.token, items, "extension_obtained_resume");
+      if (!itemResult.imported) {
+        const message = fileResult.errors?.[0]?.error || collected?.errors?.[0]?.error || "附件和在线简历文本均未成功导入";
+        throw new Error(message);
+      }
+      return {
+        imported: itemResult.imported,
+        failed: itemResult.failed + fileResult.failed + (collected?.errors?.length || 0),
+        message: `BOSS 在线简历导入完成：成功 ${itemResult.imported} 份，失败 ${itemResult.failed + fileResult.failed + (collected?.errors?.length || 0)} 份`
+      };
     }
     return {
       imported: fileResult.imported,

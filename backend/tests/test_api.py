@@ -2833,16 +2833,13 @@ def test_boss_cli_inbox_normalizes_encrypt_uid():
         }
     )
 
-    assert items == [
-        {
-            "geek_id": "friend-a",
-            "geek_ids": ["friend-a", "uid-a"],
-            "security_id": "sec-a",
-            "job": "job-a",
-            "friend_id": "123",
-            "name": "候选人A",
-        }
-    ]
+    assert items[0]["geek_id"] == "friend-a"
+    assert items[0]["geek_ids"] == ["friend-a", "uid-a"]
+    assert items[0]["security_id"] == "sec-a"
+    assert items[0]["job"] == "job-a"
+    assert items[0]["friend_id"] == "123"
+    assert items[0]["name"] == "候选人A"
+    assert items[0]["record"]["encryptUid"] == "uid-a"
 
 
 def test_boss_cli_import_retries_alternate_geek_ids(monkeypatch):
@@ -2885,6 +2882,67 @@ def test_boss_cli_import_retries_alternate_geek_ids(monkeypatch):
     assert result["data"]["items"][0]["external_id"] == "boss-cli-uid-a"
     assert ["recruiter", "resume-download", "friend-a", "--job", "job-a", "--security-id", "sec-a", "-o", "-"] in calls
     assert ["recruiter", "resume-download", "uid-a", "--job", "job-a", "--security-id", "sec-a", "-o", "-"] in calls
+
+
+def test_boss_cli_import_falls_back_to_partial_profile(monkeypatch):
+    from app import boss_cli_service
+
+    def fake_run_boss(args, cookies, timeout=60, want_json=True):
+        if args[:2] == ["recruiter", "inbox"]:
+            return {
+                "ok": True,
+                "data": {
+                    "friendList": [
+                        {
+                            "name": "候选人A",
+                            "jobName": "Java 后端开发",
+                            "salaryDesc": "15-20K",
+                            "workYearDesc": "4 年",
+                            "degreeDesc": "本科",
+                            "encryptFriendId": "friend-a",
+                            "encryptUid": "uid-a",
+                            "securityId": "sec-a",
+                            "encryptJobId": "job-a",
+                        }
+                    ]
+                },
+            }
+        if args[:2] == ["recruiter", "resume-download"]:
+            return {"ok": False, "error": {"code": "boss_cli_error", "message": "候选人详情: 操作失败 (code=1092)"}}
+        raise AssertionError(args)
+
+    monkeypatch.setattr(boss_cli_service, "run_boss", fake_run_boss)
+
+    result = boss_cli_service.import_obtained_resumes("wt2=token; wbg=session; zp_at=auth", interval_sec=0)
+
+    assert result["ok"] is True
+    assert result["data"]["errors"] == []
+    item = result["data"]["items"][0]
+    assert item["external_id"] == "boss-cli-partial-friend-a"
+    assert item["source"] == "boss_cli_obtained_resume_partial"
+    assert "BOSS_PARTIAL_PROFILE" in item["raw_text"]
+    assert "完整在线简历详情接口被 BOSS 拒绝" in item["raw_text"]
+
+
+def test_boss_batch_import_accepts_partial_profile_marker(client, admin_headers):
+    response = client.post(
+        "/api/boss/candidates/batch-import",
+        headers=admin_headers,
+        json={
+            "items": [
+                {
+                    "external_id": "boss-partial",
+                    "name": "候选人A",
+                    "raw_text": "# 候选人A\n\nBOSS_PARTIAL_PROFILE\n来源：BOSS 沟通列表资料。完整在线简历详情接口被 BOSS 拒绝，当前为可见资料导入，后续需要补全完整简历。\n\n## 求职信息\nname: 候选人A\njobName: Java 后端开发\nworkYearDesc: 4 年\ndegreeDesc: 本科\n\n## 工作经历\n完整工作经历待补全。\n\n## 教育经历\n完整教育经历待补全。",
+                }
+            ]
+        },
+    )
+
+    assert response.status_code == 200
+    data = response.get_json()["data"]
+    assert data["items"][0]["source"] == "boss"
+    assert data["items"][0]["name_masked"] == "候选人A"
 
 
 def test_boss_obtained_resumes_import_requires_cookie(client, admin_headers):

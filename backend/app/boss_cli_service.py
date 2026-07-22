@@ -154,8 +154,9 @@ def run_boss(args: list[str], cookies: str, timeout: int = 60, want_json: bool =
 def iter_records(value: Any) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     if isinstance(value, dict):
-        if find_first(value, GEEK_KEYS):
+        if any(value.get(key) for key in GEEK_KEYS):
             records.append(value)
+            return records
         for child in value.values():
             records.extend(iter_records(child))
     elif isinstance(value, list):
@@ -211,7 +212,93 @@ def find_all(value: Any, keys: tuple[str, ...]) -> list[str]:
     return found
 
 
-def normalize_inbox_items(data: Any) -> list[dict[str, str]]:
+def compact_text(value: Any, max_len: int = 140) -> str:
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    return text[:max_len]
+
+
+def candidate_record_text(record: dict[str, Any]) -> str:
+    skip = re.compile(r"id|uid|token|cookie|security|encrypt|avatar|photo|url|encrypt|lid", re.I)
+    preferred_keys = (
+        "name",
+        "geekName",
+        "candidateName",
+        "jobName",
+        "expectPositionName",
+        "positionName",
+        "title",
+        "city",
+        "expectCity",
+        "salaryDesc",
+        "expectSalary",
+        "workYearDesc",
+        "degreeDesc",
+        "ageDesc",
+        "gender",
+        "lastTime",
+        "source",
+        "sourceType",
+        "showText",
+    )
+    lines: list[str] = []
+    for key in preferred_keys:
+        value = find_first(record, (key,))
+        if value:
+            lines.append(f"{key}: {compact_text(value)}")
+
+    extras: list[str] = []
+
+    def walk(item: Any, parent_key: str = "") -> None:
+        if isinstance(item, dict):
+            for key, value in item.items():
+                if skip.search(str(key)):
+                    continue
+                walk(value, str(key))
+        elif isinstance(item, list):
+            for child in item[:8]:
+                walk(child, parent_key)
+        elif isinstance(item, (str, int, float)):
+            text = compact_text(item)
+            if text and len(text) >= 2 and text not in extras and not skip.search(parent_key):
+                extras.append(text)
+
+    walk(record)
+    for text in extras[:18]:
+        if not any(text in line for line in lines):
+            lines.append(f"- {text}")
+    return "\n".join(lines)
+
+
+def build_partial_resume_markdown(item: dict[str, Any], attempted: list[dict[str, Any]]) -> str:
+    name = item.get("name") or "BOSS候选人"
+    record_text = candidate_record_text(item.get("record") or {})
+    attempts = []
+    for entry in attempted[:6]:
+        error = entry.get("error") or {}
+        attempts.append(f"- {entry.get('geek_id')}: {error.get('message') or error}")
+    return "\n".join(
+        [
+            f"# {name}",
+            "",
+            "BOSS_PARTIAL_PROFILE",
+            "来源：BOSS 沟通列表资料。完整在线简历详情接口被 BOSS 拒绝，当前为可见资料导入，后续需要补全完整简历。",
+            "",
+            "## 求职信息",
+            record_text or "BOSS 未返回更多可见字段。",
+            "",
+            "## 工作经历",
+            "完整工作经历待补全，当前仅导入 BOSS 沟通列表可见资料。",
+            "",
+            "## 教育经历",
+            "完整教育经历待补全，当前仅导入 BOSS 沟通列表可见资料。",
+            "",
+            "## 下载尝试",
+            "\n".join(attempts) if attempts else "未能下载完整在线简历。",
+        ]
+    )
+
+
+def normalize_inbox_items(data: Any) -> list[dict[str, Any]]:
     seen: set[str] = set()
     items: list[dict[str, str]] = []
     for record in iter_records(data):
@@ -227,6 +314,7 @@ def normalize_inbox_items(data: Any) -> list[dict[str, str]]:
             "job": find_first(record, JOB_KEYS),
             "friend_id": find_first(record, FRIEND_KEYS),
             "name": find_first(record, NAME_KEYS),
+            "record": record,
         })
     return items
 
@@ -235,6 +323,8 @@ def looks_like_resume_markdown(text: str) -> bool:
     value = re.sub(r"\s+", " ", str(text or "")).strip()
     if len(value) < 30:
         return False
+    if "BOSS_PARTIAL_PROFILE" in value and "BOSS 沟通列表资料" in value:
+        return True
     signals = [
         bool(re.search(r"简历|工作经历|项目经历|教育经历|求职|个人优势|专业技能", value)),
         bool(re.search(r"本科|大专|硕士|博士|应届|\d+\s*年", value)),
@@ -299,6 +389,20 @@ def import_obtained_resumes(raw_cookies: Any, limit: int = 20, labels: list[int]
                 break
         downloaded = downloaded or {"ok": False, "error": attempted[-1]["error"] if attempted else {"code": "boss_cli_error", "message": "BOSS 简历下载失败"}}
         if not downloaded.get("ok"):
+            partial_text = build_partial_resume_markdown(item, attempted)
+            if looks_like_resume_markdown(partial_text):
+                items.append({
+                    "external_id": f"boss-cli-partial-{item['geek_id']}",
+                    "name": item.get("name") or "",
+                    "title": "",
+                    "summary": partial_text[:260],
+                    "raw_text": partial_text,
+                    "page_url": "boss-cli://recruiter/inbox-partial",
+                    "boss": {key: value for key, value in item.items() if key != "record"},
+                    "source": "boss_cli_obtained_resume_partial",
+                    "import_warning": downloaded.get("error"),
+                })
+                continue
             errors.append({"geek_id": item["geek_id"], "name": item.get("name"), "attempted": attempted, "error": downloaded.get("error")})
             if (downloaded.get("error") or {}).get("code") == "rate_limited":
                 break

@@ -4098,6 +4098,8 @@ def looks_like_boss_resume_text(text):
     value = re.sub(r"\s+", " ", str(text or "")).strip()
     if len(value) < 30:
         return False
+    if "BOSS_PARTIAL_PROFILE" in value and "BOSS 沟通列表资料" in value:
+        return True
     noise_words = ["招聘规范", "账号权益", "续费VIP", "职位管理", "推荐牛人", "我的客服", "道具", "工具箱"]
     if sum(1 for word in noise_words if word in value) >= 2 and not re.search(r"1[3-9]\d{9}|[\w.+-]+@[\w.-]+", value):
         return False

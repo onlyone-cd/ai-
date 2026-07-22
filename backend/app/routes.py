@@ -20,7 +20,8 @@ from sqlalchemy.exc import IntegrityError
 
 from . import db, production_config_checks
 from .auth import hash_password, issue_token, login_required, roles_required, validate_password_strength, verify_password
-from .boss_cli_service import import_obtained_resumes
+from .boss_cli_service import cookie_header, import_obtained_resumes, parse_cookie_header, run_boss
+from .crypto_service import decrypt_text, encrypt_text
 from .job_service import ai_review_matches, build_jd_structured, clamp_score, ensure_jd_structured, enrich_match_reason, has_job_tag_hits, list_of_text, llm_failure_summary, persist_matches, preview_matches, truncate_text
 from .llm_client import LLMError, chat_json, llm_available, llm_status
 from .matching import match_candidate, parse_skill_tags
@@ -3406,8 +3407,14 @@ def boss_browser_cookie(user):
     cookie = str(payload.get("cookie") or payload.get("cookies") or "").strip()
     if len(cookie) < 20:
         return error("Cookie 内容过短", "VALIDATION_ERROR")
+    parsed = parse_cookie_header(cookie)
+    missing = [name for name in ("wt2", "wbg", "zp_at") if not parsed.get(name)]
+    if missing:
+        return error(f"Cookie 不完整，缺少 {', '.join(missing)}", "INCOMPLETE_COOKIE", 409, {"missing": missing})
+    normalized_cookie = cookie_header(parsed)
     account_name = str(payload.get("account") or "BOSS 浏览器登录态").strip()[:128]
-    digest = hashlib.sha256(cookie.encode("utf-8")).hexdigest()
+    digest = hashlib.sha256(normalized_cookie.encode("utf-8")).hexdigest()
+    BossAccount.query.filter_by(owner_hr_id=user.id).update({"is_active": False})
     account = BossAccount.query.filter_by(owner_hr_id=user.id).order_by(BossAccount.updated_at.desc()).first()
     if not account:
         account = BossAccount(owner_hr_id=user.id, account=account_name, cookie_hash=digest)
@@ -3415,9 +3422,14 @@ def boss_browser_cookie(user):
     else:
         account.account = account_name
         account.cookie_hash = digest
-        account.verified = False
+    account.cookie_encrypted = encrypt_text(normalized_cookie)
+    account.cookie_count = len(parsed)
+    account.is_active = True
+    account.verified = True
+    account.last_verified_ok = True
+    account.last_verified_at = utcnow()
     db.session.commit()
-    return ok({"account": account.to_dict()}, "BOSS 登录态已绑定，未保存明文 Cookie")
+    return ok({"account": account.to_dict()}, "BOSS 登录态已保存并激活")
 
 
 @api.post("/boss/accounts/<int:account_id>/verify")
@@ -3429,9 +3441,21 @@ def verify_boss_account(user, account_id):
         return error("BOSS 账号不存在", "NOT_FOUND", 404)
     if user.role != "admin" and account.owner_hr_id != user.id:
         return error("无权校验该 BOSS 账号", "FORBIDDEN", 403)
-    account.verified = bool(account.cookie_hash)
+    if not account.cookie_encrypted:
+        return error("该 BOSS 账号没有保存可用 Cookie，请重新绑定", "NO_ACTIVE_COOKIE", 409)
+    try:
+        cookie = decrypt_text(account.cookie_encrypted)
+    except Exception:
+        return error("BOSS Cookie 解密失败，请重新绑定", "COOKIE_DECRYPT_FAILED", 409)
+    result = run_boss(["status"], cookie, timeout=30)
+    account.verified = bool(result.get("ok"))
+    account.last_verified_ok = bool(result.get("ok"))
+    account.last_verified_at = utcnow()
     db.session.commit()
-    return ok({"account": account.to_dict()}, "BOSS 登录态校验通过")
+    if not result.get("ok"):
+        err = result.get("error") or {}
+        return error(err.get("message") or "BOSS 登录态校验失败", err.get("code") or "BOSS_VERIFY_FAILED", 409, {"account": account.to_dict()})
+    return ok({"account": account.to_dict(), "status": result.get("data")}, "BOSS 登录态校验通过")
 
 
 @api.get("/boss/candidates/inbox")
@@ -3782,7 +3806,35 @@ def boss_obtained_resumes_import(user):
     payload = request.get_json(force=True)
     cookies = payload.get("cookies") or payload.get("cookie")
     if not cookies:
-        return error("缺少 BOSS Cookie，请先确认浏览器已登录 BOSS", "VALIDATION_ERROR")
+        cookies, account = active_boss_cookie_header(user)
+        if account and not cookies:
+            return error("BOSS Cookie 解密失败，请重新绑定 BOSS 登录态", "COOKIE_DECRYPT_FAILED", 409)
+        if not cookies:
+            return error("缺少 BOSS Cookie，请先绑定并激活 BOSS 登录态", "NO_ACTIVE_BOSS_ACCOUNT", 409)
+    else:
+        parsed = parse_cookie_header(cookies)
+        missing = [name for name in ("wt2", "wbg", "zp_at") if not parsed.get(name)]
+        if missing:
+            return error(f"BOSS Cookie 不完整，缺少 {', '.join(missing)}", "INCOMPLETE_COOKIE", 409, {"missing": missing})
+        cookies = cookie_header(parsed)
+        if payload.get("save_account", True):
+            account_name = str(payload.get("account") or "BOSS 浏览器登录态").strip()[:128]
+            BossAccount.query.filter_by(owner_hr_id=user.id).update({"is_active": False})
+            digest = hashlib.sha256(cookies.encode("utf-8")).hexdigest()
+            account = BossAccount.query.filter_by(owner_hr_id=user.id).order_by(BossAccount.updated_at.desc()).first()
+            if not account:
+                account = BossAccount(owner_hr_id=user.id, account=account_name, cookie_hash=digest)
+                db.session.add(account)
+            else:
+                account.account = account_name
+                account.cookie_hash = digest
+            account.cookie_encrypted = encrypt_text(cookies)
+            account.cookie_count = len(parsed)
+            account.is_active = True
+            account.verified = True
+            account.last_verified_ok = True
+            account.last_verified_at = utcnow()
+            db.session.commit()
     labels = payload.get("labels")
     if not isinstance(labels, list):
         labels = [0]
@@ -4115,7 +4167,20 @@ def latest_boss_account(user):
     query = BossAccount.query
     if user.role != "admin":
         query = query.filter_by(owner_hr_id=user.id)
-    return query.order_by(BossAccount.updated_at.desc()).first()
+    return query.order_by(BossAccount.is_active.desc(), BossAccount.updated_at.desc()).first()
+
+
+def active_boss_cookie_header(user):
+    query = BossAccount.query.filter(BossAccount.cookie_encrypted.isnot(None))
+    if user.role != "admin":
+        query = query.filter_by(owner_hr_id=user.id)
+    account = query.order_by(BossAccount.is_active.desc(), BossAccount.updated_at.desc()).first()
+    if not account:
+        return None, None
+    try:
+        return decrypt_text(account.cookie_encrypted), account
+    except Exception:
+        return None, account
 
 
 def valid_boss_candidates(limit=100):

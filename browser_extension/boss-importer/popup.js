@@ -156,7 +156,7 @@ async function collectBossLoginCookie(tab) {
     }
   }
 
-  const required = ["wt2", "wbg", "zp_at"];
+  const required = ["wt2", "wbg", "zp_at", "__zp_stoken__"];
   const missing = required.filter((key) => !cookieMap.has(key));
   const cookieText = formatCookieHeader(cookieMap);
   if (cookieText.length < 20 || missing.length === required.length) {
@@ -235,15 +235,33 @@ $("bindCookieBtn").addEventListener("click", async () => {
 });
 
 $("obtainedImportBtn").addEventListener("click", async () => {
-  $("status").textContent = "正在确认 BOSS 登录态并启动接口导入...";
+  $("status").textContent = "正在读取 BOSS Cookie 并激活账号...";
 
   try {
+    const { baseUrl, token } = saveConfig();
     const tab = await getActiveBossTab();
     const collected = await collectBossLoginCookie(tab);
     if (collected.missing.length) {
       throw new Error(`BOSS Cookie 不完整，缺少 ${collected.missing.join("、")}，请刷新 BOSS 页面后重试`);
     }
-    await startBackgroundImport("obtained_resume", { cookies: collected.cookieText, limit: 20, labels: [0], interval_sec: 1.5 });
+
+    const bindResponse = await fetch(`${baseUrl}/api/boss/login/browser-cookie`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${token}`
+      },
+      body: JSON.stringify({
+        account: new URL(tab.url).hostname,
+        label: `浏览器导入 ${new Date().toLocaleString()}`,
+        cookies: collected.cookieText
+      })
+    });
+    const bindBody = await bindResponse.json();
+    if (!bindResponse.ok) throw new Error(bindBody.error || "BOSS 登录态绑定失败");
+
+    $("status").textContent = `BOSS 账号已激活，正在后台导入已获取简历...\nCookie 来源：${collected.sources.join("、") || "Cookie"}，共 ${collected.count} 个。`;
+    await startBackgroundImport("obtained_resume", { use_active_account: true, limit: 20, labels: [0], interval_sec: 1.5 });
   } catch (error) {
     $("status").textContent = `失败：${error.message}`;
   }

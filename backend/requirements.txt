@@ -8,3 +8,4 @@ python-dotenv==1.1.1
 pytest==8.4.1
 pypdf==6.4.1
 xlrd==2.0.1
+cryptography==49.0.0

@@ -15,6 +15,7 @@ from typing import Any
 BOSS_INSTALL_TARGET = "git+https://github.com/jackwener/boss-cli.git"
 BOSS_BIN_NAME = "boss"
 REQUIRED_COOKIES = ("wt2", "wbg", "zp_at")
+FULL_SESSION_COOKIES = ("wt2", "wbg", "zp_at", "__zp_stoken__")
 
 
 def parse_cookie_header(raw: Any) -> dict[str, str]:
@@ -36,7 +37,7 @@ def parse_cookie_header(raw: Any) -> dict[str, str]:
 
 
 def cookie_header(cookies: dict[str, str]) -> str:
-    preferred = [name for name in REQUIRED_COOKIES if cookies.get(name)]
+    preferred = [name for name in FULL_SESSION_COOKIES if cookies.get(name)]
     rest = sorted(name for name in cookies if name not in preferred and cookies.get(name))
     return "; ".join(f"{name}={cookies[name]}" for name in [*preferred, *rest])
 
@@ -165,7 +166,21 @@ def iter_records(value: Any) -> list[dict[str, Any]]:
     return records
 
 
-GEEK_KEYS = ("geek_id", "geekId", "encrypt_geek_id", "encryptGeekId", "encryptedGeekId", "encryptGeekIdStr", "encryptFriendId", "encrypt_friend_id", "encryptUid", "encrypt_uid")
+GEEK_KEYS = (
+    "geek_id",
+    "geekId",
+    "encrypt_geek_id",
+    "encryptGeekId",
+    "encryptedGeekId",
+    "encryptGeekIdStr",
+    "encryptUid",
+    "encrypt_uid",
+    "encryptUserId",
+    "encrypt_user_id",
+    "uid",
+    "encryptFriendId",
+    "encrypt_friend_id",
+)
 SECURITY_KEYS = ("security_id", "securityId", "securityID", "lid", "encryptSecurityId")
 JOB_KEYS = ("job", "job_id", "jobId", "encrypt_job_id", "encryptJobId", "encrypt_jobId", "encryptJobIdStr")
 FRIEND_KEYS = ("friend_id", "friendId", "encryptFriendId")
@@ -335,7 +350,7 @@ def looks_like_resume_markdown(text: str) -> bool:
 
 def import_obtained_resumes(raw_cookies: Any, limit: int = 20, labels: list[int] | None = None, interval_sec: float = 1.5) -> dict[str, Any]:
     cookies = parse_cookie_header(raw_cookies)
-    missing = [name for name in REQUIRED_COOKIES if not cookies.get(name)]
+    missing = [name for name in FULL_SESSION_COOKIES if not cookies.get(name)]
     if missing:
         return {"ok": False, "error": {"code": "incomplete_cookie", "message": f"BOSS Cookie 不完整，缺少 {', '.join(missing)}"}}
     header = cookie_header(cookies)

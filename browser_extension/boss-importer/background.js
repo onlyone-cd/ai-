@@ -1,5 +1,5 @@
 const TASK_STATUS_KEY = "bossImportTaskStatus";
-const REQUIRED_BOSS_COOKIES = ["wt2", "wbg", "zp_at"];
+const REQUIRED_BOSS_COOKIES = ["wt2", "wbg", "zp_at", "__zp_stoken__"];
 const ZHIPIN_FILTER = { urls: ["https://zhipin.com/*", "https://*.zhipin.com/*"] };
 let lastBossCookieHeader = "";
 let lastBossCookieCapturedAt = 0;
@@ -143,6 +143,24 @@ async function runBackgroundImport(task) {
         setTaskStatus({ ...task, status: "running", message: "已确认 BOSS 登录态，正在通过 BOSS 接口导入已获取简历..." });
         const body = await postJson(task.baseUrl, task.token, "/api/boss/obtained-resumes/import", {
           cookies: task.options.cookies,
+          save_account: task.options.save_account !== false,
+          limit: task.options.limit || 20,
+          labels: task.options.labels || [0],
+          interval_sec: task.options.interval_sec || 1.5
+        });
+        const imported = body.data?.items?.length || 0;
+        const failed = body.data?.errors?.length || 0;
+        const firstError = body.data?.errors?.[0];
+        const errorText = typeof firstError === "string"
+          ? firstError
+          : (firstError?.error?.message || firstError?.error || firstError?.message || "");
+        const suffix = errorText ? `\n失败原因：${String(errorText).slice(0, 180)}` : "";
+        setTaskStatus({ ...task, status: imported ? "succeeded" : "failed", message: `BOSS 已获取简历导入完成：成功 ${imported} 份，失败 ${failed} 份${suffix}` });
+        return;
+      }
+      if (task.options?.use_active_account) {
+        setTaskStatus({ ...task, status: "running", message: "正在使用已激活 BOSS 账号导入已获取简历..." });
+        const body = await postJson(task.baseUrl, task.token, "/api/boss/obtained-resumes/import", {
           limit: task.options.limit || 20,
           labels: task.options.labels || [0],
           interval_sec: task.options.interval_sec || 1.5

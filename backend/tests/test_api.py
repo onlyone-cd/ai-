@@ -13,7 +13,7 @@ from app import create_app, db
 from app.config import Config
 from app.auth import verify_password
 from app.llm_client import LLMError, chat_json
-from app.models import AgentConversation, AgentMessage, AuditLog, BackgroundTask, BossDraft, BossSyncJob, Candidate, CandidateTag, EmployeeCompensation, EmployeeProfile, EmployeeRecommendation, InterviewAssignment, InterviewFeedback, InterviewSpeechLog, Job, LLMUsage, Match, NotificationLog, OfferRecord, OrganizationUnit, PipelineStage, ResumeAttachment, User
+from app.models import AgentConversation, AgentMessage, AuditLog, BackgroundTask, BossAccount, BossDraft, BossSyncJob, Candidate, CandidateTag, EmployeeCompensation, EmployeeProfile, EmployeeRecommendation, InterviewAssignment, InterviewFeedback, InterviewSpeechLog, Job, LLMUsage, Match, NotificationLog, OfferRecord, OrganizationUnit, PipelineStage, ResumeAttachment, User
 from app.task_service import run_next_task
 
 
@@ -2742,7 +2742,7 @@ def test_boss_extension_can_be_downloaded(client, admin_headers):
         assert "network_probe.js" in archive.namelist()
         manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
         assert "http://120.24.172.139/*" in manifest["host_permissions"]
-        assert manifest["version"] == "0.3.13"
+        assert manifest["version"] == "0.3.14"
         assert manifest["background"]["service_worker"] == "background.js"
         content = archive.read("content.js").decode("utf-8")
         assert "findResumeColumnBounds" in content
@@ -2774,6 +2774,7 @@ def test_boss_extension_can_be_downloaded(client, admin_headers):
         assert "uploadResumeFiles" in background
         assert "/api/boss/obtained-resumes/import" in background
         assert "task.options?.cookies" in background
+        assert "task.options?.use_active_account" in background
         assert "get-captured-boss-cookie" in background
         assert "webRequest.onBeforeSendHeaders" in background
 
@@ -2803,7 +2804,7 @@ def test_boss_obtained_resumes_import_uses_backend_cli(client, admin_headers, mo
     response = client.post(
         "/api/boss/obtained-resumes/import",
         headers=admin_headers,
-        json={"cookies": "wt2=token; wbg=session; zp_at=auth"},
+        json={"cookies": "wt2=token; wbg=session; zp_at=auth; __zp_stoken__=stoken"},
     )
 
     assert response.status_code == 200
@@ -2813,6 +2814,42 @@ def test_boss_obtained_resumes_import_uses_backend_cli(client, admin_headers, mo
     assert data["items"][0]["source"] == "boss"
     assert data["items"][0]["name_masked"] == "已获简历候选人"
     assert {"Java", "MySQL", "Redis"} <= {tag["tag"] for tag in data["items"][0]["tags"]}
+
+
+def test_boss_browser_cookie_saves_encrypted_active_account(client, admin_headers):
+    response = client.post(
+        "/api/boss/login/browser-cookie",
+        headers=admin_headers,
+        json={"cookies": "wt2=token; wbg=session; zp_at=auth; __zp_stoken__=stoken; other=value"},
+    )
+
+    assert response.status_code == 200
+    data = response.get_json()["data"]["account"]
+    assert data["is_active"] is True
+    assert data["cookie_count"] == 5
+    account = BossAccount.query.one()
+    assert account.cookie_encrypted
+    assert "wt2=token" not in account.cookie_encrypted
+    assert account.cookie_hash
+
+
+def test_boss_obtained_resumes_import_uses_active_account(client, admin_headers, monkeypatch):
+    client.post(
+        "/api/boss/login/browser-cookie",
+        headers=admin_headers,
+        json={"cookies": "wt2=active-token; wbg=session; zp_at=auth; __zp_stoken__=stoken"},
+    )
+
+    def fake_import_obtained_resumes(cookies, limit=20, labels=None, interval_sec=1.5):
+        assert "wt2=active-token" in cookies
+        return {"ok": True, "data": {"discovered": 0, "items": [], "errors": []}}
+
+    monkeypatch.setattr("app.routes.import_obtained_resumes", fake_import_obtained_resumes)
+
+    response = client.post("/api/boss/obtained-resumes/import", headers=admin_headers, json={})
+
+    assert response.status_code == 200
+    assert response.get_json()["data"]["downloaded"] == 0
 
 
 def test_boss_cli_inbox_normalizes_encrypt_uid():
@@ -2833,8 +2870,8 @@ def test_boss_cli_inbox_normalizes_encrypt_uid():
         }
     )
 
-    assert items[0]["geek_id"] == "friend-a"
-    assert items[0]["geek_ids"] == ["friend-a", "uid-a"]
+    assert items[0]["geek_id"] == "uid-a"
+    assert items[0]["geek_ids"] == ["uid-a", "friend-a"]
     assert items[0]["security_id"] == "sec-a"
     assert items[0]["job"] == "job-a"
     assert items[0]["friend_id"] == "123"
@@ -2842,7 +2879,7 @@ def test_boss_cli_inbox_normalizes_encrypt_uid():
     assert items[0]["record"]["encryptUid"] == "uid-a"
 
 
-def test_boss_cli_import_retries_alternate_geek_ids(monkeypatch):
+def test_boss_cli_import_prefers_encrypt_uid_over_friend_id(monkeypatch):
     from app import boss_cli_service
 
     calls = []
@@ -2864,24 +2901,24 @@ def test_boss_cli_import_retries_alternate_geek_ids(monkeypatch):
                     ]
                 },
             }
-        if args[:3] == ["recruiter", "resume-download", "friend-a"]:
-            return {"ok": False, "error": {"code": "boss_cli_error", "message": "候选人详情: 操作失败 (code=1092)"}}
         if args[:3] == ["recruiter", "resume-download", "uid-a"]:
             return {
                 "ok": True,
                 "data": "# 候选人A\n\n男 本科 4 年\n\n## 工作经历\n\nJava 后端开发工程师，熟悉 Spring Boot、MySQL、Redis。\n\n## 教育经历\n\n本科 计算机科学与技术",
             }
+        if args[:3] == ["recruiter", "resume-download", "friend-a"]:
+            return {"ok": False, "error": {"code": "boss_cli_error", "message": "候选人详情: 操作失败 (code=1092)"}}
         raise AssertionError(args)
 
     monkeypatch.setattr(boss_cli_service, "run_boss", fake_run_boss)
 
-    result = boss_cli_service.import_obtained_resumes("wt2=token; wbg=session; zp_at=auth", interval_sec=0)
+    result = boss_cli_service.import_obtained_resumes("wt2=token; wbg=session; zp_at=auth; __zp_stoken__=stoken", interval_sec=0)
 
     assert result["ok"] is True
     assert result["data"]["errors"] == []
     assert result["data"]["items"][0]["external_id"] == "boss-cli-uid-a"
-    assert ["recruiter", "resume-download", "friend-a", "--job", "job-a", "--security-id", "sec-a", "-o", "-"] in calls
     assert ["recruiter", "resume-download", "uid-a", "--job", "job-a", "--security-id", "sec-a", "-o", "-"] in calls
+    assert ["recruiter", "resume-download", "friend-a", "--job", "job-a", "--security-id", "sec-a", "-o", "-"] not in calls
 
 
 def test_boss_cli_import_falls_back_to_partial_profile(monkeypatch):
@@ -2913,12 +2950,12 @@ def test_boss_cli_import_falls_back_to_partial_profile(monkeypatch):
 
     monkeypatch.setattr(boss_cli_service, "run_boss", fake_run_boss)
 
-    result = boss_cli_service.import_obtained_resumes("wt2=token; wbg=session; zp_at=auth", interval_sec=0)
+    result = boss_cli_service.import_obtained_resumes("wt2=token; wbg=session; zp_at=auth; __zp_stoken__=stoken", interval_sec=0)
 
     assert result["ok"] is True
     assert result["data"]["errors"] == []
     item = result["data"]["items"][0]
-    assert item["external_id"] == "boss-cli-partial-friend-a"
+    assert item["external_id"] == "boss-cli-partial-uid-a"
     assert item["source"] == "boss_cli_obtained_resume_partial"
     assert "BOSS_PARTIAL_PROFILE" in item["raw_text"]
     assert "完整在线简历详情接口被 BOSS 拒绝" in item["raw_text"]
@@ -2948,8 +2985,8 @@ def test_boss_batch_import_accepts_partial_profile_marker(client, admin_headers)
 def test_boss_obtained_resumes_import_requires_cookie(client, admin_headers):
     response = client.post("/api/boss/obtained-resumes/import", headers=admin_headers, json={})
 
-    assert response.status_code == 400
-    assert response.get_json()["code"] == "VALIDATION_ERROR"
+    assert response.status_code == 409
+    assert response.get_json()["code"] == "NO_ACTIVE_BOSS_ACCOUNT"
 
 
 def test_boss_screen_resume_import_creates_candidate_and_draft(client, admin_headers):
@@ -3218,15 +3255,16 @@ def test_failed_background_tasks_can_be_retried_in_batch(client, admin_headers):
     assert db.session.get(BackgroundTask, first.id).status == "queued"
 
 
-def test_boss_cookie_verify_ai_screen_and_draft_actions(client, admin_headers):
+def test_boss_cookie_verify_ai_screen_and_draft_actions(client, admin_headers, monkeypatch):
+    monkeypatch.setattr("app.routes.run_boss", lambda args, cookie, timeout=30: {"ok": True, "data": {"authenticated": True}})
     bind = client.post(
         "/api/boss/login/browser-cookie",
         headers=admin_headers,
-        json={"account": "hr@boss", "cookie": "sid=abcdefghijklmnopqrstuvwxyz; token=1234567890"},
+        json={"account": "hr@boss", "cookie": "wt2=token; wbg=session; zp_at=auth; __zp_stoken__=stoken"},
     )
     assert bind.status_code == 200
     account = bind.get_json()["data"]["account"]
-    assert account["verified"] is False
+    assert account["verified"] is True
 
     verify = client.post(f"/api/boss/accounts/{account['id']}/verify", headers=admin_headers)
     assert verify.status_code == 200

@@ -790,7 +790,12 @@ class BossAccount(db.Model):
     owner_hr_id = db.Column(db.Integer, db.ForeignKey("user.id"), nullable=False)
     account = db.Column(db.String(128), nullable=False, default="BOSS 账号")
     cookie_hash = db.Column(db.String(64), nullable=False)
+    cookie_encrypted = db.Column(db.Text, nullable=True)
+    cookie_count = db.Column(db.Integer, nullable=False, default=0)
+    is_active = db.Column(db.Boolean, nullable=False, default=True)
     verified = db.Column(db.Boolean, nullable=False, default=False)
+    last_verified_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    last_verified_ok = db.Column(db.Boolean, nullable=False, default=False)
     created_at = db.Column(db.DateTime(timezone=True), default=utcnow)
     updated_at = db.Column(db.DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
@@ -802,7 +807,11 @@ class BossAccount(db.Model):
             "owner_hr_id": self.owner_hr_id,
             "owner_name": self.owner.name if self.owner else "",
             "account": self.account,
+            "cookie_count": self.cookie_count,
+            "is_active": self.is_active,
             "verified": self.verified,
+            "last_verified_at": self.last_verified_at.isoformat() if self.last_verified_at else None,
+            "last_verified_ok": self.last_verified_ok,
             "created_at": self.created_at.isoformat(),
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }

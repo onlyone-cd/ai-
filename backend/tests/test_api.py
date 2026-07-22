@@ -2742,7 +2742,7 @@ def test_boss_extension_can_be_downloaded(client, admin_headers):
         assert "network_probe.js" in archive.namelist()
         manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
         assert "http://120.24.172.139/*" in manifest["host_permissions"]
-        assert manifest["version"] == "0.3.15"
+        assert manifest["version"] == "0.3.16"
         assert manifest["background"]["service_worker"] == "background.js"
         content = archive.read("content.js").decode("utf-8")
         assert "findResumeColumnBounds" in content
@@ -2772,9 +2772,11 @@ def test_boss_extension_can_be_downloaded(client, admin_headers):
         assert "start-background-import" in background
         assert "bossImportTaskStatus" in background
         assert "uploadResumeFiles" in background
+        assert "/api/boss/resume-files/import" in background
         assert "/api/boss/obtained-resumes/import" in background
         assert "task.options?.cookies" in background
         assert "task.options?.use_active_account" in background
+        assert "task.options?.prefer_page_collection" in background
         assert "labels: task.options.labels || [4]" in background
         assert "get-captured-boss-cookie" in background
         assert "webRequest.onBeforeSendHeaders" in background
@@ -3359,6 +3361,32 @@ def test_resume_upload_parses_candidate_and_tags(client, admin_headers):
     assert rescan.get_json()["data"]["scan_status"] == "clean"
     assert ResumeAttachment.query.filter_by(candidate_id=candidate["id"]).count() == 1
     assert {tag["tag"] for tag in candidate["tags"]} >= {"总账会计", "纳税申报", "财务报表", "Excel"}
+
+
+def test_boss_resume_file_import_marks_source_boss(client, admin_headers):
+    content = (
+        "姓名：李金华\n"
+        "性别：男\n"
+        "电话：15064421893\n"
+        "邮箱：15064421893@163.com\n"
+        "3 年 AI 应用开发工程师经验，熟悉 Python、FastAPI、LangGraph、RAG、大模型应用。\n"
+        "教育经历：菏泽学院 本科 计算机科学与技术"
+    )
+    response = client.post(
+        "/api/boss/resume-files/import",
+        headers=admin_headers,
+        data={"files": (BytesIO(content.encode("utf-8")), "boss-resume.txt")},
+        content_type="multipart/form-data",
+    )
+
+    assert response.status_code == 200
+    data = response.get_json()["data"]
+    candidate = data["candidate"]
+    assert candidate["source"] == "boss"
+    assert candidate["name_masked"] == "李金华"
+    assert candidate["phone_masked"] == "15064421893"
+    assert candidate["attachments"][0]["source"] == "boss"
+    assert data["batch"]["source"] == "boss"
 
 
 def test_resume_upload_accepts_multiple_files_and_zip(client, admin_headers):

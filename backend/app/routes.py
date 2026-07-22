@@ -1983,6 +1983,73 @@ def upload_resume(user):
     )
 
 
+@api.post("/boss/resume-files/import")
+@login_required
+@roles_required("admin", "manager", "recruiter")
+def boss_resume_files_import(user):
+    files = request.files.getlist("files") or request.files.getlist("file")
+    files = [file for file in files if file and file.filename]
+    if not files:
+        return error("请上传 BOSS 附件简历文件")
+    max_files = int(current_app.config.get("MAX_UPLOAD_FILES", 20))
+    if len(files) > max_files:
+        return error(f"单次最多上传 {max_files} 个文件", "TOO_MANY_FILES", 413)
+
+    batches = []
+    candidates = []
+    errors = []
+    for file in files:
+        try:
+            if Path(file.filename).suffix.lower() in ARCHIVE_EXTENSIONS:
+                archive_batches, archive_candidates, archive_errors = parse_and_save_archive(file, user)
+                parsed_batches = archive_batches
+                parsed_candidates = archive_candidates
+                errors.extend(archive_errors)
+            else:
+                batch, candidate = parse_and_save_resume(file, user)
+                parsed_batches = [batch]
+                parsed_candidates = [candidate]
+            for batch in parsed_batches:
+                batch.source = "boss"
+                batches.append(batch)
+            for candidate in parsed_candidates:
+                candidate.source = "boss"
+                candidates.append(candidate)
+                for attachment in candidate.attachments:
+                    attachment.source = "boss"
+        except ValueError as exc:
+            errors.append({"filename": file.filename, "error": str(exc)})
+        except Exception as exc:
+            errors.append({"filename": file.filename, "error": str(exc)})
+
+    if not candidates:
+        return error("BOSS 附件简历解析失败", "PARSE_FAILED", 400, {"errors": errors})
+
+    emit_notification_event(
+        user,
+        "candidate_imported",
+        {
+            "candidate_name": candidates[0].name_masked if candidates else "",
+            "source": "boss",
+            "success_count": len(candidates),
+            "failed_count": len(errors),
+        },
+    )
+    db.session.commit()
+    return ok(
+        {
+            "batch": batches[0].to_dict() if batches else None,
+            "candidate": candidates[0].to_dict(detail=True),
+            "batches": [batch.to_dict() for batch in batches],
+            "candidates": [candidate.to_dict(detail=True) for candidate in candidates],
+            "errors": errors,
+            "success_count": len(candidates),
+            "failed_count": len(errors),
+        },
+        f"BOSS 附件简历已解析 {len(candidates)} 份，失败 {len(errors)} 份",
+    )
+
+
 @api.post("/resume/<int:candidate_id>/retry-parse")
 @login_required
 @roles_required("admin", "manager", "recruiter")

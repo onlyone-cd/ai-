@@ -118,7 +118,7 @@ async function uploadResumeFiles(baseUrl, token, files) {
   }
   if (![...form.keys()].length) return { imported: 0, failed: errors.length, errors };
 
-  const response = await fetch(`${baseUrl}/api/resume/upload`, {
+  const response = await fetch(`${baseUrl}/api/boss/resume-files/import`, {
     method: "POST",
     headers: { "Authorization": `Bearer ${token}` },
     body: form
@@ -135,10 +135,55 @@ async function uploadResumeFiles(baseUrl, token, files) {
   };
 }
 
+async function importObtainedFromCurrentPage(task) {
+  setTaskStatus({ ...task, status: "running", message: "正在优先采集当前 BOSS 页面附件简历..." });
+  const collected = await sendTabMessage(task.tabId, { type: "collect-obtained-resumes" });
+  if (collected?.error) throw new Error(collected.error);
+  const sourceTabs = collected?.source_tabs?.length ? `，来源：${collected.source_tabs.join("、")}` : "";
+  const items = collected?.items || [];
+  const files = collected?.files || [];
+  if (files.length) {
+    setTaskStatus({ ...task, status: "running", message: `已发现 ${files.length} 个附件简历${sourceTabs}，正在下载并按完整附件解析...` });
+    const fileResult = await uploadResumeFiles(task.baseUrl, task.token, files);
+    if (!fileResult.imported) {
+      const message = fileResult.errors?.[0]?.error || "附件简历下载或解析失败";
+      throw new Error(message);
+    }
+    return {
+      imported: fileResult.imported,
+      failed: fileResult.failed + (collected?.errors?.length || 0),
+      message: `BOSS 附件简历导入完成：成功 ${fileResult.imported} 份，失败 ${fileResult.failed + (collected?.errors?.length || 0)} 份`
+    };
+  }
+  if (items.length) {
+    setTaskStatus({ ...task, status: "running", message: `未发现附件，已采集 ${items.length} 条在线简历文本${sourceTabs}，正在导入系统...` });
+    const itemResult = await importCandidateItems(task.baseUrl, task.token, items, "extension_obtained_resume");
+    if (!itemResult.imported) {
+      throw new Error(collected?.errors?.[0]?.error || "未成功导入已获取简历文本");
+    }
+    return {
+      imported: itemResult.imported,
+      failed: itemResult.failed + (collected?.errors?.length || 0),
+      message: `BOSS 在线简历导入完成：成功 ${itemResult.imported} 份，失败 ${itemResult.failed + (collected?.errors?.length || 0)} 份`
+    };
+  }
+  throw new Error(collected?.errors?.[0]?.error || "当前页面未采集到附件或在线简历正文");
+}
+
 async function runBackgroundImport(task) {
   setTaskStatus({ ...task, status: "running", message: "后台任务已启动，可关闭插件窗口" });
   try {
     if (task.operation === "obtained_resume") {
+      if (task.options?.prefer_page_collection) {
+        try {
+          const pageResult = await importObtainedFromCurrentPage(task);
+          setTaskStatus({ ...task, status: "succeeded", message: pageResult.message });
+          return;
+        } catch (pageError) {
+          if (!task.options?.use_active_account && !task.options?.cookies) throw pageError;
+          setTaskStatus({ ...task, status: "running", message: `当前页面附件采集未完成：${pageError.message}。正在改用 BOSS 后端接口导入在线简历...` });
+        }
+      }
       if (task.options?.cookies) {
         setTaskStatus({ ...task, status: "running", message: "已确认 BOSS 登录态，正在通过 BOSS 接口导入已获取简历..." });
         const body = await postJson(task.baseUrl, task.token, "/api/boss/obtained-resumes/import", {

@@ -2835,13 +2835,56 @@ def test_boss_cli_inbox_normalizes_encrypt_uid():
 
     assert items == [
         {
-            "geek_id": "uid-a",
+            "geek_id": "friend-a",
+            "geek_ids": ["friend-a", "uid-a"],
             "security_id": "sec-a",
             "job": "job-a",
             "friend_id": "123",
             "name": "候选人A",
         }
     ]
+
+
+def test_boss_cli_import_retries_alternate_geek_ids(monkeypatch):
+    from app import boss_cli_service
+
+    calls = []
+
+    def fake_run_boss(args, cookies, timeout=60, want_json=True):
+        calls.append(args)
+        if args[:2] == ["recruiter", "inbox"]:
+            return {
+                "ok": True,
+                "data": {
+                    "friendList": [
+                        {
+                            "name": "候选人A",
+                            "encryptFriendId": "friend-a",
+                            "encryptUid": "uid-a",
+                            "securityId": "sec-a",
+                            "encryptJobId": "job-a",
+                        }
+                    ]
+                },
+            }
+        if args[:3] == ["recruiter", "resume-download", "friend-a"]:
+            return {"ok": False, "error": {"code": "boss_cli_error", "message": "候选人详情: 操作失败 (code=1092)"}}
+        if args[:3] == ["recruiter", "resume-download", "uid-a"]:
+            return {
+                "ok": True,
+                "data": "# 候选人A\n\n男 本科 4 年\n\n## 工作经历\n\nJava 后端开发工程师，熟悉 Spring Boot、MySQL、Redis。\n\n## 教育经历\n\n本科 计算机科学与技术",
+            }
+        raise AssertionError(args)
+
+    monkeypatch.setattr(boss_cli_service, "run_boss", fake_run_boss)
+
+    result = boss_cli_service.import_obtained_resumes("wt2=token; wbg=session; zp_at=auth", interval_sec=0)
+
+    assert result["ok"] is True
+    assert result["data"]["errors"] == []
+    assert result["data"]["items"][0]["external_id"] == "boss-cli-uid-a"
+    assert ["recruiter", "resume-download", "friend-a", "--job", "job-a", "--security-id", "sec-a", "-o", "-"] in calls
+    assert ["recruiter", "resume-download", "uid-a", "--job", "job-a", "--security-id", "sec-a", "-o", "-"] in calls
 
 
 def test_boss_obtained_resumes_import_requires_cookie(client, admin_headers):

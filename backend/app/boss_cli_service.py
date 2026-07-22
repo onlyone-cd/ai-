@@ -164,18 +164,7 @@ def iter_records(value: Any) -> list[dict[str, Any]]:
     return records
 
 
-GEEK_KEYS = (
-    "geek_id",
-    "geekId",
-    "encrypt_geek_id",
-    "encryptGeekId",
-    "encryptedGeekId",
-    "encryptGeekIdStr",
-    "encryptUid",
-    "encrypt_uid",
-    "encryptFriendId",
-    "encrypt_friend_id",
-)
+GEEK_KEYS = ("geek_id", "geekId", "encrypt_geek_id", "encryptGeekId", "encryptedGeekId", "encryptGeekIdStr", "encryptFriendId", "encrypt_friend_id", "encryptUid", "encrypt_uid")
 SECURITY_KEYS = ("security_id", "securityId", "securityID", "lid", "encryptSecurityId")
 JOB_KEYS = ("job", "job_id", "jobId", "encrypt_job_id", "encryptJobId", "encrypt_jobId", "encryptJobIdStr")
 FRIEND_KEYS = ("friend_id", "friendId", "encryptFriendId")
@@ -199,16 +188,41 @@ def find_first(value: Any, keys: tuple[str, ...]) -> str:
     return ""
 
 
+def find_all(value: Any, keys: tuple[str, ...]) -> list[str]:
+    found: list[str] = []
+    seen: set[str] = set()
+
+    def walk(item: Any) -> None:
+        if isinstance(item, dict):
+            for key in keys:
+                raw = item.get(key)
+                if raw:
+                    text = str(raw)
+                    if text not in seen:
+                        seen.add(text)
+                        found.append(text)
+            for child in item.values():
+                walk(child)
+        elif isinstance(item, list):
+            for child in item:
+                walk(child)
+
+    walk(value)
+    return found
+
+
 def normalize_inbox_items(data: Any) -> list[dict[str, str]]:
     seen: set[str] = set()
     items: list[dict[str, str]] = []
     for record in iter_records(data):
-        geek_id = find_first(record, GEEK_KEYS)
+        geek_ids = find_all(record, GEEK_KEYS)
+        geek_id = geek_ids[0] if geek_ids else ""
         if not geek_id or geek_id in seen:
             continue
         seen.add(geek_id)
         items.append({
             "geek_id": geek_id,
+            "geek_ids": geek_ids,
             "security_id": find_first(record, SECURITY_KEYS),
             "job": find_first(record, JOB_KEYS),
             "friend_id": find_first(record, FRIEND_KEYS),
@@ -264,15 +278,28 @@ def import_obtained_resumes(raw_cookies: Any, limit: int = 20, labels: list[int]
     for index, item in enumerate(deduped):
         if index > 0 and interval_sec:
             time.sleep(interval_sec)
-        args = ["recruiter", "resume-download", item["geek_id"]]
-        if item.get("job"):
-            args += ["--job", item["job"]]
-        if item.get("security_id"):
-            args += ["--security-id", item["security_id"]]
-        args += ["-o", "-"]
-        downloaded = run_boss(args, header, timeout=90, want_json=False)
+        downloaded = None
+        attempted: list[dict[str, Any]] = []
+        for geek_id in item.get("geek_ids") or [item["geek_id"]]:
+            args = ["recruiter", "resume-download", geek_id]
+            if item.get("job"):
+                args += ["--job", item["job"]]
+            if item.get("security_id"):
+                args += ["--security-id", item["security_id"]]
+            args += ["-o", "-"]
+            current = run_boss(args, header, timeout=90, want_json=False)
+            if current.get("ok"):
+                downloaded = current
+                item["geek_id"] = geek_id
+                break
+            attempted.append({"geek_id": geek_id, "error": current.get("error")})
+            code = (current.get("error") or {}).get("code")
+            if code in {"not_authenticated", "needs_stoken", "rate_limited"}:
+                downloaded = current
+                break
+        downloaded = downloaded or {"ok": False, "error": attempted[-1]["error"] if attempted else {"code": "boss_cli_error", "message": "BOSS 简历下载失败"}}
         if not downloaded.get("ok"):
-            errors.append({"geek_id": item["geek_id"], "name": item.get("name"), "error": downloaded.get("error")})
+            errors.append({"geek_id": item["geek_id"], "name": item.get("name"), "attempted": attempted, "error": downloaded.get("error")})
             if (downloaded.get("error") or {}).get("code") == "rate_limited":
                 break
             continue

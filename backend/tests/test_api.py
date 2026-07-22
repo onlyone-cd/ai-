@@ -2990,6 +2990,30 @@ def test_boss_obtained_resumes_import_requires_cookie(client, admin_headers):
     assert response.get_json()["code"] == "NO_ACTIVE_BOSS_ACCOUNT"
 
 
+def test_boss_markdown_resume_parses_profile_and_tags():
+    from app.resume_service import build_candidate, infer_tags
+
+    raw_text = (
+        "# 李金华 男 |25岁|本科|3年 **求职状态:** 离职-随时到岗\n\n"
+        "## 工作经历\n"
+        "### 中裕合普软件技术有限公司\n"
+        "**ai应用工程师**\n\n"
+        "## 教育经历\n"
+        "### 菏泽学院 - 203\n"
+        "计算机科学与技术"
+    )
+
+    candidate = build_candidate(raw_text, "boss-batch", 1)
+    tags = infer_tags(raw_text)
+
+    assert candidate.name_masked == "李金华"
+    assert candidate.title == "ai应用工程师"
+    assert candidate.resume_json["gender"] == "男"
+    assert candidate.resume_json["experience_analysis"]["years"] == 3
+    assert candidate.resume_json["education"][0]["school"] == "菏泽学院 - 203"
+    assert any(tag["tag"] == "大模型" for tag in tags)
+
+
 def test_boss_screen_resume_import_creates_candidate_and_draft(client, admin_headers):
     response = client.post(
         "/api/boss/screen-resume/import",

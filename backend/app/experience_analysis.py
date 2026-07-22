@@ -17,6 +17,12 @@ def analyze_experience(text):
                 year_candidates.append(value)
     if year_candidates:
         years = max(year_candidates)
+    if not years:
+        head = "\n".join(text.splitlines()[:10])
+        for match in re.finditer(r"(?:^|[|｜,，\s])(\d+(?:\.\d+)?)\s*年(?:$|[|｜,，\s])", head):
+            value = float(match.group(1))
+            if 0 < value <= 50:
+                years = max(years, value)
     month_match = re.search(r"(\d+)\s*个月", text)
     if not years and month_match:
         years = round(int(month_match.group(1)) / 12, 1)

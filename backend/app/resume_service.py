@@ -130,13 +130,17 @@ def parse_and_save_text(raw_text: str, owner, source="boss", filename="boss-scre
     raw_text = normalize_resume_text(raw_text)
     if len(raw_text) < 30:
         raise ValueError("采集到的简历文本过短")
+    try:
+        llm_result = parse_resume_with_deepseek(raw_text)
+    except Exception:  # noqa: BLE001
+        llm_result = None
     batch_id = uuid.uuid4().hex[:12]
     batch = UploadBatch(id=batch_id, owner_hr_id=owner.id, source=source, filename=filename)
     db.session.add(batch)
     db.session.flush()
-    candidate = build_candidate(raw_text, batch_id, owner.id)
+    candidate = build_candidate(raw_text, batch_id, owner.id, llm_result=llm_result)
     candidate.source = source
-    candidate = upsert_candidate(candidate, infer_tags(raw_text))
+    candidate = upsert_candidate(candidate, infer_tags(raw_text, llm_result=llm_result))
     batch.success_count = 1
     batch.status = "ok"
     db.session.commit()
@@ -370,7 +374,7 @@ def extract_profile(text: str):
     phone = first_match(r"1[3-9]\d{9}", re.sub(r"[\s-]", "", text))
     name = extract_name(text)
     gender = extract_gender(text)
-    city = first_match(r"(?:城市|期望城市|所在地)[:：\s]*([\u4e00-\u9fa5A-Za-z]{2,20})", text) or "未知"
+    city = first_match(r"(?:城市|期望城市|所在地|现居住地|工作城市)[:：\s]*([\u4e00-\u9fa5A-Za-z]{2,20})", text) or "未知"
     title = infer_title(text)
     return {"name": name, "gender": gender, "email": email, "phone": phone, "city": city, "title": title}
 
@@ -404,10 +408,17 @@ def extract_name(text: str):
     explicit = first_match(r"(?:姓名|Name)[:：\s]*([\u4e00-\u9fa5A-Za-z]{2,20})", text)
     if explicit:
         return explicit
+    markdown_heading = first_match(r"^#{1,6}\s*([^\n#]{2,80})", text)
+    if markdown_heading:
+        first_part = re.split(r"\s*[|｜,，;；]\s*|\s+(?:男|女|male|female)\b", strip_markdown(markdown_heading), maxsplit=1, flags=re.I)[0]
+        first_part = re.sub(r"\s+", "", first_part).strip()
+        if is_probable_name(first_part):
+            return first_part
 
     head_lines = [line.strip() for line in text.splitlines()[:12] if line.strip()]
     for line in head_lines:
-        cleaned = re.sub(r"(?:男|女|男性|女性|male|female|\d{1,2}\s*岁|1[3-9]\d{9}|[\w.+-]+@[\w-]+(?:\.[\w-]+)+)", " ", line, flags=re.I)
+        cleaned = strip_markdown(line)
+        cleaned = re.sub(r"(?:男|女|男性|女性|male|female|\d{1,2}\s*岁|1[3-9]\d{9}|[\w.+-]+@[\w-]+(?:\.[\w-]+)+)", " ", cleaned, flags=re.I)
         cleaned = re.sub(r"[|,，/：:\-_\s]+", " ", cleaned).strip()
         if is_probable_name(cleaned):
             return cleaned
@@ -427,6 +438,9 @@ def infer_title(text: str):
     explicit = first_match(r"(?:求职意向|应聘岗位|目标岗位|期望职位|应聘职位)[:：\s]*([^\n，,；;。]{2,40})", text)
     if explicit:
         return re.sub(r"[()（）|/]+", " ", explicit).strip()
+    boss_title = infer_boss_markdown_title(text)
+    if boss_title:
+        return boss_title
     title_keywords = [
         "总账会计",
         "会计",
@@ -451,6 +465,38 @@ def infer_title(text: str):
         if keyword.lower() in lowered:
             return keyword
     return "候选人"
+
+
+def strip_markdown(value: str):
+    text = str(value or "")
+    text = re.sub(r"^#{1,6}\s*", "", text)
+    text = re.sub(r"[*_`]+", "", text)
+    text = re.sub(r"\[(.*?)\]\(.*?\)", r"\1", text)
+    return text.strip()
+
+
+def infer_boss_markdown_title(text: str):
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    in_experience = False
+    company_seen = False
+    for line in lines:
+        clean = strip_markdown(line).strip()
+        if any(word in clean for word in ["工作经历", "工作经验", "实习经历"]):
+            in_experience = True
+            company_seen = False
+            continue
+        if in_experience and any(word in clean for word in ["教育经历", "项目经历", "个人优势", "专业技能"]):
+            break
+        if not in_experience:
+            continue
+        if re.search(r"公司|科技|软件|信息|网络|集团|有限", clean):
+            company_seen = True
+            continue
+        if company_seen:
+            title = clean.strip(" -:：")
+            if 2 <= len(title) <= 40 and not re.search(r"\d{4}|年|月|描述|职责", title):
+                return title
+    return ""
 
 
 def infer_tags(text: str, llm_result=None):
@@ -492,7 +538,7 @@ def fallback_resume_sections(text: str):
         "experience": ["工作经历", "工作经验", "实习经历"],
         "projects": ["项目经历", "项目经验"],
     }
-    for line in [line.strip(" \t-•") for line in text.splitlines()]:
+    for line in [strip_markdown(line).strip(" \t-•") for line in text.splitlines()]:
         if not line:
             continue
         matched = next((key for key, names in heading_map.items() if any(name in line for name in names)), None)
@@ -512,11 +558,20 @@ def section_lines_to_items(lines, kind):
     items = []
     for part in (parts or [text])[:8]:
         item = {"description": part[:1200]}
-        first = part.splitlines()[0]
+        first = strip_markdown(part.splitlines()[0])
         if kind == "education":
             item["school"] = first
+            degree = first_match(r"(本科|大专|硕士|博士|中专|高中)", part)
+            major = first_match(r"(?:专业|主修)[:：\s]*([^\n，,；;]{2,40})", part) or first_match(r"\n\s*([^\n，,；;]{2,40}(?:科学|技术|工程|管理|会计|设计|营销|教育)[^\n，,；;]*)", part)
+            if degree:
+                item["degree"] = degree
+            if major:
+                item["major"] = strip_markdown(major)
         elif kind == "experience":
             item["company"] = first
+            title = infer_boss_markdown_title("## 工作经历\n" + part)
+            if title:
+                item["title"] = title
         elif kind == "projects":
             item["name"] = first
         period = first_match(r"(\d{4}[./年-]\d{0,2}.*?(?:至今|\d{4}[./年-]\d{0,2}))", part)

@@ -145,7 +145,7 @@ async function runBackgroundImport(task) {
           cookies: task.options.cookies,
           save_account: task.options.save_account !== false,
           limit: task.options.limit || 20,
-          labels: task.options.labels || [0],
+          labels: task.options.labels || [4],
           interval_sec: task.options.interval_sec || 1.5
         });
         const imported = body.data?.items?.length || 0;
@@ -162,7 +162,7 @@ async function runBackgroundImport(task) {
         setTaskStatus({ ...task, status: "running", message: "正在使用已激活 BOSS 账号导入已获取简历..." });
         const body = await postJson(task.baseUrl, task.token, "/api/boss/obtained-resumes/import", {
           limit: task.options.limit || 20,
-          labels: task.options.labels || [0],
+          labels: task.options.labels || [4],
           interval_sec: task.options.interval_sec || 1.5
         });
         const imported = body.data?.items?.length || 0;

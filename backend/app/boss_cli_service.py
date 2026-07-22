@@ -354,7 +354,7 @@ def import_obtained_resumes(raw_cookies: Any, limit: int = 20, labels: list[int]
     if missing:
         return {"ok": False, "error": {"code": "incomplete_cookie", "message": f"BOSS Cookie 不完整，缺少 {', '.join(missing)}"}}
     header = cookie_header(cookies)
-    labels = labels or [0]
+    labels = labels or [4]
     limit = max(1, min(int(limit or 20), 50))
     interval_sec = max(0, float(interval_sec or 0))
 

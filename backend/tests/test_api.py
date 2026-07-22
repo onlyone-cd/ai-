@@ -2742,7 +2742,7 @@ def test_boss_extension_can_be_downloaded(client, admin_headers):
         assert "network_probe.js" in archive.namelist()
         manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
         assert "http://120.24.172.139/*" in manifest["host_permissions"]
-        assert manifest["version"] == "0.3.14"
+        assert manifest["version"] == "0.3.15"
         assert manifest["background"]["service_worker"] == "background.js"
         content = archive.read("content.js").decode("utf-8")
         assert "findResumeColumnBounds" in content
@@ -2775,6 +2775,7 @@ def test_boss_extension_can_be_downloaded(client, admin_headers):
         assert "/api/boss/obtained-resumes/import" in background
         assert "task.options?.cookies" in background
         assert "task.options?.use_active_account" in background
+        assert "labels: task.options.labels || [4]" in background
         assert "get-captured-boss-cookie" in background
         assert "webRequest.onBeforeSendHeaders" in background
 
@@ -2783,7 +2784,7 @@ def test_boss_obtained_resumes_import_uses_backend_cli(client, admin_headers, mo
     def fake_import_obtained_resumes(cookies, limit=20, labels=None, interval_sec=1.5):
         assert "wt2=token" in cookies
         assert limit == 20
-        assert labels == [0]
+        assert labels == [4]
         return {
             "ok": True,
             "data": {

@@ -3837,11 +3837,11 @@ def boss_obtained_resumes_import(user):
             db.session.commit()
     labels = payload.get("labels")
     if not isinstance(labels, list):
-        labels = [0]
+        labels = [4]
     try:
         labels = [int(label) for label in labels[:8]]
     except (TypeError, ValueError):
-        labels = [0]
+        labels = [4]
     result = import_obtained_resumes(
         cookies,
         limit=int(payload.get("limit") or 20),

@@ -261,7 +261,7 @@ $("obtainedImportBtn").addEventListener("click", async () => {
     if (!bindResponse.ok) throw new Error(bindBody.error || "BOSS 登录态绑定失败");
 
     $("status").textContent = `BOSS 账号已激活，正在后台导入已获取简历...\nCookie 来源：${collected.sources.join("、") || "Cookie"}，共 ${collected.count} 个。`;
-    await startBackgroundImport("obtained_resume", { use_active_account: true, limit: 20, labels: [0], interval_sec: 1.5 });
+    await startBackgroundImport("obtained_resume", { use_active_account: true, limit: 20, labels: [4], interval_sec: 1.5 });
   } catch (error) {
     $("status").textContent = `失败：${error.message}`;
   }

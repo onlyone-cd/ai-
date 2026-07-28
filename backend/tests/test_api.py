@@ -2742,7 +2742,7 @@ def test_boss_extension_can_be_downloaded(client, admin_headers):
         assert "network_probe.js" in archive.namelist()
         manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
         assert "http://120.24.172.139/*" in manifest["host_permissions"]
-        assert manifest["version"] == "0.3.20"
+        assert manifest["version"] == "0.3.21"
         assert manifest["background"]["service_worker"] == "background.js"
         content = archive.read("content.js").decode("utf-8")
         assert "findResumeColumnBounds" in content
@@ -2760,6 +2760,9 @@ def test_boss_extension_can_be_downloaded(client, admin_headers):
         assert "can_import_obtained_resume" in content
         assert "resolveBossAttachmentUrl" in content
         assert "attachment_resume_page" in content
+        assert "resume-btn-file" in content
+        assert "obtained_resume_chat" in content
+        assert "attachment_action" in content
         assert "BOSS 附件简历页" in content
         assert "preview4boss" in content
         assert "\\u4e0d\\u80fd\\u91c7\\u96c6\\u5019\\u9009\\u4eba\\u7684\\u671f\\u671b\\u804c\\u4f4d" in content
@@ -2773,7 +2776,8 @@ def test_boss_extension_can_be_downloaded(client, admin_headers):
         assert "autoListImportBtn" in popup
         assert "startBackgroundImport" in popup
         assert "preferPageCollection" in popup
-        assert "page_type === \"attachment_resume\"" in popup
+        assert "[\"attachment_resume\", \"obtained_resume_chat\"].includes" in popup
+        assert "obtained_resume_chat" in popup
         background = archive.read("background.js").decode("utf-8")
         assert "start-background-import" in background
         assert "bossImportTaskStatus" in background

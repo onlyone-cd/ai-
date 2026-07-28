@@ -476,7 +476,13 @@ function findResumeTabButtons() {
 
 function isObtainedResumeListPage() {
   const text = `${location.href}\n${document.title}\n${(document.body.innerText || "").slice(0, 5000)}`;
-  return countTextHits(text, ["\u5df2\u83b7\u53d6\u7b80\u5386", "\u9644\u4ef6\u7b80\u5386", "\u5728\u7ebf\u7b80\u5386"]) >= 2 && countTextHits(text, ["\u6c9f\u901a", "\u6c9f\u901a\u4e2d", "\u5df2\u4ea4\u6362\u7535\u8bdd", "\u5df2\u4ea4\u6362\u5fae\u4fe1"]) >= 1;
+  const selectedObtainedLabel = [...document.querySelectorAll(".chat-label-item.selected,[class*='chat-label-item'][class*='selected']")]
+    .filter(isVisibleElement)
+    .some((node) => (node.innerText || node.textContent || "").includes("\u5df2\u83b7\u53d6\u7b80\u5386"));
+  const chatWithAttachment = /\/web\/chat\/index/i.test(location.href) && hasBossAttachmentResumeAction();
+  return selectedObtainedLabel ||
+    chatWithAttachment ||
+    (countTextHits(text, ["\u5df2\u83b7\u53d6\u7b80\u5386", "\u9644\u4ef6\u7b80\u5386", "\u5728\u7ebf\u7b80\u5386"]) >= 2 && countTextHits(text, ["\u6c9f\u901a", "\u6c9f\u901a\u4e2d", "\u5df2\u4ea4\u6362\u7535\u8bdd", "\u5df2\u4ea4\u6362\u5fae\u4fe1"]) >= 1);
 }
 
 function findObtainedResumeCards() {
@@ -528,6 +534,12 @@ function scoreResumeOpenAction(node, text) {
 }
 
 async function clickAttachmentPreview() {
+  const direct = findBossAttachmentActionButton();
+  if (direct) {
+    direct.click();
+    await sleep(1000);
+    return true;
+  }
   const candidates = [...document.querySelectorAll("button,a,div,span")]
     .filter(isVisibleElement)
     .map((node) => ({ node, text: (node.innerText || node.textContent || "").replace(/\s+/g, " ").trim() }))
@@ -540,6 +552,32 @@ async function clickAttachmentPreview() {
   (candidates[0].node.closest?.("button,a,[role='button'],[role='tab']") || candidates[0].node).click();
   await sleep(1000);
   return true;
+}
+
+function findBossAttachmentActionButton() {
+  const selectors = [
+    "a.resume-btn-file",
+    ".resume-btn-file",
+    ".resume-file-content a",
+    ".resume-file-content button",
+    "[class*='resume-file-content'] a",
+    "[class*='resume-file-content'] button",
+    "[class*='resume-file-content'] [role='button']"
+  ];
+  for (const selector of selectors) {
+    const node = [...document.querySelectorAll(selector)]
+      .filter(isVisibleElement)
+      .find((item) => {
+        const text = `${item.innerText || item.textContent || ""} ${item.getAttribute("title") || ""} ${item.getAttribute("href") || ""}`;
+        return /附件简历|点击预览|preview4boss|attachment-resume|pdf-viewer|\.pdf|\.docx?/i.test(text);
+      });
+    if (node) return node.closest?.("button,a,[role='button']") || node;
+  }
+  return null;
+}
+
+function hasBossAttachmentResumeAction() {
+  return Boolean(findBossAttachmentActionButton());
 }
 
 function scoreAttachmentAction(node, text) {
@@ -1142,6 +1180,7 @@ function inspectBossPage() {
   const resumeTabs = findResumeTabButtons();
   const hasResumeTabs = resumeTabs.length > 0;
   const hasObtainedResumeList = isObtainedResumeListPage();
+  const hasAttachmentAction = hasBossAttachmentResumeAction();
   const hasOnlineResumeModal = countTextHits(`${pageSignal}\n${resumeRootText}`, ["\u671f\u671b\u804c\u4f4d", "\u5de5\u4f5c\u7ecf\u5386"]) >= 2 || hasResumeTabs;
   const hasProfileHeader = /(\d+\s*\u5c81|\u5c81).*(\u5927\u4e13|\u672c\u79d1|\u7855\u58eb|\u535a\u58eb|\u5e74\u4ee5\u4e0a|\u79bb\u804c|\u6d3b\u8dc3)/s.test(`${pageSignal}\n${resumeRootText}`);
   const isBossPage = /(^|\.)zhipin\.com$/i.test(location.hostname);
@@ -1159,6 +1198,10 @@ function inspectBossPage() {
     pageType = "attachment_resume";
     label = "BOSS 附件简历页";
     message = "已识别附件简历预览页，可直接下载附件并导入解析";
+  } else if (hasObtainedResumeList && hasAttachmentAction) {
+    pageType = "obtained_resume_chat";
+    label = "BOSS 已获取附件简历";
+    message = "已识别右侧附件简历按钮，可采集当前候选人附件，也可一键导入已获取列表";
   } else if (isResumePage) {
     pageType = "resume";
     label = "\u5019\u9009\u4eba\u7b80\u5386\u9875";
@@ -1177,8 +1220,8 @@ function inspectBossPage() {
     page_type: pageType,
     label,
     message,
-    can_import_resume: isResumePage,
-    can_import_obtained_resume: isResumePage || isAttachmentResumePage || hasObtainedResumeList,
+    can_import_resume: isResumePage || hasAttachmentAction,
+    can_import_obtained_resume: isResumePage || isAttachmentResumePage || hasObtainedResumeList || hasAttachmentAction,
     can_sync_jobs: isJobListPage,
     can_batch_import_candidates: isCandidateListPage,
     resume_signals: resumeSignals,
@@ -1187,6 +1230,7 @@ function inspectBossPage() {
     candidate_list_signals: candidateListSignals,
     obtained_resume_list: hasObtainedResumeList,
     attachment_resume_page: isAttachmentResumePage,
+    attachment_action: hasAttachmentAction,
     resume_tabs: resumeTabs.map((item) => ({ label: item.label, available: item.available })),
     url: location.href,
     title: document.title

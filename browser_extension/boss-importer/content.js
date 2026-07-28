@@ -554,6 +554,7 @@ function scoreAttachmentAction(node, text) {
 
 function collectAttachmentFileLinks(label) {
   const files = [];
+  const currentPageFile = buildAttachmentFileDescriptor(location.href, label || document.title || "boss-resume");
   const candidates = [...document.querySelectorAll("a[href],iframe[src],embed[src],object[data],[data-url],[data-href],[data-src],[data-download-url],[data-file-url]")]
     .filter(isVisibleElement)
     .map((node) => {
@@ -570,7 +571,7 @@ function collectAttachmentFileLinks(label) {
       return buildAttachmentFileDescriptor(url, text || label);
     })
     .filter(Boolean);
-  for (const file of [...candidates, ...recentCapturedFiles(label)]) {
+  for (const file of [currentPageFile, ...candidates, ...recentCapturedFiles(label)].filter(Boolean)) {
     if (!files.some((item) => item.url === file.url)) files.push(file);
   }
   return files;
@@ -584,9 +585,10 @@ function buildAttachmentFileDescriptor(url, label) {
   } catch (_error) {
     return null;
   }
+  absolute = resolveBossAttachmentUrl(absolute);
   if (!/^https:\/\/([^/]+\.)?zhipin\.com\//i.test(absolute)) return null;
   const marker = `${absolute}\n${label || ""}`;
-  if (!/\.(pdf|docx?|txt)(\?|$)/i.test(absolute) && !/resume|attachment|annex|file|download|pdf|doc|简历|附件/i.test(marker)) {
+  if (!/\.(pdf|docx?|txt)(\?|$)/i.test(absolute) && !/resume|attachment|annex|file|download|pdf|doc|preview4boss|简历|附件/i.test(marker)) {
     return null;
   }
   const inferred = decodeURIComponent((absolute.split("?")[0].split("/").pop() || "").slice(0, 120));
@@ -594,6 +596,55 @@ function buildAttachmentFileDescriptor(url, label) {
   let filename = /\.(pdf|docx?|txt)$/i.test(cleanLabel) ? cleanLabel : inferred;
   if (!/\.(pdf|docx?|txt)$/i.test(filename)) filename = `${cleanLabel || "boss-resume"}.pdf`;
   return { url: absolute, filename: filename.slice(0, 120), label: cleanLabel };
+}
+
+function resolveBossAttachmentUrl(rawUrl) {
+  let current = String(rawUrl || "");
+  for (let depth = 0; depth < 5; depth += 1) {
+    let parsed = null;
+    try {
+      parsed = new URL(current, location.href);
+    } catch (_error) {
+      break;
+    }
+    const nested = parsed.searchParams.get("url") ||
+      parsed.searchParams.get("file") ||
+      parsed.searchParams.get("src") ||
+      parsed.searchParams.get("downloadUrl");
+    if (!nested) return parsed.href;
+    const shouldUnwrap = /attachment-resume|pdf-viewer|preview|download/i.test(parsed.pathname) ||
+      /preview4boss|download|pdf-viewer|attachment-resume/i.test(nested);
+    if (!shouldUnwrap) return parsed.href;
+    const decoded = decodeNestedUrl(nested);
+    try {
+      current = new URL(decoded, parsed.origin).href;
+    } catch (_error) {
+      return parsed.href;
+    }
+  }
+  try {
+    return new URL(current, location.href).href;
+  } catch (_error) {
+    return current;
+  }
+}
+
+function decodeNestedUrl(value) {
+  let decoded = String(value || "");
+  if (/^[a-z][a-z0-9+.-]*:|^\//i.test(decoded)) {
+    return decoded;
+  }
+  for (let index = 0; index < 2; index += 1) {
+    try {
+      const next = decodeURIComponent(decoded);
+      if (next === decoded) break;
+      decoded = next;
+      if (/^[a-z][a-z0-9+.-]*:|^\//i.test(decoded)) break;
+    } catch (_error) {
+      break;
+    }
+  }
+  return decoded;
 }
 
 function rememberBossFile(payload) {

@@ -264,7 +264,31 @@ async function autoCollectCommunicationResumes(options = {}) {
   return { items, errors, count: items.length, attempted_count: cards.length, page_url: location.href, title: document.title };
 }
 
-async function collectObtainedResumeText() {
+async function collectObtainedResumeText(options = {}) {
+  const mode = options?.mode || "";
+  if (mode === "online_resume") {
+    await ensureBossNewGreetingOnlineResumeReady();
+    const opened = await openOnlineResumeTab();
+    if (!opened) {
+      throw new Error("未找到新招呼里的在线简历按钮，请先确认右侧候选人有在线简历");
+    }
+    await sleep(500);
+    const result = await collectResumeText();
+    const rawText = normalizeResumeText(`${getCurrentObtainedResumeHeader()}\n${result.raw_text || ""}`);
+    if (!hasResumeSignal(rawText)) throw new Error("在线简历已打开，但未采集到有效简历正文");
+    return {
+      raw_text: rawText,
+      items: [],
+      files: [],
+      errors: [],
+      chunk_count: result.chunk_count || 1,
+      text_length: rawText.length,
+      page_url: location.href,
+      title: document.title,
+      source: "boss_new_greeting_online_resume",
+      source_tabs: ["新招呼在线简历"]
+    };
+  }
   if ((/\/web\/chat\/index/i.test(location.href) || hasBossChatMenu()) && !hasBossVisibleResumeAction()) {
     await ensureBossObtainedResumeChatReady();
   }
@@ -277,6 +301,20 @@ async function collectObtainedResumeText() {
   const originalActive = tabs.find((item) => isActiveTabButton(item.button));
 
   if (!tabs.length) {
+    if (hasBossOnlineResumeAction()) {
+      await openOnlineResumeTab();
+      await sleep(500);
+      try {
+        const result = await collectResumeText();
+        return {
+          ...result,
+          files,
+          source_tabs: ["当前在线简历"]
+        };
+      } catch (_error) {
+        // Continue to the attachment path below when the visible online action is not usable.
+      }
+    }
     await clickAttachmentPreview().catch(() => {});
     await sleep(300);
     for (const file of collectAttachmentFileLinks(getCurrentObtainedResumeHeader() || "boss-resume")) {
@@ -623,6 +661,59 @@ function hasBossNewGreetingLabel() {
   const nodes = [...document.querySelectorAll(".chat-label-item.selected,[class*='chat-label-item'][class*='selected']")]
     .filter(isVisibleElement);
   return nodes.some((node) => (node.innerText || node.textContent || "").includes("新招呼"));
+}
+
+function findBossNewGreetingLabelButton() {
+  const selectors = [
+    ".label-list .chat-label-item",
+    "[class*='label-list'] [class*='chat-label-item']",
+    ".chat-label-item",
+    "button",
+    "a",
+    "[role='button']"
+  ];
+  for (const selector of selectors) {
+    const node = [...document.querySelectorAll(selector)].filter(isVisibleElement).find((item) => {
+      const text = (item.innerText || item.textContent || "").replace(/\s+/g, "");
+      return text.includes("新招呼");
+    });
+    if (node) return node.closest?.(".chat-label-item,button,a,[role='button']") || node;
+  }
+  return null;
+}
+
+async function ensureBossNewGreetingOnlineResumeReady() {
+  if (!/\/web\/chat\/index/i.test(location.href)) {
+    const chatButton = findBossChatMenuButton();
+    if (chatButton) {
+      chatButton.click();
+      await sleep(1200);
+    } else {
+      location.assign("https://www.zhipin.com/web/chat/index");
+      await sleep(1800);
+    }
+  }
+  const newGreetingButton = findBossNewGreetingLabelButton();
+  if (newGreetingButton && !/\bselected\b/.test(newGreetingButton.className || "")) {
+    newGreetingButton.click();
+    await sleep(1200);
+  }
+  if (!hasBossOnlineResumeAction()) {
+    const firstCard = findCommunicationCandidateCards()[0];
+    if (firstCard) {
+      firstCard.scrollIntoView({ block: "center", inline: "nearest" });
+      await sleep(220);
+      firstCard.click();
+      await waitForDetailPaneChange(compactCandidateLabel(firstCard.innerText || firstCard.textContent || ""));
+    }
+  }
+  const onlineButton = findBossOnlineResumeActionButton();
+  if (onlineButton) {
+    onlineButton.scrollIntoView({ block: "center", inline: "nearest" });
+    await sleep(250);
+    return true;
+  }
+  throw new Error("未识别到新招呼候选人的在线简历按钮");
 }
 
 function hasBossChatMenu() {
@@ -1679,7 +1770,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
   if (message?.type === "collect-obtained-resumes") {
-    collectObtainedResumeText().then(sendResponse).catch((error) => sendResponse({ error: error.message }));
+    collectObtainedResumeText(message.options || {}).then(sendResponse).catch((error) => sendResponse({ error: error.message }));
     return true;
   }
   if (message?.type === "auto-collect-communication-resumes") {

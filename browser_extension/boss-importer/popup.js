@@ -70,11 +70,13 @@ function stateClass(state) {
 function setActionButtons(enabled, state = currentPageState) {
   $("bindCookieBtn").disabled = !enabled || !state?.is_boss_page;
   $("importBtn").disabled = !enabled || !state?.can_import_resume;
+  $("newGreetingImportBtn").disabled = !enabled || !state?.is_boss_page;
   $("obtainedImportBtn").disabled = !enabled || !state?.is_boss_page;
   $("autoListImportBtn").disabled = !enabled || !(state?.can_batch_import_candidates || state?.page_type === "candidate_list");
   $("syncJobsBtn").disabled = !enabled || !state?.can_sync_jobs;
   $("batchImportBtn").disabled = !enabled || !state?.can_batch_import_candidates;
   $("importBtn").title = state?.can_import_resume ? "" : "请打开 BOSS 在线简历详情";
+  $("newGreetingImportBtn").title = state?.is_boss_page ? "自动进入 BOSS 新招呼，打开当前可见候选人的在线简历并导入" : "请先打开 BOSS 直聘页面";
   $("obtainedImportBtn").title = state?.is_boss_page ? "确认已登录 BOSS 后，从 BOSS 接口导入已获取简历" : "请先打开 BOSS 直聘页面";
   $("autoListImportBtn").title = state?.can_batch_import_candidates ? "" : "请打开 BOSS 沟通列表";
   $("syncJobsBtn").title = state?.can_sync_jobs ? "" : "请打开 BOSS 职位管理/岗位列表页";
@@ -296,7 +298,8 @@ $("importBtn").addEventListener("click", async () => {
         prefer_page_collection: true,
         strict_page_collection: true,
         use_active_account: false,
-        limit: 1
+        limit: 1,
+        mode: currentPageState?.page_type === "new_greeting_online_resume" ? "online_resume" : "attachment_resume"
       });
       return;
     }
@@ -304,6 +307,23 @@ $("importBtn").addEventListener("click", async () => {
     const collected = await chrome.tabs.sendMessage(tab.id, { type: "collect-resume" });
     $("status").textContent = `已采集 ${collected.chunk_count || 1} 段，正在上传解析...`;
     await uploadResumePayload(baseUrl, token, collected, "在线简历导入成功");
+  } catch (error) {
+    $("status").textContent = `失败：${error.message}`;
+  }
+});
+
+$("newGreetingImportBtn").addEventListener("click", async () => {
+  $("status").textContent = "正在进入 BOSS 新招呼并打开在线简历...";
+
+  try {
+    await getActiveBossTab();
+    await startBackgroundImport("obtained_resume", {
+      prefer_page_collection: true,
+      strict_page_collection: true,
+      use_active_account: false,
+      limit: 1,
+      mode: "online_resume"
+    });
   } catch (error) {
     $("status").textContent = `失败：${error.message}`;
   }

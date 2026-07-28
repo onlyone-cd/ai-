@@ -92,6 +92,25 @@ async function importCandidateItems(baseUrl, token, items, source) {
   };
 }
 
+async function validateResumeBlob(blob, response, file) {
+  const contentType = String(response.headers.get("content-type") || blob.type || "").toLowerCase();
+  const sample = new Uint8Array(await blob.slice(0, 16).arrayBuffer());
+  const head = [...sample].map((byte) => String.fromCharCode(byte)).join("");
+  const isPdf = head.startsWith("%PDF");
+  const isZipDocx = sample[0] === 0x50 && sample[1] === 0x4b;
+  const isOldDoc = sample[0] === 0xd0 && sample[1] === 0xcf && sample[2] === 0x11 && sample[3] === 0xe0;
+  const isText = /^text\/plain/.test(contentType) || /\.txt(\?|$)/i.test(file?.url || file?.filename || "");
+  const isHtml = /html|json|xml/.test(contentType) || /^<!doctype|^<html|^\s*</i.test(head);
+  if (isHtml) {
+    throw new Error("BOSS 返回的是预览页，不是完整附件文件，请改用在线简历采集");
+  }
+  if (!isPdf && !isZipDocx && !isOldDoc && !isText) {
+    const typeText = contentType || "unknown";
+    throw new Error(`BOSS 附件格式无法识别（${typeText}），已跳过上传`);
+  }
+  return true;
+}
+
 async function uploadResumeFiles(baseUrl, token, files) {
   const unique = [];
   const seen = new Set();
@@ -110,10 +129,14 @@ async function uploadResumeFiles(baseUrl, token, files) {
       if (!response.ok) throw new Error(`下载失败 HTTP ${response.status}`);
       const blob = await response.blob();
       if (!blob.size) throw new Error("下载文件为空");
+      await validateResumeBlob(blob, response, file);
       const filename = file.filename || `boss-resume-${Date.now()}.pdf`;
       form.append("files", blob, filename);
     } catch (error) {
-      errors.push({ filename: file.filename || file.url, error: error.message });
+      const message = /Stream has ended unexpectedly/i.test(error.message)
+        ? "BOSS 附件下载流中断，请改用在线简历采集或刷新 BOSS 后重试"
+        : error.message;
+      errors.push({ filename: file.filename || file.url, error: message });
     }
   }
   if (![...form.keys()].length) return { imported: 0, failed: errors.length, errors };
@@ -137,7 +160,7 @@ async function uploadResumeFiles(baseUrl, token, files) {
 
 async function importObtainedFromCurrentPage(task) {
   setTaskStatus({ ...task, status: "running", message: "正在优先采集当前 BOSS 页面附件简历..." });
-  const collected = await sendTabMessage(task.tabId, { type: "collect-obtained-resumes" });
+  const collected = await sendTabMessage(task.tabId, { type: "collect-obtained-resumes", options: task.options || {} });
   if (collected?.error) throw new Error(collected.error);
   const sourceTabs = collected?.source_tabs?.length ? `，来源：${collected.source_tabs.join("、")}` : "";
   const items = collected?.items || [];

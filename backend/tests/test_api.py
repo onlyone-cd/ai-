@@ -2742,7 +2742,7 @@ def test_boss_extension_can_be_downloaded(client, admin_headers):
         assert "network_probe.js" in archive.namelist()
         manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
         assert "http://120.24.172.139/*" in manifest["host_permissions"]
-        assert manifest["version"] == "0.3.23"
+        assert manifest["version"] == "0.3.24"
         assert manifest["background"]["service_worker"] == "background.js"
         content = archive.read("content.js").decode("utf-8")
         assert "findResumeColumnBounds" in content
@@ -2779,6 +2779,7 @@ def test_boss_extension_can_be_downloaded(client, admin_headers):
         assert "refreshPageState" in popup
         assert "can_sync_jobs" in popup
         assert "obtainedImportBtn" in popup
+        assert "newGreetingImportBtn" in popup
         assert "autoListImportBtn" in popup
         assert "startBackgroundImport" in popup
         assert "preferPageCollection" in popup
@@ -2788,6 +2789,7 @@ def test_boss_extension_can_be_downloaded(client, admin_headers):
         assert "start-background-import" in background
         assert "bossImportTaskStatus" in background
         assert "uploadResumeFiles" in background
+        assert "validateResumeBlob" in background
         assert "/api/boss/resume-files/import" in background
         assert "/api/boss/obtained-resumes/import" in background
         assert "task.options?.cookies" in background

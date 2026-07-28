@@ -1145,7 +1145,8 @@ function inspectBossPage() {
   const hasOnlineResumeModal = countTextHits(`${pageSignal}\n${resumeRootText}`, ["\u671f\u671b\u804c\u4f4d", "\u5de5\u4f5c\u7ecf\u5386"]) >= 2 || hasResumeTabs;
   const hasProfileHeader = /(\d+\s*\u5c81|\u5c81).*(\u5927\u4e13|\u672c\u79d1|\u7855\u58eb|\u535a\u58eb|\u5e74\u4ee5\u4e0a|\u79bb\u804c|\u6d3b\u8dc3)/s.test(`${pageSignal}\n${resumeRootText}`);
   const isBossPage = /(^|\.)zhipin\.com$/i.test(location.hostname);
-  const isResumePage = isBossPage && (resumeRootSignals >= 2 || resumeSignals >= 3 || hasOnlineResumeModal || (resumeSignals >= 2 && hasProfileHeader));
+  const isAttachmentResumePage = isBossPage && /attachment-resume|pdf-viewer|preview4boss|\/wflow\/zpgeek\/download\/preview4boss/i.test(location.href);
+  const isResumePage = isBossPage && (isAttachmentResumePage || resumeRootSignals >= 2 || resumeSignals >= 3 || hasOnlineResumeModal || (resumeSignals >= 2 && hasProfileHeader));
   const isJobListPage = isBossPage && !isResumePage && (jobSignals >= 2 || ((/\/job|\/position|position|job/i.test(location.href)) && hasJobCards));
   const isCandidateListPage = isBossPage && !isResumePage && !isJobListPage && candidateListSignals >= 1;
   let pageType = "unknown";
@@ -1154,6 +1155,10 @@ function inspectBossPage() {
   if (!isBossPage) {
     label = "\u975e BOSS \u9875\u9762";
     message = "\u8bf7\u5148\u6253\u5f00 BOSS \u76f4\u8058\u9875\u9762";
+  } else if (isAttachmentResumePage) {
+    pageType = "attachment_resume";
+    label = "BOSS 附件简历页";
+    message = "已识别附件简历预览页，可直接下载附件并导入解析";
   } else if (isResumePage) {
     pageType = "resume";
     label = "\u5019\u9009\u4eba\u7b80\u5386\u9875";
@@ -1173,7 +1178,7 @@ function inspectBossPage() {
     label,
     message,
     can_import_resume: isResumePage,
-    can_import_obtained_resume: isResumePage || hasObtainedResumeList,
+    can_import_obtained_resume: isResumePage || isAttachmentResumePage || hasObtainedResumeList,
     can_sync_jobs: isJobListPage,
     can_batch_import_candidates: isCandidateListPage,
     resume_signals: resumeSignals,
@@ -1181,6 +1186,7 @@ function inspectBossPage() {
     job_signals: jobSignals,
     candidate_list_signals: candidateListSignals,
     obtained_resume_list: hasObtainedResumeList,
+    attachment_resume_page: isAttachmentResumePage,
     resume_tabs: resumeTabs.map((item) => ({ label: item.label, available: item.available })),
     url: location.href,
     title: document.title

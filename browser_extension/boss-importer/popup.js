@@ -271,7 +271,7 @@ $("obtainedImportBtn").addEventListener("click", async () => {
       : `BOSS 账号已激活，当前不是简历页面，正在直接通过后端导入已获取简历...\nCookie 来源：${collected.sources.join("、") || "Cookie"}，共 ${collected.count} 个。`;
     await startBackgroundImport("obtained_resume", {
       prefer_page_collection: preferPageCollection,
-      strict_page_collection: currentPageState?.page_type === "resume",
+      strict_page_collection: currentPageState?.page_type === "resume" || currentPageState?.page_type === "attachment_resume",
       use_active_account: true,
       limit: 20,
       labels: [4],
@@ -288,6 +288,16 @@ $("importBtn").addEventListener("click", async () => {
 
   try {
     requirePageCapability("can_import_resume", "当前不是在线简历详情，不能采集简历");
+    if (currentPageState?.page_type === "attachment_resume") {
+      $("status").textContent = "已识别 BOSS 附件简历页，正在后台下载附件并导入解析...";
+      await startBackgroundImport("obtained_resume", {
+        prefer_page_collection: true,
+        strict_page_collection: true,
+        use_active_account: false,
+        limit: 1
+      });
+      return;
+    }
     const tab = await getActiveBossTab();
     const collected = await chrome.tabs.sendMessage(tab.id, { type: "collect-resume" });
     $("status").textContent = `已采集 ${collected.chunk_count || 1} 段，正在上传解析...`;

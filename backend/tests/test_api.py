@@ -2742,7 +2742,7 @@ def test_boss_extension_can_be_downloaded(client, admin_headers):
         assert "network_probe.js" in archive.namelist()
         manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
         assert "http://120.24.172.139/*" in manifest["host_permissions"]
-        assert manifest["version"] == "0.3.21"
+        assert manifest["version"] == "0.3.22"
         assert manifest["background"]["service_worker"] == "background.js"
         content = archive.read("content.js").decode("utf-8")
         assert "findResumeColumnBounds" in content
@@ -2762,6 +2762,9 @@ def test_boss_extension_can_be_downloaded(client, admin_headers):
         assert "attachment_resume_page" in content
         assert "resume-btn-file" in content
         assert "obtained_resume_chat" in content
+        assert "ensureBossObtainedResumeChatReady" in content
+        assert "findBossObtainedResumeLabelButton" in content
+        assert "findBossChatMenuButton" in content
         assert "attachment_action" in content
         assert "BOSS 附件简历页" in content
         assert "preview4boss" in content

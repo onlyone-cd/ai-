@@ -265,6 +265,9 @@ async function autoCollectCommunicationResumes(options = {}) {
 }
 
 async function collectObtainedResumeText() {
+  if (/\/web\/chat\/index/i.test(location.href) || hasBossChatMenu()) {
+    await ensureBossObtainedResumeChatReady();
+  }
   if (isObtainedResumeListPage()) {
     return collectObtainedResumeList();
   }
@@ -578,6 +581,79 @@ function findBossAttachmentActionButton() {
 
 function hasBossAttachmentResumeAction() {
   return Boolean(findBossAttachmentActionButton());
+}
+
+function hasBossChatMenu() {
+  const selectors = [
+    ".menu-chat .router-link-active",
+    ".menu-chat .router-link-exact-active",
+    "dl.menu-chat dt a",
+    "[class*='menu-chat'] a"
+  ];
+  return selectors.some((selector) => [...document.querySelectorAll(selector)].filter(isVisibleElement).some((node) => {
+    const text = `${node.innerText || node.textContent || ""} ${node.getAttribute("href") || ""}`;
+    return /沟通|chat/i.test(text);
+  }));
+}
+
+function findBossChatMenuButton() {
+  const selectors = [
+    ".menu-chat .router-link-active",
+    ".menu-chat .router-link-exact-active",
+    "dl.menu-chat dt a",
+    "[class*='menu-chat'] a"
+  ];
+  for (const selector of selectors) {
+    const node = [...document.querySelectorAll(selector)].filter(isVisibleElement).find((item) => {
+      const text = `${item.innerText || item.textContent || ""} ${item.getAttribute("href") || ""}`;
+      return /沟通|chat/i.test(text);
+    });
+    if (node) return node.closest?.("a,button,[role='button']") || node;
+  }
+  return null;
+}
+
+function findBossObtainedResumeLabelButton() {
+  const selectors = [
+    ".label-list .chat-label-item",
+    "[class*='label-list'] [class*='chat-label-item']",
+    ".chat-label-item",
+    "button",
+    "a",
+    "[role='button']"
+  ];
+  for (const selector of selectors) {
+    const node = [...document.querySelectorAll(selector)].filter(isVisibleElement).find((item) => {
+      const text = (item.innerText || item.textContent || "").replace(/\s+/g, "");
+      return text.includes("已获取简历");
+    });
+    if (node) return node.closest?.(".chat-label-item,button,a,[role='button']") || node;
+  }
+  return null;
+}
+
+async function ensureBossObtainedResumeChatReady() {
+  if (!/\/web\/chat\/index/i.test(location.href)) {
+    const chatButton = findBossChatMenuButton();
+    if (chatButton) {
+      chatButton.click();
+      await sleep(1200);
+    } else {
+      location.assign("https://www.zhipin.com/web/chat/index");
+      await sleep(1800);
+    }
+  }
+  const obtainedButton = findBossObtainedResumeLabelButton();
+  if (obtainedButton && !/\bselected\b/.test(obtainedButton.className || "")) {
+    obtainedButton.click();
+    await sleep(1200);
+  }
+  const attachmentButton = findBossAttachmentActionButton();
+  if (attachmentButton) {
+    attachmentButton.scrollIntoView({ block: "center", inline: "nearest" });
+    await sleep(250);
+  }
+  return true;
 }
 
 function scoreAttachmentAction(node, text) {
@@ -1181,13 +1257,15 @@ function inspectBossPage() {
   const hasResumeTabs = resumeTabs.length > 0;
   const hasObtainedResumeList = isObtainedResumeListPage();
   const hasAttachmentAction = hasBossAttachmentResumeAction();
+  const hasChatMenu = hasBossChatMenu();
   const hasOnlineResumeModal = countTextHits(`${pageSignal}\n${resumeRootText}`, ["\u671f\u671b\u804c\u4f4d", "\u5de5\u4f5c\u7ecf\u5386"]) >= 2 || hasResumeTabs;
   const hasProfileHeader = /(\d+\s*\u5c81|\u5c81).*(\u5927\u4e13|\u672c\u79d1|\u7855\u58eb|\u535a\u58eb|\u5e74\u4ee5\u4e0a|\u79bb\u804c|\u6d3b\u8dc3)/s.test(`${pageSignal}\n${resumeRootText}`);
   const isBossPage = /(^|\.)zhipin\.com$/i.test(location.hostname);
   const isAttachmentResumePage = isBossPage && /attachment-resume|pdf-viewer|preview4boss|\/wflow\/zpgeek\/download\/preview4boss/i.test(location.href);
   const isResumePage = isBossPage && (isAttachmentResumePage || resumeRootSignals >= 2 || resumeSignals >= 3 || hasOnlineResumeModal || (resumeSignals >= 2 && hasProfileHeader));
   const isJobListPage = isBossPage && !isResumePage && (jobSignals >= 2 || ((/\/job|\/position|position|job/i.test(location.href)) && hasJobCards));
-  const isCandidateListPage = isBossPage && !isResumePage && !isJobListPage && candidateListSignals >= 1;
+  const isBossChatPage = isBossPage && /\/web\/chat\/index/i.test(location.href) && hasChatMenu;
+  const isCandidateListPage = isBossPage && !isResumePage && !isJobListPage && (candidateListSignals >= 1 || isBossChatPage);
   let pageType = "unknown";
   let label = "\u672a\u8bc6\u522b\u9875\u9762";
   let message = "\u8bf7\u6253\u5f00 BOSS \u5019\u9009\u4eba\u7b80\u5386\u8be6\u60c5\u3001\u6c9f\u901a\u5217\u8868\u6216\u804c\u4f4d\u7ba1\u7406\u9875";
@@ -1213,7 +1291,7 @@ function inspectBossPage() {
   } else if (isCandidateListPage) {
     pageType = "candidate_list";
     label = hasObtainedResumeList ? "\u5df2\u83b7\u53d6\u7b80\u5386\u5217\u8868" : "\u6c9f\u901a/\u5019\u9009\u4eba\u5217\u8868";
-    message = hasObtainedResumeList ? "\u53ef\u4e00\u952e\u5bfc\u5165\u5df2\u83b7\u53d6\u7684\u5728\u7ebf/\u9644\u4ef6\u7b80\u5386" : "\u53ef\u4f7f\u7528\u81ea\u52a8\u6253\u5f00\u6c9f\u901a\u5217\u8868\u5bfc\u5165\u6216\u6279\u91cf\u5019\u9009\u4eba\uff1b\u5355\u4efd\u7b80\u5386\u8bf7\u6253\u5f00\u7b80\u5386\u8be6\u60c5";
+    message = hasObtainedResumeList ? "\u53ef\u4e00\u952e\u5bfc\u5165\u5df2\u83b7\u53d6\u7684\u5728\u7ebf/\u9644\u4ef6\u7b80\u5386" : "\u5df2\u8bc6\u522b BOSS \u6c9f\u901a\u6a21\u5757\uff0c\u53ef\u81ea\u52a8\u6253\u5f00\u6c9f\u901a\u5217\u8868\u5e76\u5bfc\u5165\u53ef\u89c1\u7b80\u5386";
   }
   return {
     is_boss_page: isBossPage,
@@ -1228,6 +1306,8 @@ function inspectBossPage() {
     resume_root_signals: resumeRootSignals,
     job_signals: jobSignals,
     candidate_list_signals: candidateListSignals,
+    chat_menu: hasChatMenu,
+    chat_page: isBossChatPage,
     obtained_resume_list: hasObtainedResumeList,
     attachment_resume_page: isAttachmentResumePage,
     attachment_action: hasAttachmentAction,

@@ -348,7 +348,13 @@ def looks_like_resume_markdown(text: str) -> bool:
     return sum(signals) >= 2
 
 
-def import_obtained_resumes(raw_cookies: Any, limit: int = 20, labels: list[int] | None = None, interval_sec: float = 1.5) -> dict[str, Any]:
+def import_obtained_resumes(
+    raw_cookies: Any,
+    limit: int = 20,
+    labels: list[int] | None = None,
+    interval_sec: float = 1.5,
+    allow_partial: bool = False,
+) -> dict[str, Any]:
     cookies = parse_cookie_header(raw_cookies)
     missing = [name for name in FULL_SESSION_COOKIES if not cookies.get(name)]
     if missing:
@@ -405,7 +411,7 @@ def import_obtained_resumes(raw_cookies: Any, limit: int = 20, labels: list[int]
         downloaded = downloaded or {"ok": False, "error": attempted[-1]["error"] if attempted else {"code": "boss_cli_error", "message": "BOSS 简历下载失败"}}
         if not downloaded.get("ok"):
             partial_text = build_partial_resume_markdown(item, attempted)
-            if looks_like_resume_markdown(partial_text):
+            if allow_partial and looks_like_resume_markdown(partial_text):
                 items.append({
                     "external_id": f"boss-cli-partial-{item['geek_id']}",
                     "name": item.get("name") or "",
@@ -418,7 +424,13 @@ def import_obtained_resumes(raw_cookies: Any, limit: int = 20, labels: list[int]
                     "import_warning": downloaded.get("error"),
                 })
                 continue
-            errors.append({"geek_id": item["geek_id"], "name": item.get("name"), "attempted": attempted, "error": downloaded.get("error")})
+            errors.append({
+                "geek_id": item["geek_id"],
+                "name": item.get("name"),
+                "attempted": attempted,
+                "error": downloaded.get("error"),
+                "partial_available": looks_like_resume_markdown(partial_text),
+            })
             if (downloaded.get("error") or {}).get("code") == "rate_limited":
                 break
             continue

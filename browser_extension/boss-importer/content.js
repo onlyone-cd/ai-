@@ -269,17 +269,52 @@ async function collectObtainedResumeText() {
     return collectObtainedResumeList();
   }
   const collected = [];
+  const files = [];
   const tabs = findResumeTabButtons();
   const originalActive = tabs.find((item) => isActiveTabButton(item.button));
 
   if (!tabs.length) {
-    return collectResumeText();
+    await clickAttachmentPreview().catch(() => {});
+    await sleep(300);
+    for (const file of collectAttachmentFileLinks(getCurrentObtainedResumeHeader() || "boss-resume")) {
+      if (!files.some((item) => item.url === file.url)) files.push(file);
+    }
+    try {
+      const result = await collectResumeText();
+      return {
+        ...result,
+        files,
+        source_tabs: files.length ? ["当前简历页附件/正文"] : ["当前简历页正文"]
+      };
+    } catch (error) {
+      if (files.length) {
+        return {
+          raw_text: "",
+          files,
+          items: [],
+          errors: [],
+          chunk_count: files.length,
+          text_length: 0,
+          page_url: location.href,
+          title: document.title,
+          source_tabs: ["当前简历页附件"]
+        };
+      }
+      throw error;
+    }
   }
 
   for (const item of tabs) {
     if (!item.available) continue;
     item.button.click();
     await sleep(500);
+    if (/附件|文件|PDF|DOC/i.test(item.label)) {
+      await clickAttachmentPreview().catch(() => {});
+      await sleep(260);
+    }
+    for (const file of collectAttachmentFileLinks(item.label)) {
+      if (!files.some((current) => current.url === file.url)) files.push(file);
+    }
     try {
       const result = await collectResumeText();
       if (result.raw_text) {
@@ -296,12 +331,26 @@ async function collectObtainedResumeText() {
   }
 
   if (!collected.length) {
+    if (files.length) {
+      return {
+        raw_text: "",
+        files,
+        items: [],
+        errors: [],
+        chunk_count: files.length,
+        text_length: 0,
+        page_url: location.href,
+        title: document.title,
+        source_tabs: ["附件简历"]
+      };
+    }
     return collectResumeText();
   }
 
   const rawText = normalizeResumeText(collected.map((item) => `【${item.label}】\n${item.text}`).join("\n\n"));
   return {
     raw_text: rawText,
+    files,
     chunk_count: collected.reduce((sum, item) => sum + item.chunks, 0),
     text_length: rawText.length,
     page_url: location.href,
@@ -505,10 +554,18 @@ function scoreAttachmentAction(node, text) {
 
 function collectAttachmentFileLinks(label) {
   const files = [];
-  const candidates = [...document.querySelectorAll("a[href],[data-url],[data-href],[data-download-url],[data-file-url]")]
+  const candidates = [...document.querySelectorAll("a[href],iframe[src],embed[src],object[data],[data-url],[data-href],[data-src],[data-download-url],[data-file-url]")]
     .filter(isVisibleElement)
     .map((node) => {
-      const url = node.getAttribute("href") || node.dataset?.url || node.dataset?.href || node.dataset?.downloadUrl || node.dataset?.fileUrl || "";
+      const url = node.getAttribute("href") ||
+        node.getAttribute("src") ||
+        node.getAttribute("data") ||
+        node.dataset?.url ||
+        node.dataset?.href ||
+        node.dataset?.src ||
+        node.dataset?.downloadUrl ||
+        node.dataset?.fileUrl ||
+        "";
       const text = node.getAttribute("download") || node.getAttribute("title") || node.innerText || node.textContent || "";
       return buildAttachmentFileDescriptor(url, text || label);
     })
@@ -528,6 +585,10 @@ function buildAttachmentFileDescriptor(url, label) {
     return null;
   }
   if (!/^https:\/\/([^/]+\.)?zhipin\.com\//i.test(absolute)) return null;
+  const marker = `${absolute}\n${label || ""}`;
+  if (!/\.(pdf|docx?|txt)(\?|$)/i.test(absolute) && !/resume|attachment|annex|file|download|pdf|doc|简历|附件/i.test(marker)) {
+    return null;
+  }
   const inferred = decodeURIComponent((absolute.split("?")[0].split("/").pop() || "").slice(0, 120));
   const cleanLabel = String(label || inferred || "boss-resume").replace(/[\\/:*?"<>|]+/g, " ").replace(/\s+/g, " ").trim();
   let filename = /\.(pdf|docx?|txt)$/i.test(cleanLabel) ? cleanLabel : inferred;

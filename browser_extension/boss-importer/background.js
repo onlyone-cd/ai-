@@ -142,10 +142,11 @@ async function importObtainedFromCurrentPage(task) {
   const sourceTabs = collected?.source_tabs?.length ? `，来源：${collected.source_tabs.join("、")}` : "";
   const items = collected?.items || [];
   const files = collected?.files || [];
+  const rawText = String(collected?.raw_text || "").trim();
   if (files.length) {
     setTaskStatus({ ...task, status: "running", message: `已发现 ${files.length} 个附件简历${sourceTabs}，正在下载并按完整附件解析...` });
     const fileResult = await uploadResumeFiles(task.baseUrl, task.token, files);
-    if (!fileResult.imported && !items.length) {
+    if (!fileResult.imported && !items.length && rawText.length < 30) {
       const message = fileResult.errors?.[0]?.error || "附件简历下载或解析失败";
       throw new Error(message);
     }
@@ -160,6 +161,15 @@ async function importObtainedFromCurrentPage(task) {
         imported: itemResult.imported,
         failed: itemResult.failed + fileResult.failed + (collected?.errors?.length || 0),
         message: `BOSS 在线简历导入完成：成功 ${itemResult.imported} 份，失败 ${itemResult.failed + fileResult.failed + (collected?.errors?.length || 0)} 份`
+      };
+    }
+    if (!fileResult.imported && rawText.length >= 30) {
+      setTaskStatus({ ...task, status: "running", message: `附件下载失败，改用当前页面完整文本导入${sourceTabs}...` });
+      const message = await importResume(task.baseUrl, task.token, collected, "BOSS 当前简历页导入完成");
+      return {
+        imported: 1,
+        failed: fileResult.failed + (collected?.errors?.length || 0),
+        message
       };
     }
     return {
@@ -180,6 +190,15 @@ async function importObtainedFromCurrentPage(task) {
       message: `BOSS 在线简历导入完成：成功 ${itemResult.imported} 份，失败 ${itemResult.failed + (collected?.errors?.length || 0)} 份`
     };
   }
+  if (rawText.length >= 30) {
+    setTaskStatus({ ...task, status: "running", message: `已采集当前页面完整简历文本${sourceTabs}，正在导入系统...` });
+    const message = await importResume(task.baseUrl, task.token, collected, "BOSS 当前简历页导入完成");
+    return {
+      imported: 1,
+      failed: collected?.errors?.length || 0,
+      message
+    };
+  }
   throw new Error(collected?.errors?.[0]?.error || "当前页面未采集到附件或在线简历正文");
 }
 
@@ -193,6 +212,7 @@ async function runBackgroundImport(task) {
           setTaskStatus({ ...task, status: "succeeded", message: pageResult.message });
           return;
         } catch (pageError) {
+          if (task.options?.strict_page_collection) throw pageError;
           if (!task.options?.use_active_account && !task.options?.cookies) throw pageError;
           setTaskStatus({ ...task, status: "running", message: `当前页面附件采集未完成：${pageError.message}。正在改用 BOSS 后端接口导入在线简历...` });
         }

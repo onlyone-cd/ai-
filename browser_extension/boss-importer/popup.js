@@ -269,7 +269,14 @@ $("obtainedImportBtn").addEventListener("click", async () => {
     $("status").textContent = preferPageCollection
       ? `BOSS 账号已激活，正在后台优先采集当前页面附件简历...\nCookie 来源：${collected.sources.join("、") || "Cookie"}，共 ${collected.count} 个。`
       : `BOSS 账号已激活，当前不是简历页面，正在直接通过后端导入已获取简历...\nCookie 来源：${collected.sources.join("、") || "Cookie"}，共 ${collected.count} 个。`;
-    await startBackgroundImport("obtained_resume", { prefer_page_collection: preferPageCollection, use_active_account: true, limit: 20, labels: [4], interval_sec: 1.5 });
+    await startBackgroundImport("obtained_resume", {
+      prefer_page_collection: preferPageCollection,
+      strict_page_collection: currentPageState?.page_type === "resume",
+      use_active_account: true,
+      limit: 20,
+      labels: [4],
+      interval_sec: 1.5
+    });
   } catch (error) {
     $("status").textContent = `失败：${error.message}`;
   }

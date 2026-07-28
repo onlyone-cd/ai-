@@ -2742,7 +2742,7 @@ def test_boss_extension_can_be_downloaded(client, admin_headers):
         assert "network_probe.js" in archive.namelist()
         manifest = json.loads(archive.read("manifest.json").decode("utf-8"))
         assert "http://120.24.172.139/*" in manifest["host_permissions"]
-        assert manifest["version"] == "0.3.17"
+        assert manifest["version"] == "0.3.18"
         assert manifest["background"]["service_worker"] == "background.js"
         content = archive.read("content.js").decode("utf-8")
         assert "findResumeColumnBounds" in content
@@ -2778,16 +2778,19 @@ def test_boss_extension_can_be_downloaded(client, admin_headers):
         assert "task.options?.cookies" in background
         assert "task.options?.use_active_account" in background
         assert "task.options?.prefer_page_collection" in background
+        assert "task.options?.strict_page_collection" in background
+        assert "BOSS 当前简历页导入完成" in background
         assert "labels: task.options.labels || [4]" in background
         assert "get-captured-boss-cookie" in background
         assert "webRequest.onBeforeSendHeaders" in background
 
 
 def test_boss_obtained_resumes_import_uses_backend_cli(client, admin_headers, monkeypatch):
-    def fake_import_obtained_resumes(cookies, limit=20, labels=None, interval_sec=1.5):
+    def fake_import_obtained_resumes(cookies, limit=20, labels=None, interval_sec=1.5, allow_partial=False):
         assert "wt2=token" in cookies
         assert limit == 20
         assert labels == [4]
+        assert allow_partial is False
         return {
             "ok": True,
             "data": {
@@ -2844,8 +2847,9 @@ def test_boss_obtained_resumes_import_uses_active_account(client, admin_headers,
         json={"cookies": "wt2=active-token; wbg=session; zp_at=auth; __zp_stoken__=stoken"},
     )
 
-    def fake_import_obtained_resumes(cookies, limit=20, labels=None, interval_sec=1.5):
+    def fake_import_obtained_resumes(cookies, limit=20, labels=None, interval_sec=1.5, allow_partial=False):
         assert "wt2=active-token" in cookies
+        assert allow_partial is False
         return {"ok": True, "data": {"discovered": 0, "items": [], "errors": []}}
 
     monkeypatch.setattr("app.routes.import_obtained_resumes", fake_import_obtained_resumes)
@@ -2954,7 +2958,12 @@ def test_boss_cli_import_falls_back_to_partial_profile(monkeypatch):
 
     monkeypatch.setattr(boss_cli_service, "run_boss", fake_run_boss)
 
-    result = boss_cli_service.import_obtained_resumes("wt2=token; wbg=session; zp_at=auth; __zp_stoken__=stoken", interval_sec=0)
+    strict_result = boss_cli_service.import_obtained_resumes("wt2=token; wbg=session; zp_at=auth; __zp_stoken__=stoken", interval_sec=0)
+    assert strict_result["ok"] is True
+    assert strict_result["data"]["items"] == []
+    assert strict_result["data"]["errors"][0]["partial_available"] is True
+
+    result = boss_cli_service.import_obtained_resumes("wt2=token; wbg=session; zp_at=auth; __zp_stoken__=stoken", interval_sec=0, allow_partial=True)
 
     assert result["ok"] is True
     assert result["data"]["errors"] == []

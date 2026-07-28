@@ -3914,6 +3914,7 @@ def boss_obtained_resumes_import(user):
         limit=int(payload.get("limit") or 20),
         labels=labels,
         interval_sec=float(payload.get("interval_sec") or 1.5),
+        allow_partial=bool(payload.get("allow_partial")),
     )
     if not result.get("ok"):
         err = result.get("error") or {}

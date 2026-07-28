@@ -271,7 +271,7 @@ $("obtainedImportBtn").addEventListener("click", async () => {
       : `BOSS 账号已激活，当前不是简历页面，正在直接通过后端导入已获取简历...\nCookie 来源：${collected.sources.join("、") || "Cookie"}，共 ${collected.count} 个。`;
     await startBackgroundImport("obtained_resume", {
       prefer_page_collection: preferPageCollection,
-      strict_page_collection: ["resume", "attachment_resume", "obtained_resume_chat"].includes(currentPageState?.page_type),
+      strict_page_collection: ["resume", "attachment_resume", "obtained_resume_chat", "new_greeting_online_resume"].includes(currentPageState?.page_type),
       use_active_account: true,
       limit: 20,
       labels: [4],
@@ -288,8 +288,10 @@ $("importBtn").addEventListener("click", async () => {
 
   try {
     requirePageCapability("can_import_resume", "当前不是在线简历详情，不能采集简历");
-    if (["attachment_resume", "obtained_resume_chat"].includes(currentPageState?.page_type)) {
-      $("status").textContent = "已识别 BOSS 附件简历，正在后台下载附件并导入解析...";
+    if (["attachment_resume", "obtained_resume_chat", "new_greeting_online_resume"].includes(currentPageState?.page_type)) {
+      $("status").textContent = currentPageState?.page_type === "new_greeting_online_resume"
+        ? "已识别 BOSS 新招呼在线简历，正在后台打开在线简历并导入解析..."
+        : "已识别 BOSS 附件简历，正在后台下载附件并导入解析...";
       await startBackgroundImport("obtained_resume", {
         prefer_page_collection: true,
         strict_page_collection: true,

@@ -265,7 +265,7 @@ async function autoCollectCommunicationResumes(options = {}) {
 }
 
 async function collectObtainedResumeText() {
-  if (/\/web\/chat\/index/i.test(location.href) || hasBossChatMenu()) {
+  if ((/\/web\/chat\/index/i.test(location.href) || hasBossChatMenu()) && !hasBossVisibleResumeAction()) {
     await ensureBossObtainedResumeChatReady();
   }
   if (isObtainedResumeListPage()) {
@@ -434,6 +434,12 @@ async function collectObtainedResumeList() {
 }
 
 async function openOnlineResumeTab() {
+  const direct = findBossOnlineResumeActionButton();
+  if (direct) {
+    direct.click();
+    await sleep(1100);
+    return true;
+  }
   const tabs = findResumeTabButtons();
   const online = tabs.find((item) => item.available && item.label.includes("\u5728\u7ebf\u7b80\u5386")) || tabs.find((item) => item.available);
   if (online?.button) {
@@ -581,6 +587,42 @@ function findBossAttachmentActionButton() {
 
 function hasBossAttachmentResumeAction() {
   return Boolean(findBossAttachmentActionButton());
+}
+
+function findBossOnlineResumeActionButton() {
+  const selectors = [
+    "a.resume-btn-online",
+    ".resume-btn-online",
+    ".resume-btn-content a",
+    ".resume-btn-content button",
+    "[class*='resume-btn-content'] a",
+    "[class*='resume-btn-content'] button",
+    "[class*='resume-btn-content'] [role='button']"
+  ];
+  for (const selector of selectors) {
+    const node = [...document.querySelectorAll(selector)]
+      .filter(isVisibleElement)
+      .find((item) => {
+        const text = `${item.innerText || item.textContent || ""} ${item.getAttribute("title") || ""} ${item.getAttribute("href") || ""}`;
+        return /在线简历|查看简历|完整简历|resume|geek/i.test(text) && !/附件简历|未获得|未开通|无简历/i.test(text);
+      });
+    if (node) return node.closest?.("button,a,[role='button']") || node;
+  }
+  return null;
+}
+
+function hasBossOnlineResumeAction() {
+  return Boolean(findBossOnlineResumeActionButton());
+}
+
+function hasBossVisibleResumeAction() {
+  return hasBossOnlineResumeAction() || hasBossAttachmentResumeAction();
+}
+
+function hasBossNewGreetingLabel() {
+  const nodes = [...document.querySelectorAll(".chat-label-item.selected,[class*='chat-label-item'][class*='selected']")]
+    .filter(isVisibleElement);
+  return nodes.some((node) => (node.innerText || node.textContent || "").includes("新招呼"));
 }
 
 function hasBossChatMenu() {
@@ -1257,6 +1299,8 @@ function inspectBossPage() {
   const hasResumeTabs = resumeTabs.length > 0;
   const hasObtainedResumeList = isObtainedResumeListPage();
   const hasAttachmentAction = hasBossAttachmentResumeAction();
+  const hasOnlineAction = hasBossOnlineResumeAction();
+  const hasNewGreetingLabel = hasBossNewGreetingLabel();
   const hasChatMenu = hasBossChatMenu();
   const hasOnlineResumeModal = countTextHits(`${pageSignal}\n${resumeRootText}`, ["\u671f\u671b\u804c\u4f4d", "\u5de5\u4f5c\u7ecf\u5386"]) >= 2 || hasResumeTabs;
   const hasProfileHeader = /(\d+\s*\u5c81|\u5c81).*(\u5927\u4e13|\u672c\u79d1|\u7855\u58eb|\u535a\u58eb|\u5e74\u4ee5\u4e0a|\u79bb\u804c|\u6d3b\u8dc3)/s.test(`${pageSignal}\n${resumeRootText}`);
@@ -1276,6 +1320,10 @@ function inspectBossPage() {
     pageType = "attachment_resume";
     label = "BOSS 附件简历页";
     message = "已识别附件简历预览页，可直接下载附件并导入解析";
+  } else if (hasNewGreetingLabel && hasOnlineAction) {
+    pageType = "new_greeting_online_resume";
+    label = "BOSS 新招呼在线简历";
+    message = "已识别新招呼里的在线简历按钮，可打开在线简历并导入解析";
   } else if (hasObtainedResumeList && hasAttachmentAction) {
     pageType = "obtained_resume_chat";
     label = "BOSS 已获取附件简历";
@@ -1298,8 +1346,8 @@ function inspectBossPage() {
     page_type: pageType,
     label,
     message,
-    can_import_resume: isResumePage || hasAttachmentAction,
-    can_import_obtained_resume: isResumePage || isAttachmentResumePage || hasObtainedResumeList || hasAttachmentAction,
+    can_import_resume: isResumePage || hasAttachmentAction || hasOnlineAction,
+    can_import_obtained_resume: isResumePage || isAttachmentResumePage || hasObtainedResumeList || hasAttachmentAction || hasOnlineAction,
     can_sync_jobs: isJobListPage,
     can_batch_import_candidates: isCandidateListPage,
     resume_signals: resumeSignals,
@@ -1308,6 +1356,8 @@ function inspectBossPage() {
     candidate_list_signals: candidateListSignals,
     chat_menu: hasChatMenu,
     chat_page: isBossChatPage,
+    new_greeting_label: hasNewGreetingLabel,
+    online_resume_action: hasOnlineAction,
     obtained_resume_list: hasObtainedResumeList,
     attachment_resume_page: isAttachmentResumePage,
     attachment_action: hasAttachmentAction,

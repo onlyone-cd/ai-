@@ -267,27 +267,7 @@ async function autoCollectCommunicationResumes(options = {}) {
 async function collectObtainedResumeText(options = {}) {
   const mode = options?.mode || "";
   if (mode === "online_resume") {
-    await ensureBossNewGreetingOnlineResumeReady();
-    const opened = await openOnlineResumeTab();
-    if (!opened) {
-      throw new Error("未找到新招呼里的在线简历按钮，请先确认右侧候选人有在线简历");
-    }
-    await sleep(500);
-    const result = await collectResumeText();
-    const rawText = normalizeResumeText(`${getCurrentObtainedResumeHeader()}\n${result.raw_text || ""}`);
-    if (!hasResumeSignal(rawText)) throw new Error("在线简历已打开，但未采集到有效简历正文");
-    return {
-      raw_text: rawText,
-      items: [],
-      files: [],
-      errors: [],
-      chunk_count: result.chunk_count || 1,
-      text_length: rawText.length,
-      page_url: location.href,
-      title: document.title,
-      source: "boss_new_greeting_online_resume",
-      source_tabs: ["新招呼在线简历"]
-    };
+    return collectNewGreetingOnlineResumeList(options);
   }
   if ((/\/web\/chat\/index/i.test(location.href) || hasBossChatMenu()) && !hasBossVisibleResumeAction()) {
     await ensureBossObtainedResumeChatReady();
@@ -397,6 +377,69 @@ async function collectObtainedResumeText(options = {}) {
     page_url: location.href,
     title: document.title,
     source_tabs: collected.map((item) => item.label)
+  };
+}
+
+async function collectNewGreetingOnlineResumeList(options = {}) {
+  await ensureBossNewGreetingListReady();
+  const limit = Math.min(Math.max(Number(options.limit) || 20, 1), 50);
+  const cards = findCommunicationCandidateCards().slice(0, limit);
+  const targets = cards.length ? cards : [null];
+  const items = [];
+  const errors = [];
+  const seen = new Set();
+
+  for (let index = 0; index < targets.length; index += 1) {
+    const card = targets[index];
+    const label = compactCandidateLabel(card?.innerText || card?.textContent || getCurrentObtainedResumeHeader() || `new-greeting-${index + 1}`);
+    const key = label.slice(0, 80);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    try {
+      if (card) {
+        card.scrollIntoView({ block: "center", inline: "nearest" });
+        await sleep(220);
+        card.click();
+        await waitForDetailPaneChange(label);
+      }
+      if (!hasBossOnlineResumeAction()) {
+        throw new Error("当前候选人没有可点击的在线简历按钮");
+      }
+      const opened = await openOnlineResumeTab();
+      if (!opened) throw new Error("在线简历按钮点击失败");
+      await waitForResumeTextReady();
+      const result = await collectResumeText();
+      const detailText = normalizeResumeText(`${getCurrentObtainedResumeHeader()}\n${result.raw_text || ""}`);
+      if (!hasResumeSignal(detailText)) throw new Error("在线简历已打开，但未采集到有效简历正文");
+      items.push({
+        external_id: `boss-new-greeting-${Date.now()}-${index}`,
+        name: guessName(detailText),
+        title: guessTitle(detailText),
+        summary: detailText.slice(0, 260),
+        raw_text: detailText,
+        page_url: location.href,
+        source: "boss_new_greeting_online_resume"
+      });
+      closeResumeOverlay();
+      await sleep(220);
+    } catch (error) {
+      errors.push({ index: index + 1, label, error: error.message });
+      closeResumeOverlay();
+      await sleep(180);
+    }
+  }
+
+  const rawText = normalizeResumeText(items.map((item) => item.raw_text).join("\n\n"));
+  return {
+    raw_text: rawText,
+    items,
+    files: [],
+    errors,
+    chunk_count: items.length,
+    text_length: rawText.length,
+    page_url: location.href,
+    title: document.title,
+    source_tabs: ["新招呼在线简历"]
   };
 }
 
@@ -683,21 +726,7 @@ function findBossNewGreetingLabelButton() {
 }
 
 async function ensureBossNewGreetingOnlineResumeReady() {
-  if (!/\/web\/chat\/index/i.test(location.href)) {
-    const chatButton = findBossChatMenuButton();
-    if (chatButton) {
-      chatButton.click();
-      await sleep(1200);
-    } else {
-      location.assign("https://www.zhipin.com/web/chat/index");
-      await sleep(1800);
-    }
-  }
-  const newGreetingButton = findBossNewGreetingLabelButton();
-  if (newGreetingButton && !/\bselected\b/.test(newGreetingButton.className || "")) {
-    newGreetingButton.click();
-    await sleep(1200);
-  }
+  await ensureBossNewGreetingListReady();
   if (!hasBossOnlineResumeAction()) {
     const firstCard = findCommunicationCandidateCards()[0];
     if (firstCard) {
@@ -714,6 +743,25 @@ async function ensureBossNewGreetingOnlineResumeReady() {
     return true;
   }
   throw new Error("未识别到新招呼候选人的在线简历按钮");
+}
+
+async function ensureBossNewGreetingListReady() {
+  if (!/\/web\/chat\/index/i.test(location.href)) {
+    const chatButton = findBossChatMenuButton();
+    if (chatButton) {
+      chatButton.click();
+      await sleep(1200);
+    } else {
+      location.assign("https://www.zhipin.com/web/chat/index");
+      await sleep(1800);
+    }
+  }
+  const newGreetingButton = findBossNewGreetingLabelButton();
+  if (newGreetingButton && !/\bselected\b/.test(newGreetingButton.className || "")) {
+    newGreetingButton.click();
+    await sleep(1200);
+  }
+  return true;
 }
 
 function hasBossChatMenu() {
@@ -948,18 +996,32 @@ async function waitForDetailPaneChange(previousLabel) {
   return false;
 }
 
+async function waitForResumeTextReady() {
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    await sleep(300);
+    const rootText = normalizeResumeText(findResumeRoot()?.innerText || "");
+    const capturedText = bestCapturedResumeText();
+    if (hasResumeSignal(rootText) || hasResumeSignal(capturedText)) return true;
+  }
+  return false;
+}
+
 function findCommunicationCandidateCards() {
   const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 1200;
-  const nodes = [...document.querySelectorAll("[class*='geek'],[class*='friend'],[class*='chat'],[class*='card'],[class*='item'],li,[role='listitem']")]
+  const nodes = [...document.querySelectorAll("[class*='geek'],[class*='friend'],[class*='chat'],[class*='card'],[class*='item'],[class*='user'],li,[role='listitem']")]
     .filter(isVisibleElement)
-    .filter((node) => {
-      const rect = node.getBoundingClientRect();
+    .map((node) => ({ node, rect: node.getBoundingClientRect(), text: (node.innerText || node.textContent || "").replace(/\s+/g, " ").trim() }))
+    .filter((item) => {
+      const { rect, text } = item;
       if (rect.width < 120 || rect.height < 36 || rect.left > viewportWidth * 0.55) return false;
-      const text = (node.innerText || node.textContent || "").replace(/\s+/g, " ").trim();
       if (text.length < 2 || text.length > 1000) return false;
       if (isBossNavigationLine(text)) return false;
-      return /(\d+\s*\u5c81|\u672c\u79d1|\u5927\u4e13|\u7855\u58eb|\u535a\u58eb|\u5e74\u4ee5\u4e0a|\u79bb\u804c|\u5728\u804c|\u521a\u521a\u6d3b\u8dc3|\u6d3b\u8dc3|\u4f1a\u8ba1|Java|\u5f00\u53d1|\u8fd0\u8425|\u9500\u552e)/.test(text);
-    });
+      if (/^(新招呼|沟通中|已获取简历|看过我|对我感兴趣|全部|未读|沟通)\(?\d*\)?$/.test(text.replace(/\s+/g, ""))) return false;
+      return /(\d+\s*\u5c81|\u672c\u79d1|\u5927\u4e13|\u7855\u58eb|\u535a\u58eb|\u5e74\u4ee5\u4e0a|\u79bb\u804c|\u5728\u804c|\u521a\u521a\u6d3b\u8dc3|\u6d3b\u8dc3|\u4f1a\u8ba1|Java|\u5f00\u53d1|\u8fd0\u8425|\u9500\u552e|在线简历|附件简历|求职|应届|活跃)/.test(text) ||
+        /^[\u4e00-\u9fa5]{2,4}(\s|$)/.test(text);
+    })
+    .sort((a, b) => scoreChatCandidateCard(b) - scoreChatCandidateCard(a))
+    .map((item) => item.node);
   const seen = new Set();
   return nodes.filter((node) => {
     const text = compactCandidateLabel(node.innerText || node.textContent || "");
@@ -969,6 +1031,18 @@ function findCommunicationCandidateCards() {
     seen.add(key);
     return true;
   });
+}
+
+function scoreChatCandidateCard(item) {
+  let score = 0;
+  const text = item.text || "";
+  if (/active|selected|current/.test(String(item.node.className || ""))) score += 18;
+  if (/在线简历|附件简历|简历/.test(text)) score += 12;
+  if (/\d+\s*岁|本科|大专|硕士|博士|离职|在职|活跃/.test(text)) score += 8;
+  if (/^[\u4e00-\u9fa5]{2,4}(\s|$)/.test(text)) score += 6;
+  if (item.rect.left > 120 && item.rect.left < (window.innerWidth || 1200) * 0.5) score += 5;
+  score -= Math.max(0, text.length - 260) / 120;
+  return score;
 }
 
 function compactCandidateLabel(text) {
@@ -1039,17 +1113,18 @@ function scoreResumeRoot(text, rect) {
 
 function findResumeColumnBounds(root) {
   const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 1200;
-  let fallbackLeft = Math.max(170, viewportWidth * 0.13);
-  let fallbackRight = Math.min(viewportWidth - 210, viewportWidth * 0.78);
+  const isBossChat = /\/web\/chat\/index/i.test(location.href);
+  let fallbackLeft = isBossChat ? Math.max(360, viewportWidth * 0.42) : Math.max(170, viewportWidth * 0.13);
+  let fallbackRight = isBossChat ? viewportWidth - 8 : Math.min(viewportWidth - 210, viewportWidth * 0.78);
   const rightActionLeft = findPanelBoundary((line) => includesAny(line, ACTION_ONLY_WORDS));
-  if (rightActionLeft) fallbackRight = Math.min(fallbackRight, rightActionLeft - 16);
+  if (rightActionLeft && !isBossChat) fallbackRight = Math.min(fallbackRight, rightActionLeft - 16);
 
   const candidates = [...document.querySelectorAll("main,section,article,div")]
     .filter(isVisibleElement)
     .map((node) => ({ node, rect: node.getBoundingClientRect(), text: (node.innerText || "").trim() }))
     .filter((item) => item.text.length >= 120 && item.rect.width >= 360 && item.rect.height >= 160)
     .filter((item) => countTextHits(item.text, RESUME_MARKERS) >= 2)
-    .filter((item) => item.rect.left >= 80 && item.rect.right <= viewportWidth - 80)
+    .filter((item) => item.rect.left >= 80 && (item.rect.right <= viewportWidth - 80 || (isBossChat && item.rect.left >= viewportWidth * 0.38 && item.rect.right <= viewportWidth + 8)))
     .filter((item) => !includesAny(item.text.slice(0, 500), ["\u804c\u4f4d\u7ba1\u7406", "\u63a8\u8350\u725b\u4eba", "\u8d26\u53f7\u6743\u76ca", "\u7eed\u8d39VIP", "\u6211\u7684\u5ba2\u670d", "\u62db\u8058\u6570\u636e"]));
 
   if (candidates.length) {
@@ -1064,7 +1139,7 @@ function findResumeColumnBounds(root) {
   }
 
   const rootRect = root?.getBoundingClientRect?.();
-  if (rootRect && rootRect.width >= 360 && rootRect.left >= 80 && rootRect.right <= viewportWidth - 80) {
+  if (rootRect && rootRect.width >= 360 && rootRect.left >= 80 && (rootRect.right <= viewportWidth - 80 || (isBossChat && rootRect.left >= viewportWidth * 0.38 && rootRect.right <= viewportWidth + 8))) {
     return {
       left: Math.max(0, rootRect.left - 12),
       right: Math.min(viewportWidth, rootRect.right + 12),

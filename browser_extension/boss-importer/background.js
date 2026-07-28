@@ -159,7 +159,8 @@ async function uploadResumeFiles(baseUrl, token, files) {
 }
 
 async function importObtainedFromCurrentPage(task) {
-  setTaskStatus({ ...task, status: "running", message: "正在优先采集当前 BOSS 页面附件简历..." });
+  const onlineMode = task.options?.mode === "online_resume";
+  setTaskStatus({ ...task, status: "running", message: onlineMode ? "正在逐个打开 BOSS 新招呼在线简历..." : "正在优先采集当前 BOSS 页面附件简历..." });
   const collected = await sendTabMessage(task.tabId, { type: "collect-obtained-resumes", options: task.options || {} });
   if (collected?.error) throw new Error(collected.error);
   const sourceTabs = collected?.source_tabs?.length ? `，来源：${collected.source_tabs.join("、")}` : "";

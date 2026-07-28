@@ -266,7 +266,8 @@ $("obtainedImportBtn").addEventListener("click", async () => {
       currentPageState?.can_import_obtained_resume ||
       currentPageState?.can_import_resume ||
       currentPageState?.page_type === "resume" ||
-      currentPageState?.page_type === "candidate_list"
+      currentPageState?.page_type === "candidate_list" ||
+      currentPageState?.is_boss_page
     );
     $("status").textContent = preferPageCollection
       ? `BOSS 账号已激活，正在后台优先采集当前页面附件简历...\nCookie 来源：${collected.sources.join("、") || "Cookie"}，共 ${collected.count} 个。`
@@ -321,7 +322,7 @@ $("newGreetingImportBtn").addEventListener("click", async () => {
       prefer_page_collection: true,
       strict_page_collection: true,
       use_active_account: false,
-      limit: 1,
+      limit: 20,
       mode: "online_resume"
     });
   } catch (error) {

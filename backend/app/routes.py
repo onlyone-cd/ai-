@@ -3811,7 +3811,18 @@ def import_boss_candidate_items(user, items, source="api", parent_sync_job_id=No
             add_boss_sync_item(sync_job, "candidate", item, "failed", error_message=err["error"], external_id=external_id)
             continue
         try:
-            _, candidate = parse_and_save_text(raw_text, user, source="boss", filename=f"boss-batch-{external_id}.txt")
+            _, candidate = parse_and_save_text(
+                raw_text,
+                user,
+                source="boss",
+                filename=f"boss-batch-{external_id}.txt",
+                metadata={
+                    "external_id": external_id,
+                    "page_url": item.get("page_url") or "",
+                    "source": source,
+                    "label": item.get("name") or "",
+                },
+            )
         except ValueError as exc:
             err = {"name": item.get("name") or "candidate", "error": str(exc)}
             errors.append(err)
@@ -3994,7 +4005,18 @@ def import_boss_screen_resume_payload(user, payload, source="api", parent_sync_j
             return {"sync_job": sync_job.to_dict(detail=True)}, {"message": message, "code": "NOT_FOUND", "status": 404}
 
     try:
-        batch, candidate = parse_and_save_text(raw_text, user, source="boss", filename="boss-screen-resume.txt")
+        batch, candidate = parse_and_save_text(
+            raw_text,
+            user,
+            source="boss",
+            filename="boss-screen-resume.txt",
+            metadata={
+                "external_id": payload.get("external_id") or "",
+                "page_url": payload.get("page_url") or "",
+                "source": source,
+                "label": payload.get("name") or payload.get("title") or "",
+            },
+        )
     except ValueError as exc:
         add_boss_sync_item(sync_job, "candidate", payload, "failed", error_message=str(exc))
         finish_boss_sync_job(sync_job, 0, 1, {"error_code": "PARSE_FAILED"}, str(exc))

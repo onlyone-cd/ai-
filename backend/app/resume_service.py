@@ -126,7 +126,7 @@ def parse_stored_resume(stored_path: Path, filename: str, owner, batch_id=None):
         raise
 
 
-def parse_and_save_text(raw_text: str, owner, source="boss", filename="boss-screen-resume.txt"):
+def parse_and_save_text(raw_text: str, owner, source="boss", filename="boss-screen-resume.txt", metadata=None):
     raw_text = normalize_resume_text(raw_text)
     if len(raw_text) < 30:
         raise ValueError("采集到的简历文本过短")
@@ -140,6 +140,7 @@ def parse_and_save_text(raw_text: str, owner, source="boss", filename="boss-scre
     db.session.flush()
     candidate = build_candidate(raw_text, batch_id, owner.id, llm_result=llm_result)
     candidate.source = source
+    apply_candidate_import_metadata(candidate, metadata or {"source": source})
     candidate = upsert_candidate(candidate, infer_tags(raw_text, llm_result=llm_result))
     batch.success_count = 1
     batch.status = "ok"
@@ -168,6 +169,57 @@ def create_resume_attachment(batch, stored_path: Path, filename: str, owner):
     )
     db.session.add(attachment)
     return attachment
+
+
+def apply_candidate_import_metadata(candidate, metadata=None):
+    metadata = metadata if isinstance(metadata, dict) else {}
+    resume_json = dict(candidate.resume_json or {})
+    additional_info = dict(resume_json.get("additional_info") or {})
+    source = str(metadata.get("source") or candidate.source or "").strip()
+    external_id = str(metadata.get("external_id") or "").strip()
+    page_url = str(metadata.get("page_url") or "").strip()
+    label = str(metadata.get("label") or "").strip()
+    if source:
+        additional_info["import_source"] = source
+    if external_id:
+        additional_info["boss_external_id"] = external_id
+    if page_url:
+        additional_info["boss_page_url"] = page_url
+    if label:
+        additional_info["boss_label"] = label
+    if additional_info:
+        resume_json["additional_info"] = additional_info
+    candidate.resume_json = resume_json
+
+
+def candidate_import_external_id(candidate):
+    resume_json = candidate.resume_json or {}
+    additional_info = resume_json.get("additional_info") or {}
+    external_id = str(additional_info.get("boss_external_id") or additional_info.get("external_id") or "").strip()
+    return external_id
+
+
+def is_partial_boss_resume(candidate):
+    text = (candidate.raw_text or "") + "\n" + str((candidate.resume_json or {}).get("summary") or "")
+    return "BOSS_PARTIAL_PROFILE" in text or "完整在线简历详情接口被 BOSS 拒绝" in text or "待补全" in text
+
+
+def should_replace_existing_candidate(existing, incoming):
+    if not existing:
+        return True
+    existing_partial = is_partial_boss_resume(existing)
+    incoming_partial = is_partial_boss_resume(incoming)
+    if existing_partial and not incoming_partial:
+        return True
+    if incoming_partial and not existing_partial:
+        return False
+    existing_len = len(existing.raw_text or "")
+    incoming_len = len(incoming.raw_text or "")
+    if incoming_len > existing_len + 120:
+        return True
+    if candidate_import_external_id(existing) and candidate_import_external_id(existing) == candidate_import_external_id(incoming):
+        return True
+    return incoming_len >= existing_len
 
 
 def rescan_attachment(attachment):
@@ -233,25 +285,46 @@ def upsert_candidate(candidate, tags):
     existing = find_duplicate_candidate(candidate)
     target = existing or candidate
     if existing:
-        existing.owner_hr_id = candidate.owner_hr_id
-        existing.upload_batch_id = candidate.upload_batch_id
-        existing.name_masked = candidate.name_masked
-        existing.email_masked = candidate.email_masked
-        existing.phone_masked = candidate.phone_masked
-        existing.title = candidate.title
-        existing.source = candidate.source
-        existing.city = candidate.city
-        existing.raw_text = candidate.raw_text
-        existing.resume_json = candidate.resume_json
-        existing.parse_status = "ok"
-        existing.parse_error = None
-        CandidateTag.query.filter_by(candidate_id=existing.id).delete()
+        replace_existing = should_replace_existing_candidate(existing, candidate)
+        if replace_existing:
+            existing.resume_json = merge_resume_json(existing.resume_json or {}, candidate.resume_json or {})
+            existing.owner_hr_id = candidate.owner_hr_id
+            existing.upload_batch_id = candidate.upload_batch_id
+            existing.name_masked = candidate.name_masked
+            existing.email_masked = candidate.email_masked
+            existing.phone_masked = candidate.phone_masked
+            existing.title = candidate.title
+            existing.city = candidate.city
+            existing.raw_text = candidate.raw_text
+            existing.parse_status = "ok"
+            existing.parse_error = None
+            if candidate.source:
+                existing.source = candidate.source
+            CandidateTag.query.filter_by(candidate_id=existing.id).delete()
+        else:
+            existing.resume_json = merge_resume_json(existing.resume_json or {}, {"additional_info": (candidate.resume_json or {}).get("additional_info") or {}})
     else:
         db.session.add(candidate)
         db.session.flush()
-    for tag in tags:
-        db.session.add(CandidateTag(candidate_id=target.id, **tag))
+        replace_existing = True
+    if not existing or replace_existing:
+        for tag in tags:
+            db.session.add(CandidateTag(candidate_id=target.id, **tag))
     return target
+
+
+def merge_resume_json(existing_json, incoming_json):
+    merged = dict(existing_json or {})
+    incoming = dict(incoming_json or {})
+    merged_additional = dict(merged.get("additional_info") or {})
+    merged_additional.update(incoming.get("additional_info") or {})
+    if merged_additional:
+        merged["additional_info"] = merged_additional
+    for key in ("summary", "gender", "intent_city", "education", "experience", "projects", "certifications", "languages", "experience_analysis", "llm_provider"):
+        value = incoming.get(key)
+        if value not in (None, "", [], {}, ()):
+            merged[key] = value
+    return merged
 
 
 def find_duplicate_candidate(candidate):
@@ -261,6 +334,11 @@ def find_duplicate_candidate(candidate):
             return existing
     if candidate.email_masked:
         return Candidate.query.filter_by(email_masked=candidate.email_masked).first()
+    external_id = candidate_import_external_id(candidate)
+    if external_id and candidate.source == "boss":
+        for existing in Candidate.query.filter_by(source="boss").order_by(Candidate.id.desc()).limit(5000).all():
+            if candidate_import_external_id(existing) == external_id:
+                return existing
     return None
 
 

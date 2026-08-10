@@ -3014,6 +3014,89 @@ def test_boss_batch_import_accepts_partial_profile_marker(client, admin_headers)
     assert data["items"][0]["name_masked"] == "候选人A"
 
 
+def test_boss_partial_profile_does_not_overwrite_full_resume(client, admin_headers):
+    full_text = (
+        "# 王完整\n"
+        "电话：13900001234\n"
+        "邮箱：boss-full-merge@example.com\n"
+        "本科 5 年\n\n"
+        "## 工作经历\n"
+        "Java 后端开发工程师，负责支付系统、订单系统和 MySQL 性能优化。\n\n"
+        "## 项目经历\n"
+        "主导支付链路重构，完成接口稳定性治理。"
+    )
+    partial_text = (
+        "# 王完整\n\n"
+        "BOSS_PARTIAL_PROFILE\n"
+        "来源：BOSS 沟通列表资料。完整在线简历详情接口被 BOSS 拒绝，当前为可见资料导入，后续需要补全完整简历。\n\n"
+        "## 求职信息\n"
+        "name: 王完整\nphone: 13900001234\njobName: Java 后端开发\nworkYearDesc: 5 年\ndegreeDesc: 本科\n\n"
+        "## 工作经历\n完整工作经历待补全。"
+    )
+
+    first = client.post(
+        "/api/boss/candidates/batch-import",
+        headers=admin_headers,
+        json={"items": [{"external_id": "boss-merge-full-first", "name": "王完整", "raw_text": full_text}]},
+    )
+    assert first.status_code == 200
+    candidate_id = first.get_json()["data"]["items"][0]["id"]
+
+    second = client.post(
+        "/api/boss/candidates/batch-import",
+        headers=admin_headers,
+        json={"items": [{"external_id": "boss-merge-full-first", "name": "王完整", "raw_text": partial_text}]},
+    )
+    assert second.status_code == 200
+    assert second.get_json()["data"]["items"][0]["id"] == candidate_id
+
+    detail = client.get(f"/api/candidates/{candidate_id}", headers=admin_headers).get_json()["data"]
+    assert "支付系统" in detail["raw_text"]
+    assert "BOSS_PARTIAL_PROFILE" not in detail["raw_text"]
+    assert detail["resume_json"]["additional_info"]["boss_external_id"] == "boss-merge-full-first"
+    assert Candidate.query.filter_by(phone_masked="13900001234").count() == 1
+
+
+def test_boss_full_resume_upgrades_partial_profile_by_external_id(client, admin_headers):
+    partial_text = (
+        "# 刘补全\n\n"
+        "BOSS_PARTIAL_PROFILE\n"
+        "来源：BOSS 沟通列表资料。完整在线简历详情接口被 BOSS 拒绝，当前为可见资料导入，后续需要补全完整简历。\n\n"
+        "## 求职信息\n"
+        "name: 刘补全\njobName: Java 后端开发\nworkYearDesc: 4 年\ndegreeDesc: 本科\n\n"
+        "## 工作经历\n完整工作经历待补全。"
+    )
+    full_text = (
+        "# 刘补全\n"
+        "本科 4 年\n\n"
+        "## 工作经历\n"
+        "Java 后端开发工程师，熟悉 Spring Boot、Redis、Kafka，负责会员系统和营销系统。\n\n"
+        "## 教育经历\n"
+        "湖南大学 软件工程 本科"
+    )
+
+    first = client.post(
+        "/api/boss/candidates/batch-import",
+        headers=admin_headers,
+        json={"items": [{"external_id": "boss-merge-partial-first", "name": "刘补全", "raw_text": partial_text}]},
+    )
+    assert first.status_code == 200
+    candidate_id = first.get_json()["data"]["items"][0]["id"]
+
+    second = client.post(
+        "/api/boss/candidates/batch-import",
+        headers=admin_headers,
+        json={"items": [{"external_id": "boss-merge-partial-first", "name": "刘补全", "raw_text": full_text}]},
+    )
+    assert second.status_code == 200
+    assert second.get_json()["data"]["items"][0]["id"] == candidate_id
+
+    detail = client.get(f"/api/candidates/{candidate_id}", headers=admin_headers).get_json()["data"]
+    assert "会员系统" in detail["raw_text"]
+    assert "BOSS_PARTIAL_PROFILE" not in detail["raw_text"]
+    assert detail["resume_json"]["additional_info"]["boss_external_id"] == "boss-merge-partial-first"
+
+
 def test_boss_obtained_resumes_import_requires_cookie(client, admin_headers):
     response = client.post("/api/boss/obtained-resumes/import", headers=admin_headers, json={})
 

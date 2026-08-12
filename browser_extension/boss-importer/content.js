@@ -212,11 +212,24 @@ async function collectResumeText() {
   };
 }
 
+function pushImportLog(logs, index, label, stage, status, message = "") {
+  if (!Array.isArray(logs)) return;
+  logs.push({
+    index,
+    label: compactCandidateLabel(label || `candidate-${index}`),
+    stage,
+    status,
+    message,
+    at: new Date().toISOString()
+  });
+}
+
 async function autoCollectCommunicationResumes(options = {}) {
   const limit = Math.min(Math.max(Number(options.limit) || 20, 1), 50);
   const cards = findCommunicationCandidateCards().slice(0, limit);
   const items = [];
   const errors = [];
+  const logs = [];
   const seen = new Set();
 
   if (!cards.length) {
@@ -231,11 +244,14 @@ async function autoCollectCommunicationResumes(options = {}) {
     seen.add(key);
     const fallback = buildCandidateListFallbackItem(card, index);
     try {
+      pushImportLog(logs, index + 1, label, "select_candidate", "running", "select communication candidate");
       card.scrollIntoView({ block: "center", inline: "nearest" });
       await sleep(260);
       card.click();
       await waitForDetailPaneChange(label);
+      pushImportLog(logs, index + 1, label, "open_online_resume", "running", "open online resume");
       await openOnlineResumeTab();
+      pushImportLog(logs, index + 1, label, "collect_text", "running", "collect resume text");
       const result = await collectObtainedResumeText();
       if (!result.raw_text || result.raw_text.length < 30) throw new Error("\u672a\u91c7\u96c6\u5230\u8db3\u591f\u7684\u7b80\u5386\u6b63\u6587");
       items.push({
@@ -247,13 +263,16 @@ async function autoCollectCommunicationResumes(options = {}) {
         page_url: location.href,
         source: result.source || "boss_auto_resume"
       });
+      pushImportLog(logs, index + 1, label, "collect_text", "succeeded", `text_length=${result.raw_text.length}`);
       closeResumeOverlay();
       await sleep(220);
     } catch (error) {
       if (fallback && !items.some((item) => item.external_id === fallback.external_id || item.raw_text === fallback.raw_text)) {
         items.push(fallback);
+        pushImportLog(logs, index + 1, label, "fallback_partial", "warning", error.message);
         errors.push({ index: index + 1, label, error: `${error.message}；已降级导入列表可见信息，后续可重新补全在线简历` });
       } else {
+        pushImportLog(logs, index + 1, label, "collect_text", "failed", error.message);
         errors.push({ index: index + 1, label, error: error.message });
       }
       closeResumeOverlay();
@@ -261,7 +280,7 @@ async function autoCollectCommunicationResumes(options = {}) {
     }
   }
 
-  return { items, errors, count: items.length, attempted_count: cards.length, page_url: location.href, title: document.title };
+  return { items, errors, logs, count: items.length, attempted_count: cards.length, page_url: location.href, title: document.title };
 }
 
 async function collectObtainedResumeText(options = {}) {
@@ -387,6 +406,7 @@ async function collectNewGreetingOnlineResumeList(options = {}) {
   const targets = cards.length ? cards : [null];
   const items = [];
   const errors = [];
+  const logs = [];
   const seen = new Set();
 
   for (let index = 0; index < targets.length; index += 1) {
@@ -397,17 +417,21 @@ async function collectNewGreetingOnlineResumeList(options = {}) {
     seen.add(key);
     try {
       if (card) {
+        pushImportLog(logs, index + 1, label, "select_candidate", "running", "select new greeting candidate");
         card.scrollIntoView({ block: "center", inline: "nearest" });
         await sleep(220);
         card.click();
         await waitForDetailPaneChange(label);
       }
+      pushImportLog(logs, index + 1, label, "find_online_resume", "running", "find online resume action");
       if (!hasBossOnlineResumeAction()) {
         throw new Error("当前候选人没有可点击的在线简历按钮");
       }
+      pushImportLog(logs, index + 1, label, "open_online_resume", "running", "open online resume");
       const opened = await openOnlineResumeTab();
       if (!opened) throw new Error("在线简历按钮点击失败");
       await waitForResumeTextReady();
+      pushImportLog(logs, index + 1, label, "collect_text", "running", "collect online resume text");
       const result = await collectResumeText();
       const detailText = normalizeResumeText(`${getCurrentObtainedResumeHeader()}\n${result.raw_text || ""}`);
       if (!hasResumeSignal(detailText)) throw new Error("在线简历已打开，但未采集到有效简历正文");
@@ -420,9 +444,11 @@ async function collectNewGreetingOnlineResumeList(options = {}) {
         page_url: location.href,
         source: "boss_new_greeting_online_resume"
       });
+      pushImportLog(logs, index + 1, label, "collect_text", "succeeded", `text_length=${detailText.length}`);
       closeResumeOverlay();
       await sleep(220);
     } catch (error) {
+      pushImportLog(logs, index + 1, label, "collect_text", "failed", error.message);
       errors.push({ index: index + 1, label, error: error.message });
       closeResumeOverlay();
       await sleep(180);
@@ -435,6 +461,7 @@ async function collectNewGreetingOnlineResumeList(options = {}) {
     items,
     files: [],
     errors,
+    logs,
     chunk_count: items.length,
     text_length: rawText.length,
     page_url: location.href,
@@ -448,6 +475,7 @@ async function collectObtainedResumeList() {
   const items = [];
   const files = [];
   const errors = [];
+  const logs = [];
   const seen = new Set();
   const targets = cards.length ? cards : [null];
 
@@ -459,12 +487,15 @@ async function collectObtainedResumeList() {
     seen.add(key);
     try {
       if (card) {
+        pushImportLog(logs, index + 1, label, "select_candidate", "running", "select obtained resume candidate");
         card.scrollIntoView({ block: "center", inline: "nearest" });
         await sleep(180);
         card.click();
         await waitForDetailPaneChange(label);
       }
+      pushImportLog(logs, index + 1, label, "open_resume_detail", "running", "open resume detail");
       await openOnlineResumeTab();
+      pushImportLog(logs, index + 1, label, "collect_attachment", "running", "collect attachment links");
       await clickAttachmentPreview();
       await sleep(500);
 
@@ -490,12 +521,17 @@ async function collectObtainedResumeList() {
           page_url: location.href,
           source: "boss_obtained_resume"
         });
+        pushImportLog(logs, index + 1, label, "collect_text", "succeeded", `text_length=${detailText.length}`);
       } else if (!fileLinks.length) {
         const fallback = buildCandidateListFallbackItem(card || document.body, index);
-        if (fallback) items.push({ ...fallback, source: "boss_obtained_list_fallback" });
+        if (fallback) {
+          items.push({ ...fallback, source: "boss_obtained_list_fallback" });
+          pushImportLog(logs, index + 1, label, "fallback_partial", "warning", "fallback to visible list profile");
+        }
         else throw new Error("未识别到在线简历正文或附件下载地址");
       }
     } catch (error) {
+      pushImportLog(logs, index + 1, label, "collect_text", "failed", error.message);
       errors.push({ index: index + 1, label, error: error.message });
     }
   }
@@ -506,6 +542,7 @@ async function collectObtainedResumeList() {
     items,
     files,
     errors,
+    logs,
     chunk_count: items.length + files.length,
     text_length: rawText.length,
     page_url: location.href,

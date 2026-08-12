@@ -3805,6 +3805,11 @@ def import_boss_candidate_items(user, items, source="api", parent_sync_job_id=No
                 add_boss_sync_item(sync_job, "candidate", item, "failed", error_message=err["error"], external_id=external_id)
             continue
         raw_text = item.get("raw_text") or item.get("summary") or ""
+        if item.get("error") and not raw_text.strip():
+            err = {"name": item.get("name") or "candidate", "error": str(item.get("error"))}
+            errors.append(err)
+            add_boss_sync_item(sync_job, "candidate", item, "failed", error_message=err["error"], external_id=external_id)
+            continue
         if not looks_like_boss_resume_text(raw_text):
             err = {"name": item.get("name") or "candidate", "error": "不是候选人简历内容，已跳过"}
             errors.append(err)

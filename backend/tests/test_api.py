@@ -3012,6 +3012,8 @@ def test_boss_batch_import_accepts_partial_profile_marker(client, admin_headers)
     data = response.get_json()["data"]
     assert data["items"][0]["source"] == "boss"
     assert data["items"][0]["name_masked"] == "候选人A"
+    assert data["items"][0]["resume_quality"]["status"] == "partial"
+    assert "补全" in data["items"][0]["resume_quality"]["next_action"]
 
 
 def test_boss_partial_profile_does_not_overwrite_full_resume(client, admin_headers):
@@ -3095,6 +3097,7 @@ def test_boss_full_resume_upgrades_partial_profile_by_external_id(client, admin_
     assert "会员系统" in detail["raw_text"]
     assert "BOSS_PARTIAL_PROFILE" not in detail["raw_text"]
     assert detail["resume_json"]["additional_info"]["boss_external_id"] == "boss-merge-partial-first"
+    assert detail["resume_quality"]["status"] == "complete"
 
 
 def test_boss_obtained_resumes_import_requires_cookie(client, admin_headers):
@@ -3302,6 +3305,9 @@ def test_boss_sync_jobs_are_logged_and_failed_items_can_retry(client, admin_head
     detail_data = detail.get_json()["data"]
     assert len(detail_data["items"]) == 2
     assert any(item["status"] == "failed" and item["external_id"] == "sync-bad" for item in detail_data["items"])
+    failed_item = next(item for item in detail_data["items"] if item["external_id"] == "sync-bad")
+    assert failed_item["error_info"]["category"] == "not_resume"
+    assert failed_item["error_info"]["next_action"]
 
     retry = client.post(f"/api/boss/sync/jobs/{data['sync_job']['id']}/retry", headers=admin_headers)
     assert retry.status_code == 200
@@ -3309,6 +3315,21 @@ def test_boss_sync_jobs_are_logged_and_failed_items_can_retry(client, admin_head
     assert retry_data["retried"] is True
     assert retry_data["retry_result"]["sync_job"]["parent_sync_job_id"] == data["sync_job"]["id"]
     assert retry_data["retry_result"]["sync_job"]["status"] == "failed"
+
+
+def test_boss_sync_item_classifies_boss_1092_failure(client, admin_headers):
+    response = client.post(
+        "/api/boss/candidates/batch-import",
+        headers=admin_headers,
+        json={"items": [{"external_id": "sync-1092", "raw_text": "", "error": "候选人详情: 操作失败 (code=1092)"}]},
+    )
+
+    assert response.status_code == 200
+    sync_job = response.get_json()["data"]["sync_job"]
+    detail = client.get(f"/api/boss/sync/jobs/{sync_job['id']}", headers=admin_headers)
+    item = detail.get_json()["data"]["items"][0]
+    assert item["error_info"]["category"] == "boss_1092"
+    assert "在线简历" in item["error_info"]["next_action"]
 
 
 def test_resume_retry_parse_refreshes_tags(client, admin_headers):

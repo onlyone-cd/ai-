@@ -35,7 +35,7 @@ import {
   Users,
   X
 } from "lucide-react";
-import { api, AgentConversation, AgentMessage, AgentResponse, AiInterviewPlan, AiSettings, AuditLog, BackgroundTask, BiOverview, BossInboxItem, Candidate, clearToken, DataIntegrity, EmployeeAnalysis, EmployeeProfile, EmployeeRecommendation, InterviewAssignment, InterviewFeedback, InterviewMessage, InterviewSpeechStatus, Job, LLMUsageSummary, MatchingWeights, MatchResult, notify, OfferRecord, OpsBackupStatus, OpsDataQuality, OpsDeployGates, OrganizationUnit, PipelineItem, PublicInterviewRoom, setToken, SkillTag, SystemSettings, TagQualityItem, User } from "./lib/api";
+import { api, AgentConversation, AgentMessage, AgentResponse, AiInterviewPlan, AiSettings, AuditLog, BackgroundTask, BiOverview, BossInboxItem, BossSyncJob, Candidate, clearToken, DataIntegrity, EmployeeAnalysis, EmployeeProfile, EmployeeRecommendation, InterviewAssignment, InterviewFeedback, InterviewMessage, InterviewSpeechStatus, Job, LLMUsageSummary, MatchingWeights, MatchResult, notify, OfferRecord, OpsBackupStatus, OpsDataQuality, OpsDeployGates, OrganizationUnit, PipelineItem, PublicInterviewRoom, setToken, SkillTag, SystemSettings, TagQualityItem, User } from "./lib/api";
 
 const stageLabels: Record<string, string> = {
   pending: "待处理",
@@ -2126,6 +2126,7 @@ function BossPage() {
   const [message, setMessage] = useState("");
   const [jobs, setJobs] = useState<Job[]>([]);
   const [recommendations, setRecommendations] = useState<MatchResult[]>([]);
+  const [syncJobs, setSyncJobs] = useState<BossSyncJob[]>([]);
   const [candidateId, setCandidateId] = useState(0);
   const [jobId, setJobId] = useState(0);
   const [selectedCandidate, setSelectedCandidate] = useState<Candidate | null>(null);
@@ -2134,14 +2135,19 @@ function BossPage() {
   async function load(silent = false) {
     setRefreshing(true);
     try {
-      const [statusData, inboxData, jobData] = await Promise.all([
+      const [statusData, inboxData, jobData, syncData] = await Promise.all([
         api.bossStatus(),
         api.bossInbox(),
-        api.bossJobs()
+        api.bossJobs(),
+        api.bossSyncJobs({ limit: 8, offset: 0 })
       ]);
+      const syncDetails = await Promise.all(
+        syncData.items.slice(0, 8).map((syncJob) => api.bossSyncJob(syncJob.id).catch(() => syncJob))
+      );
       setStatus(statusData);
       setInbox(inboxData.items);
       setJobs(jobData.items);
+      setSyncJobs(syncDetails);
       setCandidateId((current) => current || inboxData.items.find((item) => item.candidate_id)?.candidate_id || 0);
       setJobId((current) => current || jobData.items[0]?.id || 0);
       if (!silent) notify("success", "BOSS 数据已刷新");
@@ -2255,6 +2261,50 @@ function BossPage() {
           <button className="secondary-button" onClick={copyPluginToken}>复制插件 Token</button>
           <button className="secondary-button" onClick={verifyBoss} disabled={!status?.account_id}>校验登录态</button>
           <button className="black-button" onClick={openBoss}>打开 BOSS</button>
+        </div>
+      </div>
+
+      <div className="design-card">
+        <div className="data-panel-head">
+          <div>
+            <h2>BOSS 最近同步</h2>
+            <p>按任务查看导入数量、失败原因和单人采集状态。</p>
+          </div>
+          <button className="secondary-button" type="button" onClick={() => load(true)} disabled={refreshing}>
+            <RefreshCw size={16} className={refreshing ? "animate-spin" : ""} />
+            刷新
+          </button>
+        </div>
+        <div className="data-list">
+          {syncJobs.length === 0 ? (
+            <EmptyState icon={<Database size={20} />} text="暂无 BOSS 同步任务" />
+          ) : syncJobs.slice(0, 5).map((syncJob) => {
+            const failedItems = (syncJob.items || []).filter((item) => item.status === "failed");
+            return (
+              <div className="data-row flex-col items-start gap-2" key={syncJob.id}>
+                <div className="flex w-full flex-wrap items-center justify-between gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="font-semibold">#{syncJob.id} {syncJob.sync_type}</span>
+                    <span className={`badge ${syncJob.status === "failed" ? "danger" : syncJob.status === "succeeded" ? "success" : "muted"}`}>{syncJob.status}</span>
+                    <span className="badge muted">成功 {syncJob.success_count} · 失败 {syncJob.failed_count}</span>
+                  </div>
+                  <span className="text-xs text-steel">{syncJob.created_at ? formatDateTime(syncJob.created_at) : "-"}</span>
+                </div>
+                {failedItems.length > 0 && (
+                  <div className="grid w-full gap-2">
+                    {failedItems.slice(0, 3).map((item) => (
+                      <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800" key={item.id}>
+                        <div className="font-semibold">{item.raw_summary || item.external_id || "候选人"} · {item.error_info?.label || "导入失败"}</div>
+                        <div className="mt-1">{item.error || "未记录原始错误"}</div>
+                        {item.error_info?.next_action && <div className="mt-1">下一步：{item.error_info.next_action}</div>}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {failedItems.length === 0 && <p className="text-xs text-steel">本任务没有失败明细。</p>}
+              </div>
+            );
+          })}
         </div>
       </div>
 

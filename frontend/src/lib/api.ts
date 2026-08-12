@@ -38,6 +38,11 @@ export type Candidate = {
   resume_json?: Record<string, unknown>;
   parse_status?: string;
   parse_error?: string;
+  resume_quality?: {
+    status: "complete" | "partial" | "empty" | "parse_failed" | string;
+    label: string;
+    next_action: string;
+  };
   attachments?: ResumeAttachment[];
 };
 export type Job = {
@@ -515,6 +520,11 @@ export type BossSyncItem = {
   target_type?: string | null;
   target_id?: number | null;
   error?: string | null;
+  error_info?: {
+    category: string;
+    label: string;
+    next_action: string;
+  };
   raw_summary?: string | null;
   created_at?: string | null;
 };

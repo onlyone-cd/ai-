@@ -7,6 +7,92 @@ def utcnow():
     return datetime.now(timezone.utc)
 
 
+def is_partial_boss_resume_text(raw_text):
+    value = raw_text or ""
+    return "BOSS_PARTIAL_PROFILE" in value or "完整在线简历详情接口被 BOSS 拒绝" in value or "待补全" in value
+
+
+def candidate_resume_quality(candidate):
+    raw_text = candidate.raw_text or ""
+    if candidate.parse_status == "failed":
+        return {
+            "status": "parse_failed",
+            "label": "解析失败",
+            "next_action": "重新解析或上传完整附件简历后再参与岗位匹配。",
+        }
+    if is_partial_boss_resume_text(raw_text):
+        return {
+            "status": "partial",
+            "label": "BOSS 半截简历",
+            "next_action": "需要重新打开在线简历或附件简历补全，补全前不建议用于精准匹配。",
+        }
+    if len(raw_text.strip()) < 80:
+        return {
+            "status": "empty",
+            "label": "简历内容不足",
+            "next_action": "上传完整简历或重新采集 BOSS 在线简历正文。",
+        }
+    return {
+        "status": "complete",
+        "label": "完整简历",
+        "next_action": "可用于标签解析、岗位匹配和 AI 复核。",
+    }
+
+
+def boss_sync_error_info(error_message):
+    message = str(error_message or "")
+    lower = message.lower()
+    if not message:
+        return {"category": "", "label": "", "next_action": ""}
+    if "1092" in message:
+        return {
+            "category": "boss_1092",
+            "label": "BOSS 接口拒绝",
+            "next_action": "改用页面采集在线简历或附件简历；如仍失败，重新登录 BOSS 后再试。",
+        }
+    if "cookie" in lower or "登录" in message or "login" in lower or "NO_ACTIVE_BOSS_ACCOUNT" in message:
+        return {
+            "category": "auth",
+            "label": "BOSS 登录态失效",
+            "next_action": "打开 BOSS 页面确认已登录，再刷新插件 Cookie 后重试。",
+        }
+    if "stream has ended unexpectedly" in lower or "下载" in message or "download" in lower or "附件" in message:
+        return {
+            "category": "download",
+            "label": "附件下载失败",
+            "next_action": "优先使用在线简历采集；若必须导入附件，请在 BOSS 预览页确认附件可打开。",
+        }
+    if (
+        "未识别到" in message
+        or "不是候选人" in message
+        or "not resume" in lower
+        or "正文" in message
+        or "导航" in message
+    ):
+        return {
+            "category": "not_resume",
+            "label": "未采集到简历正文",
+            "next_action": "进入候选人聊天详情并打开在线简历后重试，避免采集左侧导航或聊天列表。",
+        }
+    if "解析" in message or "parse" in lower:
+        return {
+            "category": "parse",
+            "label": "简历解析失败",
+            "next_action": "检查原文是否完整，必要时上传附件简历并触发重新解析。",
+        }
+    if "timeout" in lower or "504" in message or "network" in lower or "网络" in message:
+        return {
+            "category": "network",
+            "label": "网络或服务超时",
+            "next_action": "稍后重试；连续失败时检查生产服务和 BOSS 页面是否正常。",
+        }
+    return {
+        "category": "unknown",
+        "label": "未知失败",
+        "next_action": "打开任务详情查看原始错误，按候选人单独重试采集。",
+    }
+
+
 def years_between(start, end):
     if not start or not end:
         return None
@@ -96,6 +182,7 @@ class Candidate(db.Model):
             "created_at": self.created_at.isoformat(),
             "tags": [tag.to_dict() for tag in self.tags],
             "experience_analysis": self.resume_json.get("experience_analysis", {}),
+            "resume_quality": candidate_resume_quality(self),
         }
         if detail:
             data["resume_json"] = self.resume_json
@@ -895,6 +982,7 @@ class BossSyncItem(db.Model):
             "target_type": self.target_type,
             "target_id": self.target_id,
             "error": self.error,
+            "error_info": boss_sync_error_info(self.error),
             "raw_summary": self.raw_summary,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }

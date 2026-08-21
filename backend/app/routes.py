@@ -1146,7 +1146,6 @@ def organization_unit_overview(user, unit_id):
 @login_required
 @roles_required("admin", "manager", "recruiter")
 def list_employees(user):
-    ensure_default_organization(user)
     query = EmployeeProfile.query.order_by(EmployeeProfile.updated_at.desc())
     unit_id = request.args.get("organization_unit_id", type=int)
     if unit_id:
@@ -1155,8 +1154,15 @@ def list_employees(user):
     if status and status != "all":
         query = query.filter_by(employment_status=status)
     query = apply_employee_search(query)
-    overview = employee_group_overview(query.all())
-    employees, meta = paginate_query(query, default_limit=20, max_limit=200)
+    overview = employee_group_overview_v2(query)
+    employees, meta = paginate_query(
+        query.options(
+            db.joinedload(EmployeeProfile.organization_unit),
+            db.joinedload(EmployeeProfile.current_job),
+            db.joinedload(EmployeeProfile.owner),
+        ),
+        default_limit=20, max_limit=200
+        )
     return ok({"items": [employee_payload(employee, user) for employee in employees], "overview": overview, **meta})
 
 
@@ -1584,30 +1590,21 @@ def employee_report(user, employee_id):
 @login_required
 @roles_required("admin", "manager", "recruiter")
 def list_candidates(user):
-    query = visible_candidate_query(user).order_by(Candidate.created_at.desc())
-    all_visible_candidates = query.all()
+    query = visible_candidate_query(user).options(db.joinedload(Candidate.owner), db.joinedload(Candidate.tags)).order_by(Candidate.created_at.desc())
     experience_level = request.args.get("experience_level")
     if experience_level and experience_level != "all":
-        filtered = [
-            candidate
-            for candidate in all_visible_candidates
-            if candidate.resume_json.get("experience_analysis", {}).get("level") == experience_level
-        ]
-        candidates, meta = paginate_items(filtered)
+        candidates, meta = paginate_query(query)
+        candidates = [c for c in candidates if c.resume_json.get("experience_analysis", {}).get("level") == experience_level]
     else:
         candidates, meta = paginate_query(query)
     return ok(
         {
             "items": [candidate.to_dict() for candidate in candidates],
-            "experience_stats": experience_stats(all_visible_candidates),
+            "experience_stats": experience_stats_v2(query),
             "visible_scope": user.role,
             **meta,
         }
     )
-
-@api.get("/candidates/<int:candidate_id>")
-@login_required
-@roles_required("admin", "manager", "recruiter")
 def get_candidate(user, candidate_id):
     candidate = db.session.get(Candidate, candidate_id)
     if not candidate:
@@ -7556,6 +7553,18 @@ def bi_snapshot():
     }
 
 
+def experience_stats_v2(query):
+    """使用数据库查询计算经验统计，避免加载所有记录"""
+    labels = {"student": "在校生", "fresh": "应届毕业", "lt1": "1 年以下", "1-3": "1-3 年", "3-5": "3-5 年", "5-10": "5-10 年", "gt10": "10 年以上"}
+    sub = query.subquery()
+    rows = db.session.query(sub.c.id, func.json_extract(sub.c.resume_json, "$.experience_analysis.level")).all()
+    stats = Counter()
+    for row_id, level in rows:
+        key = level if level and level != "remote" else "lt1"
+        stats[key] += 1
+    return [{"key": key, "label": labels[key], "count": stats.get(key, 0)} for key in labels]
+
+
 def experience_stats(candidates):
     stats = Counter("lt1" if candidate.resume_json.get("experience_analysis", {}).get("level") == "remote" else candidate.resume_json.get("experience_analysis", {}).get("level", "lt1") for candidate in candidates)
     labels = {"student": "在校生", "fresh": "应届毕业", "lt1": "1 年以下", "1-3": "1-3 年", "3-5": "3-5 年", "5-10": "5-10 年", "gt10": "10 年以上"}
@@ -7944,18 +7953,73 @@ def apply_organization_aggregate_counts(nodes):
     return sum(int(node.get("employee_count") or 0) for node in nodes)
 
 
-def organization_descendant_ids(unit_id):
-    units = OrganizationUnit.query.all()
-    children_by_parent = {}
-    for unit in units:
-        children_by_parent.setdefault(unit.parent_id, []).append(unit.id)
-    result = []
-    stack = [unit_id]
-    while stack:
-        current = stack.pop()
-        result.append(current)
-        stack.extend(children_by_parent.get(current, []))
-    return result
+    _org_desc_cache = {}
+    def organization_descendant_ids(unit_id, cache=None):
+        if cache is None:
+            cache = _org_desc_cache
+        if unit_id in cache:
+            return cache[unit_id]
+        units = OrganizationUnit.query.all()
+        children_by_parent = {}
+        for unit in units:
+            children_by_parent.setdefault(unit.parent_id, []).append(unit.id)
+        result = []
+        stack = [unit_id]
+        while stack:
+            current = stack.pop()
+            result.append(current)
+            stack.extend(children_by_parent.get(current, []))
+        cache[unit_id] = result
+        return result
+
+
+def employee_group_overview_v2(query):
+    """使用聚合查询的组织概览，替代遍历所有员工"""
+    sub = query.subquery()
+    total = db.session.query(func.count()).select_from(sub).scalar() or 0
+    active = db.session.query(func.count()).select_from(sub).filter(sub.c.employment_status == "active").scalar() or 0
+    with_compensation = (
+        db.session.query(func.count(func.distinct(EmployeeCompensation.employee_id)))
+        .join(sub, EmployeeCompensation.employee_id == sub.c.id)
+        .scalar() or 0
+    )
+    analyzed = (
+        db.session.query(func.count(func.distinct(EmployeeAnalysis.employee_id)))
+        .join(sub, EmployeeAnalysis.employee_id == sub.c.id)
+        .scalar() or 0
+    )
+    high_fit = (
+        db.session.query(func.count(func.distinct(EmployeeAnalysis.employee_id)))
+        .join(sub, EmployeeAnalysis.employee_id == sub.c.id)
+        .filter(EmployeeAnalysis.match_score >= 80)
+        .scalar() or 0
+    )
+    salary_risk = (
+        db.session.query(func.count(func.distinct(EmployeeAnalysis.employee_id)))
+        .join(sub, EmployeeAnalysis.employee_id == sub.c.id)
+        .filter(EmployeeAnalysis.salary_status.in_(["low", "high"]))
+        .scalar() or 0
+    )
+    avg_match = db.session.query(func.avg(EmployeeAnalysis.match_score)).join(sub, EmployeeAnalysis.employee_id == sub.c.id).scalar() or 0
+    today = date.today()
+    hire_dates = [
+        row[0] for row in
+        db.session.query(sub.c.hire_date).select_from(sub).filter(sub.c.hire_date.isnot(None)).all()
+        if row[0]
+    ]
+    seniority_values = [years_between(hd, today) for hd in hire_dates if hd]
+    avg_seniority = round(sum(seniority_values) / len(seniority_values), 1) if seniority_values else 0
+    return {
+        "total": total,
+        "active": active,
+        "inactive": total - active,
+        "with_compensation": with_compensation,
+        "analyzed": analyzed,
+        "high_fit": high_fit,
+        "salary_risk": salary_risk,
+        "avg_match_score": round(float(avg_match), 1) if avg_match else 0,
+        "avg_seniority_years": avg_seniority,
+    }
 
 
 def employee_group_overview(employees):

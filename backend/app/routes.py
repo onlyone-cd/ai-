@@ -26,12 +26,21 @@ from .job_service import ai_review_matches, build_jd_structured, clamp_score, en
 from .llm_client import LLMError, chat_json, llm_available, llm_status
 from .matching import match_candidate, parse_skill_tags
 from .models import AgentConversation, AgentMessage, AuditLog, BackgroundTask, BossAccount, BossDraft, BossSyncItem, BossSyncJob, Candidate, CandidateTag, EmployeeAnalysis, EmployeeCompensation, EmployeeProfile, EmployeeRecommendation, InterviewAssignment, InterviewFeedback, InterviewSpeechLog, Job, LLMUsage, Match, NotificationChannel, NotificationEvent, NotificationLog, OfferRecord, OrganizationUnit, PipelineStage, ResumeAttachment, UploadBatch, User, tag_evidence_payload, utcnow, years_between
+from .insight_service import (
+    channel_effectiveness,
+    funnel_analysis,
+    interviewer_bias_analysis,
+    offer_conversion_analysis,
+    overall_insight_report,
+    time_to_hire_analysis,
+)
 from .ops_service import build_data_quality_report, build_deploy_gate_report, list_backup_packages, migration_status, storage_status, table_counts
 from .rbac import ROLES, role_permissions
 from .resume_service import ARCHIVE_EXTENSIONS, parse_and_save_archive, parse_and_save_resume, parse_and_save_text, reparse_candidate, rescan_attachment, resume_upload_dir
 from .responses import error, ok
 from .settings_service import auto_matching_weights, get_ai_config, get_matching_weights, save_ai_config, save_matching_weights
 from .tag_library import label_map, load_labels
+from .talent_profile_service import build_talent_profile, batch_talent_profiles
 from .task_service import candidate_tag_snapshot, enqueue_task, retry_task, run_task
 
 api = Blueprint("api", __name__)
@@ -3128,6 +3137,77 @@ def bi_overview(user):
             "top_tags": top_tags.most_common(8),
         }
     )
+
+
+@api.get("/insight/funnel")
+@login_required
+@roles_required("admin", "manager")
+def insight_funnel(user):
+    days = max(1, min(parse_optional_int(request.args.get("days"), 90), 365))
+    return ok(funnel_analysis(days))
+
+
+@api.get("/insight/channels")
+@login_required
+@roles_required("admin", "manager")
+def insight_channels(user):
+    days = max(1, min(parse_optional_int(request.args.get("days"), 90), 365))
+    return ok(channel_effectiveness(days))
+
+
+@api.get("/insight/time-to-hire")
+@login_required
+@roles_required("admin", "manager")
+def insight_time_to_hire(user):
+    days = max(1, min(parse_optional_int(request.args.get("days"), 180), 365))
+    return ok(time_to_hire_analysis(days))
+
+
+@api.get("/insight/interviewer-bias")
+@login_required
+@roles_required("admin", "manager")
+def insight_interviewer_bias(user):
+    days = max(1, min(parse_optional_int(request.args.get("days"), 180), 365))
+    return ok(interviewer_bias_analysis(days))
+
+
+@api.get("/insight/offer-conversion")
+@login_required
+@roles_required("admin", "manager")
+def insight_offer_conversion(user):
+    days = max(1, min(parse_optional_int(request.args.get("days"), 180), 365))
+    return ok(offer_conversion_analysis(days))
+
+
+@api.get("/insight/report")
+@login_required
+@roles_required("admin", "manager")
+def insight_full_report(user):
+    days = max(1, min(parse_optional_int(request.args.get("days"), 90), 365))
+    return ok(overall_insight_report(days))
+
+
+@api.get("/candidates/<int:candidate_id>/profile")
+@login_required
+def get_candidate_profile(user, candidate_id):
+    candidate = db.session.get(Candidate, candidate_id)
+    if not candidate or not can_access_candidate(user, candidate):
+        return error("候选人不存在", "NOT_FOUND", 404)
+    profile = build_talent_profile(candidate)
+    audit_log(user, "view", "candidate_profile", candidate_id, candidate.name_masked)
+    return ok(profile)
+
+
+@api.get("/employees/<int:employee_id>/profile")
+@login_required
+@roles_required("admin", "manager", "recruiter")
+def get_employee_profile(user, employee_id):
+    employee = db.session.get(EmployeeProfile, employee_id)
+    if not employee:
+        return error("员工不存在", "NOT_FOUND", 404)
+    profile = build_talent_profile(employee, is_employee=True)
+    audit_log(user, "view", "employee_profile", employee_id, employee.name)
+    return ok(profile)
 
 
 @api.get("/pipeline/overview")

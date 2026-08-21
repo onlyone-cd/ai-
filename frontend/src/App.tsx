@@ -36,6 +36,7 @@ import {
   X
 } from "lucide-react";
 import { api, AgentConversation, AgentMessage, AgentResponse, AiInterviewPlan, AiSettings, AuditLog, BackgroundTask, BiOverview, BossInboxItem, BossSyncJob, Candidate, clearToken, DataIntegrity, EmployeeAnalysis, EmployeeProfile, EmployeeRecommendation, InterviewAssignment, InterviewFeedback, InterviewMessage, InterviewSpeechStatus, Job, LLMUsageSummary, MatchingWeights, MatchResult, notify, OfferRecord, OpsBackupStatus, OpsDataQuality, OpsDeployGates, OrganizationUnit, PipelineItem, PublicInterviewRoom, setToken, SkillTag, SystemSettings, TagQualityItem, User } from "./lib/api";
+import InsightPage from "./InsightPage";
 
 const stageLabels: Record<string, string> = {
   pending: "待处理",
@@ -57,7 +58,7 @@ const offerStatusLabels: Record<string, string> = {
   cancelled: "已取消"
 };
 
-type View = "candidates" | "organization" | "internal" | "jobs" | "pipeline" | "interviews" | "offers" | "boss" | "bi" | "agent" | "settings" | "tasks" | "audit" | "users";
+type View = "candidates" | "organization" | "internal" | "jobs" | "pipeline" | "interviews" | "offers" | "boss" | "bi" | "insight" | "agent" | "settings" | "tasks" | "audit" | "users";
 
 async function copyTextToClipboard(text: string) {
   const value = String(text || "");
@@ -144,6 +145,7 @@ function App() {
     { key: "offers", icon: <HandCoins size={15} />, label: "Offer 管理" },
     { key: "boss", icon: <MessageSquareText size={15} />, label: "BOSS 闭环" },
     { key: "bi", icon: <BarChart3 size={15} />, label: "BI 看板" },
+    { key: "insight", icon: <Sparkles size={15} />, label: "深度洞察" },
     { key: "agent", icon: <Bot size={15} />, label: "AI 助手" },
     { key: "settings", icon: <Settings size={15} />, label: "系统设置" },
     ...(user.role !== "interviewer" ? [{ key: "tasks", icon: <Database size={15} />, label: "后台任务" }] : []),
@@ -207,6 +209,7 @@ function App() {
           {view === "offers" && <OffersPage />}
           {view === "boss" && <BossPage />}
           {view === "bi" && <BiPage />}
+          {view === "insight" && <InsightPage />}
           {view === "agent" && <AgentPage />}
           {view === "settings" && <SettingsPage />}
           {view === "tasks" && <TasksPage setView={setView} />}
@@ -5135,6 +5138,18 @@ function EmployeeDetailPage({ employee, onBack, onChanged, backLabel = "返回�
             <ArrowLeft size={17} />
             {backLabel}
           </button>
+          <button className="secondary-button" onClick={() => {
+            api.employeeProfile(employee.id).then(p => {
+              const w = window.open("", "_blank");
+              if (w) {
+                w.document.write("<pre style=\"font-family:sans-serif;font-size:13px;line-height:1.6;padding:20px\">" + JSON.stringify(p, null, 2) + "</pre>");
+                w.document.close();
+              }
+            });
+          }}>
+            <UserRound size={17} />
+            人才画像
+          </button>
           <button className="secondary-button" onClick={openEdit}>
             <UserCog size={17} />
             编辑岗位/薪资/部门
@@ -5768,6 +5783,18 @@ function CandidateDetailPage({ candidate, onBack, onDeleted, backLabel = "返回
             <Download size={17} />
             导出简历
           </button>
+          <button className="secondary-button" onClick={() => {
+            api.candidateProfile(detail.id).then(p => {
+              const w = window.open("", "_blank");
+              if (w) {
+                w.document.write("<pre style=\"font-family:sans-serif;font-size:13px;line-height:1.6;padding:20px\">" + JSON.stringify(p, null, 2) + "</pre>");
+                w.document.close();
+              }
+            });
+          }}>
+            <UserRound size={17} />
+            人才画像
+          </button>
           <button className="secondary-button text-red-700" onClick={remove} disabled={busy}>
             <Trash2 size={17} />
             删除候选人
@@ -6351,7 +6378,7 @@ function WeightInput({ label, value, onChange }: { label: string; value: number;
 }
 
 function MobileTabs({ view, setView, isAdmin, canUseTasks }: { view: View; setView: (view: View) => void; isAdmin: boolean; canUseTasks: boolean }) {
-  const tabs: [View, string][] = [["candidates", "人才"], ["organization", "组织与内部人才"], ["jobs", "岗位"], ["pipeline", "流程"], ["interviews", "面试"], ["offers", "Offer"], ["boss", "BOSS"], ["bi", "BI"], ["agent", "AI"], ["settings", "系统设置"]];
+  const tabs: [View, string][] = [["candidates", "人才"], ["organization", "组织与内部人才"], ["jobs", "岗位"], ["pipeline", "流程"], ["interviews", "面试"], ["offers", "Offer"], ["boss", "BOSS"], ["bi", "BI"], ["insight", "洞察"], ["agent", "AI"], ["settings", "系统设置"]];
   if (canUseTasks) tabs.push(["tasks", "任务"]);
   if (isAdmin) {
     tabs.push(["audit", "日志"]);
@@ -6401,6 +6428,7 @@ function titleFor(view: View) {
     offers: "Offer 管理",
     boss: "BOSS 半自动闭环",
     bi: "BI 看板",
+    insight: "深度洞察",
     agent: "AI 助手",
     settings: "系统设置",
     tasks: "后台任务",

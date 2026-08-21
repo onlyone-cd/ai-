@@ -963,6 +963,14 @@ export const api = {
   deleteOffer: (id: number) => request<{ deleted: number }>(`/offers/${id}`, { method: "DELETE" }),
   offerLetter: (id: number) => download(`/offers/${id}/letter.txt`, `offer-${id}.txt`),
   bi: (days = 30) => request<BiOverview>(`/bi/overview?days=${days}`),
+  insightFunnel: (days = 90) => request<InsightFunnel>(`/insight/funnel?days=${days}`),
+  insightChannels: (days = 90) => request<InsightChannels>(`/insight/channels?days=${days}`),
+  insightTimeToHire: (days = 180) => request<InsightTimeToHire>(`/insight/time-to-hire?days=${days}`),
+  insightInterviewerBias: (days = 180) => request<InsightInterviewerBias>(`/insight/interviewer-bias?days=${days}`),
+  insightOfferConversion: (days = 180) => request<InsightOfferConversion>(`/insight/offer-conversion?days=${days}`),
+  insightReport: (days = 90) => request<InsightReport>(`/insight/report?days=${days}`),
+  candidateProfile: (id: number) => request<TalentProfile>(`/candidates/${id}/profile`),
+  employeeProfile: (id: number) => request<TalentProfile>(`/employees/${id}/profile`),
   exportCsv: (kind: "candidates" | "jobs" | "interviews" | "offers" | "pipeline" | "employees") => download(`/exports/${kind}.csv`, `${kind}.csv`),
   tags: () => request<{ items: SkillTag[]; categories: string[] }>("/tags"),
   bossStatus: () => request<{
@@ -1031,4 +1039,57 @@ export type BiOverview = {
   pipeline_funnel: Record<string, number>;
   experience_stats: { key: string; label: string; count: number }[];
   top_tags: [string, number][];
+};
+
+export type InsightFunnel = {
+  funnel: { stage: string; entered: number; dropped_off: number; drop_rate: number; is_bottleneck: boolean }[];
+  bottlenecks: string[];
+  bottleneck_analysis: string;
+};
+
+export type InsightChannel = {
+  source: string; total: number; onboarded: number; rejected: number;
+  in_pipeline: number; onboard_rate: number; avg_match_score: number;
+};
+export type InsightChannels = { channels: InsightChannel[]; total: number };
+
+export type InsightTimeToHire = {
+  avg_days: number; median_days: number; min_days: number; max_days: number;
+  samples: number; ai_analysis: string;
+};
+
+export type InsightInterviewerBias = {
+  interviewers: { interviewer_id: number; interviewer_name: string; avg_rating: number;
+    std: number; count: number; bias: number; bias_direction: string }[];
+  global_avg_rating: number; global_std: number; total_feedbacks: number;
+};
+
+export type InsightOfferConversion = {
+  total: number; accepted: number; declined: number; cancelled: number;
+  sent: number; draft: number; acceptance_rate: number; avg_salary: number;
+};
+
+export type InsightReport = {
+  period_days: number;
+  funnel: InsightFunnel;
+  channels: InsightChannels;
+  time_to_hire: InsightTimeToHire;
+  interviewer_bias: InsightInterviewerBias;
+  offer_conversion: InsightOfferConversion;
+  generated_at: string;
+};
+
+export type TalentProfile = {
+  basic: {
+    name: string; title: string; source: string; gender: string; city: string;
+    phone: string; email: string; highest_education: string;
+    experience_years: number; experience_level: string;
+  };
+  skill_matrix: Record<string, { name: string; proficiency: number; level: string }[]>;
+  career_timeline: { company: string; title: string; period: string; description: string; duration_months: number | null }[];
+  project_highlights: { name: string; role: string; description: string }[];
+  risk_flags: { type: string; label: string; detail: string; severity: string }[];
+  competency: Record<string, { score: number; tags: string[]; level: string }>;
+  ai_analysis: { strengths: string[]; growth_areas: string[]; recommended_roles: string[]; development_advice: string } | string;
+  generated_at: string;
 };

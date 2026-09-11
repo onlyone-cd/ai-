@@ -26,14 +26,6 @@ from .job_service import ai_review_matches, build_jd_structured, clamp_score, en
 from .llm_client import LLMError, chat_json, llm_available, llm_status
 from .matching import match_candidate, parse_skill_tags
 from .models import AgentConversation, AgentMessage, AuditLog, BackgroundTask, BossAccount, BossDraft, BossSyncItem, BossSyncJob, Candidate, CandidateTag, EmployeeAnalysis, EmployeeCompensation, EmployeeProfile, EmployeeRecommendation, InterviewAssignment, InterviewFeedback, InterviewSpeechLog, Job, LLMUsage, Match, NotificationChannel, NotificationEvent, NotificationLog, OfferRecord, OrganizationUnit, PipelineStage, ResumeAttachment, UploadBatch, User, tag_evidence_payload, utcnow, years_between
-from .insight_service import (
-    channel_effectiveness,
-    funnel_analysis,
-    interviewer_bias_analysis,
-    offer_conversion_analysis,
-    overall_insight_report,
-    time_to_hire_analysis,
-)
 from .ops_service import build_data_quality_report, build_deploy_gate_report, list_backup_packages, migration_status, storage_status, table_counts
 from .rbac import ROLES, role_permissions
 from .resume_service import ARCHIVE_EXTENSIONS, parse_and_save_archive, parse_and_save_resume, parse_and_save_text, reparse_candidate, rescan_attachment, resume_upload_dir
@@ -1605,6 +1597,11 @@ def list_candidates(user):
             **meta,
         }
     )
+
+
+@api.get("/candidates/<int:candidate_id>")
+@login_required
+@roles_required("admin", "manager", "recruiter")
 def get_candidate(user, candidate_id):
     candidate = db.session.get(Candidate, candidate_id)
     if not candidate:
@@ -3134,54 +3131,6 @@ def bi_overview(user):
             "top_tags": top_tags.most_common(8),
         }
     )
-
-
-@api.get("/insight/funnel")
-@login_required
-@roles_required("admin", "manager")
-def insight_funnel(user):
-    days = max(1, min(parse_optional_int(request.args.get("days"), 90), 365))
-    return ok(funnel_analysis(days))
-
-
-@api.get("/insight/channels")
-@login_required
-@roles_required("admin", "manager")
-def insight_channels(user):
-    days = max(1, min(parse_optional_int(request.args.get("days"), 90), 365))
-    return ok(channel_effectiveness(days))
-
-
-@api.get("/insight/time-to-hire")
-@login_required
-@roles_required("admin", "manager")
-def insight_time_to_hire(user):
-    days = max(1, min(parse_optional_int(request.args.get("days"), 180), 365))
-    return ok(time_to_hire_analysis(days))
-
-
-@api.get("/insight/interviewer-bias")
-@login_required
-@roles_required("admin", "manager")
-def insight_interviewer_bias(user):
-    days = max(1, min(parse_optional_int(request.args.get("days"), 180), 365))
-    return ok(interviewer_bias_analysis(days))
-
-
-@api.get("/insight/offer-conversion")
-@login_required
-@roles_required("admin", "manager")
-def insight_offer_conversion(user):
-    days = max(1, min(parse_optional_int(request.args.get("days"), 180), 365))
-    return ok(offer_conversion_analysis(days))
-
-
-@api.get("/insight/report")
-@login_required
-@roles_required("admin", "manager")
-def insight_full_report(user):
-    days = max(1, min(parse_optional_int(request.args.get("days"), 90), 365))
-    return ok(overall_insight_report(days))
 
 
 @api.get("/candidates/<int:candidate_id>/profile")
@@ -7953,24 +7902,18 @@ def apply_organization_aggregate_counts(nodes):
     return sum(int(node.get("employee_count") or 0) for node in nodes)
 
 
-    _org_desc_cache = {}
-    def organization_descendant_ids(unit_id, cache=None):
-        if cache is None:
-            cache = _org_desc_cache
-        if unit_id in cache:
-            return cache[unit_id]
-        units = OrganizationUnit.query.all()
-        children_by_parent = {}
-        for unit in units:
-            children_by_parent.setdefault(unit.parent_id, []).append(unit.id)
-        result = []
-        stack = [unit_id]
-        while stack:
-            current = stack.pop()
-            result.append(current)
-            stack.extend(children_by_parent.get(current, []))
-        cache[unit_id] = result
-        return result
+def organization_descendant_ids(unit_id):
+    units = OrganizationUnit.query.with_entities(OrganizationUnit.id, OrganizationUnit.parent_id).all()
+    children_by_parent = {}
+    for child_id, parent_id in units:
+        children_by_parent.setdefault(parent_id, []).append(child_id)
+    result = []
+    stack = [unit_id]
+    while stack:
+        current = stack.pop()
+        result.append(current)
+        stack.extend(children_by_parent.get(current, []))
+    return result
 
 
 def employee_group_overview_v2(query):

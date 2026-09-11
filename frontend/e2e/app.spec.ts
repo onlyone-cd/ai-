@@ -44,4 +44,24 @@ test.describe("launch smoke", () => {
     await input.press("Enter");
     await expect(input).toHaveValue("");
   });
+
+  test("insight report is responsive and manual refresh bypasses cache", async ({ page }) => {
+    await page.setViewportSize({ width: 542, height: 698 });
+    await login(page);
+
+    await page.getByRole("combobox").first().selectOption("insight");
+    await expect(page.getByTestId("insight-page")).toBeVisible();
+    await expect(page.getByTestId("insight-report")).toBeVisible();
+    await expect(page.getByTestId("insight-report")).not.toContainText("流失 -");
+
+    const refreshRequest = page.waitForRequest((request) =>
+      request.url().includes("/api/insight/report?days=90&refresh=1"),
+    );
+    await page.getByRole("button", { name: "刷新", exact: true }).click();
+    await refreshRequest;
+
+    await page.getByRole("button", { name: "招聘漏斗", exact: true }).click();
+    await expect(page.getByRole("heading", { name: "招聘漏斗详情" })).toBeVisible();
+    await expect(page.getByText(/候选人-岗位/)).toBeVisible();
+  });
 });

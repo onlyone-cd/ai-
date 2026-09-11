@@ -26,6 +26,10 @@ PATTERNS = [
     ("GitHub token", re.compile(r"\bgh[pousr]_[A-Za-z0-9_]{30,}\b")),
     ("Private key", re.compile(r"-----BEGIN (?:RSA |OPENSSH |EC |DSA )?PRIVATE KEY-----")),
     ("JWT secret assignment", re.compile(r"JWT_SECRET\s*=\s*(?!replace-|test-secret|demo-secret)[A-Za-z0-9_./+=-]{24,}")),
+    (
+        "Long literal password assignment",
+        re.compile(r"(?i)\b(?:password|passwd|pwd)\s*=\s*['\"](?!replace-|test-|demo-)[^'\"\r\n]{20,}['\"]"),
+    ),
 ]
 
 
@@ -49,10 +53,15 @@ def iter_files(root):
 
 def tracked_files(root):
     try:
-        result = subprocess.run(["git", "ls-files"], cwd=root, check=True, capture_output=True, text=True)
+        result = subprocess.run(
+            ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+            cwd=root,
+            check=True,
+            capture_output=True,
+        )
     except (OSError, subprocess.CalledProcessError):
         return []
-    return [Path(line.strip()) for line in result.stdout.splitlines() if line.strip()]
+    return [Path(item.decode("utf-8", errors="surrogateescape")) for item in result.stdout.split(b"\0") if item]
 
 
 def scan_file(path):
@@ -72,7 +81,7 @@ def scan_file(path):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Scan repository files for accidentally committed secrets.")
+    parser = argparse.ArgumentParser(description="Scan tracked and untracked repository files for accidentally exposed secrets.")
     parser.add_argument("--root", default=str(ROOT), help="Repository root")
     args = parser.parse_args()
     root = Path(args.root).resolve()
@@ -87,7 +96,7 @@ def main():
             print(f"- {file_name}:{line_no} {name}: {snippet}")
         return 1
 
-    print("No committed secrets detected.")
+    print("No secrets detected in tracked or untracked repository files.")
     return 0
 
 

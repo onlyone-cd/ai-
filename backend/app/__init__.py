@@ -41,6 +41,7 @@ def create_app(config_object=None):
     db.init_app(app)
     migrate.init_app(app, db)
 
+    from .insight_routes import insight_api
     from .routes import LOGIN_FAILURES, PUBLIC_INTERVIEW_REQUESTS, api
     from .cli import register_cli
 
@@ -49,6 +50,7 @@ def create_app(config_object=None):
         PUBLIC_INTERVIEW_REQUESTS.clear()
 
     app.register_blueprint(api, url_prefix="/api")
+    app.register_blueprint(insight_api, url_prefix="/api")
     register_cli(app)
 
     @app.before_request

@@ -398,6 +398,19 @@ Agent 支持的能力：
 ### GET /api/bi/overview
 BI 看板概览数据（候选人/岗位/员工/流程/面试/Offer 统计）。
 
+### AI 深度洞察
+
+所有洞察接口支持 `days` 查询参数，用于限定统计周期；返回值由规则聚合和 AI 分析结果共同组成。漏斗以统计期内首次进入流程的“候选人-岗位”组合作为样本，按最高到达阶段形成单调漏斗，淘汰作为独立退出结果统计。
+
+| 端点 | 说明 |
+|------|------|
+| `GET /api/insight/funnel` | 招聘漏斗、阶段流失率、瓶颈阶段和分析说明 |
+| `GET /api/insight/channels` | 候选人来源、入职率和平均匹配分 |
+| `GET /api/insight/time-to-hire` | 平均、中位、最短和最长招聘周期 |
+| `GET /api/insight/interviewer-bias` | 面试官评分均值、标准差和评分偏差 |
+| `GET /api/insight/offer-conversion` | Offer 发送、接受、拒绝、取消及接受率 |
+| `GET /api/insight/report` | 一次返回上述全部洞察数据，供综合报告页面使用；`refresh=1` 可绕过短时缓存 |
+
 ### 导出 CSV
 
 | 端点 | 说明 |

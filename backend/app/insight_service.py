@@ -13,6 +13,8 @@ AI Deep Insight Service — 招聘深度洞察
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta, timezone
 from statistics import mean, stdev
+from threading import Lock
+from time import monotonic
 
 from flask import current_app
 from sqlalchemy import func
@@ -34,42 +36,88 @@ from .models import (
 )
 
 
-def funnel_analysis(days=90):
-    """招聘漏斗分析：各阶段候选人数量、流失率、瓶颈环节"""
+_report_cache = {}
+_report_cache_lock = Lock()
+FUNNEL_STAGES = [
+    "pending",
+    "ai_screen",
+    "business_review",
+    "interview_first",
+    "interview_second",
+    "interview_final",
+    "offer",
+    "onboarded",
+]
+
+
+def funnel_analysis(days=90, use_ai=True):
+    """按统计期内新进入流程的候选人-岗位组合计算招聘漏斗。
+
+    候选人可能跳过中间阶段或回退，因此以其最高到达阶段推断已通过的前置
+    阶段，保证漏斗人数单调递减。淘汰是退出结果，不作为入职后的漏斗阶段。
+    """
     since = utcnow() - timedelta(days=days)
-    stages = ["pending", "ai_screen", "business_review", "interview_first", "interview_second", "interview_final", "offer", "onboarded", "rejected"]
-
-    # 每个阶段进入过的候选人（去重）
-    stage_counts = {}
-    for stage in stages:
-        count = (
-            db.session.query(func.count(func.distinct(PipelineStage.candidate_id)))
-            .filter(PipelineStage.stage == stage, PipelineStage.ts >= since)
-            .scalar()
-            or 0
+    now = utcnow()
+    first_events = (
+        db.session.query(
+            PipelineStage.candidate_id.label("candidate_id"),
+            PipelineStage.job_id.label("job_id"),
+            func.min(PipelineStage.ts).label("first_ts"),
         )
-        stage_counts[stage] = count
+        .group_by(PipelineStage.candidate_id, PipelineStage.job_id)
+        .having(func.min(PipelineStage.ts) >= since)
+        .subquery()
+    )
+    rows = (
+        db.session.query(
+            PipelineStage.candidate_id,
+            PipelineStage.job_id,
+            PipelineStage.stage,
+            PipelineStage.ts,
+            PipelineStage.id,
+        )
+        .join(
+            first_events,
+            (first_events.c.candidate_id == PipelineStage.candidate_id)
+            & (first_events.c.job_id == PipelineStage.job_id),
+        )
+        .filter(PipelineStage.ts <= now)
+        .order_by(PipelineStage.candidate_id, PipelineStage.job_id, PipelineStage.ts, PipelineStage.id)
+        .all()
+    )
 
-    # 流失率计算：从上一阶段到本阶段的流失
+    stage_index = {stage: index for index, stage in enumerate(FUNNEL_STAGES)}
+    highest_stage = {}
+    latest_stage = {}
+    for candidate_id, job_id, stage, _, _ in rows:
+        application = (candidate_id, job_id)
+        latest_stage[application] = stage
+        if stage in stage_index:
+            highest_stage[application] = max(highest_stage.get(application, -1), stage_index[stage])
+
+    stage_counts = {
+        stage: sum(highest >= index for highest in highest_stage.values())
+        for index, stage in enumerate(FUNNEL_STAGES)
+    }
+
     funnel = []
-    prev_count = stage_counts.get(stages[0], 0)
-    for stage in stages:
+    for index, stage in enumerate(FUNNEL_STAGES):
         current = stage_counts.get(stage, 0)
-        drop_off = prev_count - current if prev_count > 0 else 0
-        drop_rate = round(drop_off / prev_count * 100, 1) if prev_count > 0 else 0
+        next_count = stage_counts.get(FUNNEL_STAGES[index + 1], current) if index + 1 < len(FUNNEL_STAGES) else current
+        drop_off = max(current - next_count, 0)
+        drop_rate = round(drop_off / current * 100, 1) if current else 0
         funnel.append({
             "stage": stage,
             "entered": current,
-            "dropped_off": max(drop_off, 0),
+            "dropped_off": drop_off,
             "drop_rate": drop_rate,
-            "is_bottleneck": drop_rate > 40 and current > 0,
+            "is_bottleneck": drop_rate > 40 and drop_off > 0,
         })
-        prev_count = current
 
     # 瓶颈识别
     bottlenecks = [s for s in funnel if s["is_bottleneck"]]
     bottleneck_analysis = ""
-    if bottlenecks and llm_available():
+    if bottlenecks and use_ai and llm_available():
         top = bottlenecks[:3]
         try:
             result = chat_json([
@@ -84,6 +132,8 @@ def funnel_analysis(days=90):
         "funnel": funnel,
         "bottlenecks": [s["stage"] for s in bottlenecks],
         "bottleneck_analysis": bottleneck_analysis,
+        "cohort_size": len(highest_stage),
+        "rejected": sum(stage == "rejected" for stage in latest_stage.values()),
     }
 
 
@@ -94,17 +144,34 @@ def channel_effectiveness(days=90):
     if not candidates:
         return {"channels": [], "total": 0}
 
-    source_map = defaultdict(lambda: {"total": 0, "onboarded": 0, "rejected": 0, "in_pipeline": 0, "avg_score": 0, "scores": []})
+    candidate_ids = [candidate.id for candidate in candidates]
+    latest_stages = {}
+    for candidate_id, stage in (
+        db.session.query(PipelineStage.candidate_id, PipelineStage.stage)
+        .filter(PipelineStage.candidate_id.in_(candidate_ids))
+        .order_by(PipelineStage.candidate_id, PipelineStage.ts.desc(), PipelineStage.id.desc())
+        .all()
+    ):
+        latest_stages.setdefault(candidate_id, stage)
+
+    best_scores = dict(
+        db.session.query(Match.candidate_id, func.max(Match.score))
+        .filter(Match.candidate_id.in_(candidate_ids))
+        .group_by(Match.candidate_id)
+        .all()
+    )
+
+    source_map = defaultdict(lambda: {"total": 0, "onboarded": 0, "rejected": 0, "in_pipeline": 0, "scores": []})
     for c in candidates:
         source = c.source or "unknown"
         source_map[source]["total"] += 1
 
         # 流程状态
-        latest = PipelineStage.query.filter_by(candidate_id=c.id).order_by(PipelineStage.ts.desc()).first()
-        if latest:
-            if latest.stage == "onboarded":
+        latest_stage = latest_stages.get(c.id)
+        if latest_stage:
+            if latest_stage == "onboarded":
                 source_map[source]["onboarded"] += 1
-            elif latest.stage == "rejected":
+            elif latest_stage == "rejected":
                 source_map[source]["rejected"] += 1
             else:
                 source_map[source]["in_pipeline"] += 1
@@ -112,9 +179,9 @@ def channel_effectiveness(days=90):
             source_map[source]["in_pipeline"] += 1
 
         # 匹配分
-        best = Match.query.filter_by(candidate_id=c.id).order_by(Match.score.desc()).first()
-        if best:
-            source_map[source]["scores"].append(best.score)
+        best_score = best_scores.get(c.id)
+        if best_score is not None:
+            source_map[source]["scores"].append(best_score)
 
     channels = []
     for source, data in source_map.items():
@@ -134,30 +201,46 @@ def channel_effectiveness(days=90):
     return {"channels": channels, "total": len(candidates)}
 
 
-def time_to_hire_analysis(days=180):
+def time_to_hire_analysis(days=180, use_ai=True):
     """招聘周期分析：从创建到入职的平均天数"""
     since = utcnow() - timedelta(days=days)
 
-    # 找到有入职记录且有时间线的候选人
-    onboarded = (
-        db.session.query(PipelineStage.candidate_id, func.min(PipelineStage.ts).label("first_ts"))
-        .filter(PipelineStage.stage == "pending", PipelineStage.ts >= since)
-        .group_by(PipelineStage.candidate_id)
+    # 以候选人-岗位为一次招聘流程，避免同一候选人的不同岗位时间线相互串联。
+    applications = (
+        db.session.query(
+            PipelineStage.candidate_id.label("candidate_id"),
+            PipelineStage.job_id.label("job_id"),
+            func.min(PipelineStage.ts).label("first_ts"),
+        )
+        .group_by(PipelineStage.candidate_id, PipelineStage.job_id)
+        .having(func.min(PipelineStage.ts) >= since)
         .subquery()
     )
     hired = (
-        db.session.query(PipelineStage.candidate_id, func.min(PipelineStage.ts).label("hired_ts"))
-        .filter(PipelineStage.stage == "onboarded", PipelineStage.ts >= since)
-        .group_by(PipelineStage.candidate_id)
+        db.session.query(
+            PipelineStage.candidate_id.label("candidate_id"),
+            PipelineStage.job_id.label("job_id"),
+            func.min(PipelineStage.ts).label("hired_ts"),
+        )
+        .filter(PipelineStage.stage == "onboarded")
+        .group_by(PipelineStage.candidate_id, PipelineStage.job_id)
         .subquery()
     )
     result = (
-        db.session.query(onboarded.c.first_ts, hired.c.hired_ts)
-        .join(hired, onboarded.c.candidate_id == hired.c.candidate_id)
+        db.session.query(applications.c.first_ts, hired.c.hired_ts)
+        .join(
+            hired,
+            (applications.c.candidate_id == hired.c.candidate_id)
+            & (applications.c.job_id == hired.c.job_id),
+        )
         .all()
     )
 
-    days_list = [(r.hired_ts - r.first_ts).days for r in result if r.first_ts and r.hired_ts]
+    days_list = [
+        max((row.hired_ts - row.first_ts).days, 0)
+        for row in result
+        if row.first_ts and row.hired_ts and row.hired_ts >= row.first_ts
+    ]
     if not days_list:
         return {"avg_days": 0, "median_days": 0, "min_days": 0, "max_days": 0, "samples": 0, "ai_analysis": ""}
 
@@ -171,7 +254,7 @@ def time_to_hire_analysis(days=180):
         "samples": n,
     }
 
-    if llm_available():
+    if use_ai and llm_available():
         try:
             ai = chat_json([
                 {"role": "system", "content": "你是招聘数据分析专家。分析招聘周期数据，给出招聘效率评价和优化建议。输出JSON。"},
@@ -187,29 +270,44 @@ def time_to_hire_analysis(days=180):
 def interviewer_bias_analysis(days=180):
     """面试官评分偏差分析"""
     since = utcnow() - timedelta(days=days)
-    feedbacks = InterviewFeedback.query.filter(InterviewFeedback.created_at >= since).all()
-    if not feedbacks:
-        return {"interviewers": [], "total_feedbacks": 0}
+    feedback_rows = (
+        db.session.query(
+            InterviewFeedback.rating,
+            InterviewAssignment.interviewer_id,
+            User.name,
+        )
+        .join(InterviewAssignment, InterviewAssignment.id == InterviewFeedback.assignment_id)
+        .outerjoin(User, User.id == InterviewAssignment.interviewer_id)
+        .filter(InterviewFeedback.created_at >= since)
+        .all()
+    )
+    if not feedback_rows:
+        return {
+            "interviewers": [],
+            "global_avg_rating": 0,
+            "global_std": 0,
+            "total_feedbacks": 0,
+        }
 
     by_interviewer = defaultdict(list)
-    for fb in feedbacks:
-        assignment = db.session.get(InterviewAssignment, fb.assignment_id)
-        if assignment:
-            by_interviewer[assignment.interviewer_id].append(fb.rating)
+    interviewer_names = {}
+    for rating, interviewer_id, interviewer_name in feedback_rows:
+        if rating is not None:
+            by_interviewer[interviewer_id].append(rating)
+        interviewer_names[interviewer_id] = interviewer_name or f"用户{interviewer_id}"
 
-    all_ratings = [fb.rating for fb in feedbacks if fb.rating]
+    all_ratings = [rating for rating, _, _ in feedback_rows if rating is not None]
     global_avg = mean(all_ratings) if all_ratings else 0
     global_std = stdev(all_ratings) if len(all_ratings) > 1 else 0
 
     interviewers = []
     for interviewer_id, ratings in by_interviewer.items():
-        user = db.session.get(User, interviewer_id)
         avg = mean(ratings) if ratings else 0
         std = stdev(ratings) if len(ratings) > 1 else 0
         bias = round(avg - global_avg, 1) if global_avg else 0
         interviewers.append({
             "interviewer_id": interviewer_id,
-            "interviewer_name": user.name if user else f"用户{interviewer_id}",
+            "interviewer_name": interviewer_names[interviewer_id],
             "avg_rating": round(avg, 1),
             "std": round(std, 1),
             "count": len(ratings),
@@ -231,7 +329,16 @@ def offer_conversion_analysis(days=180):
     since = utcnow() - timedelta(days=days)
     offers = OfferRecord.query.filter(OfferRecord.created_at >= since).all()
     if not offers:
-        return {"total": 0, "accepted": 0, "declined": 0, "cancelled": 0, "acceptance_rate": 0, "avg_salary": {}}
+        return {
+            "total": 0,
+            "accepted": 0,
+            "declined": 0,
+            "cancelled": 0,
+            "sent": 0,
+            "draft": 0,
+            "acceptance_rate": 0,
+            "avg_salary": 0,
+        }
 
     status_count = Counter(o.status for o in offers)
     accepted = [o for o in offers if o.status == "accepted"]
@@ -264,14 +371,37 @@ def pipeline_bottleneck_analysis(days=90):
     }
 
 
-def overall_insight_report(days=90):
-    """综合洞察报告"""
-    return {
+def overall_insight_report(days=90, force_refresh=False):
+    """综合洞察报告。
+
+    页面首屏使用数据库规则分析，避免等待外部大模型；单项深度分析仍可使用 AI。
+    同一进程内短时缓存报告，减少频繁切换页面造成的重复聚合查询。
+    """
+    cache_seconds = max(float(current_app.config.get("INSIGHT_REPORT_CACHE_SECONDS", 60)), 0)
+    cache_key = int(days)
+    now = monotonic()
+    if force_refresh:
+        with _report_cache_lock:
+            _report_cache.pop(cache_key, None)
+    if cache_seconds > 0:
+        with _report_cache_lock:
+            cached = _report_cache.get(cache_key)
+            if cached and now - cached[0] < cache_seconds:
+                return cached[1]
+
+    report = {
         "period_days": days,
-        "funnel": funnel_analysis(days),
+        "funnel": funnel_analysis(days, use_ai=False),
         "channels": channel_effectiveness(days),
-        "time_to_hire": time_to_hire_analysis(days),
+        "time_to_hire": time_to_hire_analysis(days, use_ai=False),
         "interviewer_bias": interviewer_bias_analysis(days),
         "offer_conversion": offer_conversion_analysis(days),
         "generated_at": utcnow().isoformat(),
     }
+    if cache_seconds > 0:
+        with _report_cache_lock:
+            _report_cache[cache_key] = (now, report)
+            expired = [key for key, value in _report_cache.items() if now - value[0] >= cache_seconds]
+            for key in expired:
+                _report_cache.pop(key, None)
+    return report

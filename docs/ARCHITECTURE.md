@@ -19,7 +19,9 @@ AI-agent/
 │       ├── __init__.py       # 应用工厂、路由注册、中间件
 │       ├── config.py         # 配置管理（环境变量/默认值）
 │       ├── models.py         # SQLAlchemy 数据模型（~30 个表）
-│       ├── routes.py         # 全部 API 路由（~400KB，~150+ 端点）
+│       ├── routes.py         # 核心业务 API 路由（候选人/岗位/流程/BOSS/Agent 等）
+│       ├── insight_routes.py # AI 深度洞察独立 Blueprint
+│       ├── insight_service.py # 漏斗/渠道/周期/面试官/Offer 洞察聚合
 │       ├── auth.py           # JWT 认证、密码哈希、登录锁定
 │       ├── resume_service.py # 简历上传/解析/存储/附件管理
 │       ├── deepseek_resume_parser.py  # DeepSeek AI 简历解析
@@ -40,7 +42,8 @@ AI-agent/
 │
 ├── frontend/                 # React 19 + Vite + TypeScript
 │   └── src/
-│       ├── App.tsx           # 全部前端页面（~320KB，16 个页面组件）
+│       ├── App.tsx           # 主应用外壳与尚未拆分的业务页面
+│       ├── InsightPage.tsx   # AI 深度洞察页面与轻量 CSS 数据图形
 │       ├── lib/api.ts        # API 客户端封装（~47KB）
 │       ├── styles.css        # Tailwind 样式
 │       └── main.tsx          # 入口
@@ -68,6 +71,8 @@ AI-agent/
 ├── docker-compose.production.yml  # 生产 Docker Compose
 └── .env.example              # 环境变量模板
 ```
+
+> 根目录的 Word 文档《技术架构和开发流程-精细补充》是 2026-07-06 的历史重建蓝图，其中部分文件路径、React 版本、Agent 编排和任务队列方案已经被当前实现替代。维护和开发以本目录文档及实际代码为准，业务规则可继续参考该历史文档。
 
 ---
 

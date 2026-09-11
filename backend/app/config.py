@@ -32,6 +32,7 @@ class Config:
     LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
     ACCESS_LOG_ENABLED = os.getenv("ACCESS_LOG_ENABLED", "true").lower() == "true"
     SLOW_REQUEST_MS = int(os.getenv("SLOW_REQUEST_MS", "1000"))
+    INSIGHT_REPORT_CACHE_SECONDS = float(os.getenv("INSIGHT_REPORT_CACHE_SECONDS", "60"))
     RATE_LIMIT_ENABLED = os.getenv("RATE_LIMIT_ENABLED", "true").lower() == "true"
     RATE_LIMIT_PER_MINUTE = int(os.getenv("RATE_LIMIT_PER_MINUTE", "120"))
     LOGIN_MAX_FAILURES = int(os.getenv("LOGIN_MAX_FAILURES", "5"))
@@ -68,3 +69,4 @@ class TestConfig(Config):
     UPLOAD_FOLDER = "test_uploads"
     LLM_ENABLED = False
     RATE_LIMIT_ENABLED = False
+    INSIGHT_REPORT_CACHE_SECONDS = 0

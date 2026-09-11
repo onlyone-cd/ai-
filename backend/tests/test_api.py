@@ -289,6 +289,88 @@ def test_bi_overview_counts_only_recruiting_active_jobs(client, admin_headers):
     assert data["active_jobs"] == len(active_recruiting_jobs)
     assert data["active_jobs"] < Job.query.filter_by(status="active").count()
 
+
+def test_insight_blueprint_routes_and_permissions(client, admin_headers, recruiter_headers):
+    endpoints = {
+        "/api/insight/funnel?days=0": {"funnel", "bottlenecks", "bottleneck_analysis"},
+        "/api/insight/channels?days=999": {"channels", "total"},
+        "/api/insight/time-to-hire?days=invalid": {"avg_days", "median_days", "min_days", "max_days", "samples", "ai_analysis"},
+        "/api/insight/interviewer-bias": {"interviewers", "global_avg_rating", "global_std", "total_feedbacks"},
+        "/api/insight/offer-conversion": {"total", "accepted", "declined", "cancelled", "sent", "draft", "acceptance_rate", "avg_salary"},
+    }
+    for endpoint, expected_keys in endpoints.items():
+        response = client.get(endpoint, headers=admin_headers)
+        assert response.status_code == 200
+        assert expected_keys <= set(response.get_json()["data"])
+
+    report = client.get("/api/insight/report?days=30", headers=admin_headers)
+    assert report.status_code == 200
+    assert {"period_days", "funnel", "channels", "time_to_hire", "interviewer_bias", "offer_conversion", "generated_at"} <= set(report.get_json()["data"])
+    assert report.get_json()["data"]["period_days"] == 30
+    assert client.get("/api/insight/report").status_code == 401
+    assert client.get("/api/insight/report", headers=recruiter_headers).status_code == 403
+
+
+def test_insight_funnel_uses_monotonic_application_cohort(client, admin_headers):
+    PipelineStage.query.delete()
+    admin = User.query.filter_by(username="admin").one()
+    job = Job(owner_hr_id=admin.id, title="漏斗测试岗位", jd_text="测试", status="active")
+    candidates = [
+        Candidate(owner_hr_id=admin.id, name_masked="漏斗候选人甲", title="测试", raw_text="测试简历甲"),
+        Candidate(owner_hr_id=admin.id, name_masked="漏斗候选人乙", title="测试", raw_text="测试简历乙"),
+    ]
+    db.session.add_all([job, *candidates])
+    db.session.flush()
+    base = datetime.now(timezone.utc) - timedelta(days=2)
+    timelines = [
+        (candidates[0], ["pending", "business_review", "interview_first", "interview_second", "rejected"]),
+        (candidates[1], ["business_review", "interview_first", "interview_second", "interview_final", "offer", "onboarded"]),
+    ]
+    for candidate, stages in timelines:
+        for offset, stage in enumerate(stages):
+            db.session.add(PipelineStage(candidate_id=candidate.id, job_id=job.id, stage=stage, updated_by=admin.id, ts=base + timedelta(hours=offset)))
+    db.session.commit()
+
+    response = client.get("/api/insight/funnel?days=30", headers=admin_headers)
+
+    assert response.status_code == 200
+    data = response.get_json()["data"]
+    assert data["cohort_size"] == 2
+    assert data["rejected"] == 1
+    assert [item["stage"] for item in data["funnel"]] == [
+        "pending", "ai_screen", "business_review", "interview_first",
+        "interview_second", "interview_final", "offer", "onboarded",
+    ]
+    assert [item["entered"] for item in data["funnel"]] == [2, 2, 2, 2, 2, 1, 1, 1]
+    assert all(0 <= item["drop_rate"] <= 100 for item in data["funnel"])
+    second_interview = next(item for item in data["funnel"] if item["stage"] == "interview_second")
+    assert second_interview == {
+        "stage": "interview_second",
+        "entered": 2,
+        "dropped_off": 1,
+        "drop_rate": 50.0,
+        "is_bottleneck": True,
+    }
+    assert data["bottlenecks"] == ["interview_second"]
+
+
+def test_insight_report_refresh_bypasses_server_cache(client, app, admin_headers):
+    app.config["INSIGHT_REPORT_CACHE_SECONDS"] = 3600
+    first = client.get("/api/insight/report?days=30&refresh=1", headers=admin_headers)
+    assert first.status_code == 200
+    first_data = first.get_json()["data"]
+    admin = User.query.filter_by(username="admin").one()
+    db.session.add(Candidate(owner_hr_id=admin.id, name_masked="缓存刷新候选人", title="测试", raw_text="测试简历"))
+    db.session.commit()
+
+    cached = client.get("/api/insight/report?days=30", headers=admin_headers).get_json()["data"]
+    refreshed = client.get("/api/insight/report?days=30&refresh=1", headers=admin_headers).get_json()["data"]
+
+    assert cached["channels"]["total"] == first_data["channels"]["total"]
+    assert refreshed["channels"]["total"] == first_data["channels"]["total"] + 1
+    assert refreshed["generated_at"] != first_data["generated_at"]
+
+
 def test_ops_deploy_gates_reports_release_blockers_without_secrets(client, admin_headers):
     response = client.get("/api/ops/deploy-gates", headers=admin_headers)
 

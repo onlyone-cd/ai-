@@ -29,6 +29,8 @@ python scripts/run_backend_tests.py --mode api --timeout-seconds 600 --durations
 python scripts/smoke_api.py --base-url http://localhost:5001
 ```
 
+The repository also runs a Playwright browser smoke suite in GitHub Actions after the backend test and frontend build jobs pass. The current browser suite covers login, opening the resume upload dialog, the recruiting job page, and the Agent composer; expand it as new critical workflows are added.
+
 The backend API suite currently takes about 3 minutes on the local Windows dev machine because each integration test creates an isolated app and seed database. The wrapper reports slow setup/call phases and exits with code `124` when a slice exceeds its timeout.
 
 The check fails when:

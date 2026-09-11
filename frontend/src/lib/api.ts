@@ -968,7 +968,7 @@ export const api = {
   insightTimeToHire: (days = 180) => request<InsightTimeToHire>(`/insight/time-to-hire?days=${days}`),
   insightInterviewerBias: (days = 180) => request<InsightInterviewerBias>(`/insight/interviewer-bias?days=${days}`),
   insightOfferConversion: (days = 180) => request<InsightOfferConversion>(`/insight/offer-conversion?days=${days}`),
-  insightReport: (days = 90) => request<InsightReport>(`/insight/report?days=${days}`),
+  insightReport: (days = 90, refresh = false) => request<InsightReport>(`/insight/report?days=${days}${refresh ? "&refresh=1" : ""}`),
   candidateProfile: (id: number) => request<TalentProfile>(`/candidates/${id}/profile`),
   employeeProfile: (id: number) => request<TalentProfile>(`/employees/${id}/profile`),
   exportCsv: (kind: "candidates" | "jobs" | "interviews" | "offers" | "pipeline" | "employees") => download(`/exports/${kind}.csv`, `${kind}.csv`),
@@ -1045,6 +1045,8 @@ export type InsightFunnel = {
   funnel: { stage: string; entered: number; dropped_off: number; drop_rate: number; is_bottleneck: boolean }[];
   bottlenecks: string[];
   bottleneck_analysis: string;
+  cohort_size: number;
+  rejected: number;
 };
 
 export type InsightChannel = {

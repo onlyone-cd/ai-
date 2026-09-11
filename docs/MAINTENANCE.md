@@ -6,7 +6,17 @@
 
 ## 1. 部署方式
 
-### 1.1 生产环境（推荐：systemd + venv）
+### 1.1 生产环境（推荐：Docker Compose）
+
+仓库内的 Dockerfile、PostgreSQL、应用、后台 worker、迁移和健康检查已经形成完整部署链路，生产环境优先使用：
+
+```bash
+docker compose -f docker-compose.production.yml --env-file .env up -d --build
+```
+
+详细步骤见项目根目录的 `DEPLOYMENT.md`。
+
+### 1.2 可选部署：systemd + venv
 
 ```bash
 # 首次部署
@@ -25,12 +35,6 @@ systemctl daemon-reload
 systemctl enable --now hireinsight.service hireinsight-worker.service
 ```
 
-### 1.2 Docker 部署
-
-```bash
-docker compose -f docker-compose.production.yml --env-file .env up -d --build
-```
-
 ### 1.3 更新部署
 
 ```bash
@@ -43,10 +47,7 @@ flask --app run db upgrade
 systemctl restart hireinsight.service hireinsight-worker.service
 ```
 
-远程更新脚本可参考：
-```bash
-tar --exclude='.env' --exclude='.venv' --exclude='backups' --exclude='backend/instance' --exclude='backend/uploads' -cf - . | ssh root@host "tar -C /opt/hireinsight -xf - && ..."
-```
+systemd 更新命令只适用于自行维护了服务文件的部署；本仓库的默认生产发布流程以 Docker Compose 为准。
 
 ### 1.4 前端构建
 
@@ -215,6 +216,19 @@ curl -H "Authorization: Bearer <token>" http://localhost:5001/api/ops/deploy-gat
 
 返回所有部署门禁检查结果，包括阻断项和警告项。
 
+### 5.5 SSH 生产健康巡检
+
+本地可使用 `scripts/check_production.py` 通过 SSH 检查生产应用和 `/healthz`。脚本不接受明文密码，也不会自动信任未知主机；运行前必须把服务器主机密钥写入当前用户的 `known_hosts`，并使用 SSH Agent 或专用私钥：
+
+```powershell
+$env:HIREINSIGHT_SSH_HOST = "your-production-host"
+$env:HIREINSIGHT_SSH_USER = "deploy"
+$env:HIREINSIGHT_SSH_KEY_FILE = "C:\secure\hireinsight_ed25519"
+python scripts/check_production.py
+```
+
+`HIREINSIGHT_SSH_KEY_FILE` 可省略，此时系统 OpenSSH 使用本地 SSH Agent 或默认密钥。不要使用 `root` 密码登录，不要把服务器地址、私钥或密码写入脚本或提交到 Git。
+
 ---
 
 ## 6. 日常维护任务
@@ -356,11 +370,11 @@ psql -U hireinsight -c "SELECT count(*) FROM pg_stat_activity;"
                                                     → 本地文件存储 (/data/uploads)
 ```
 
-**生产服务器：** 120.24.172.139
-**服务目录：** /opt/hireinsight
-**服务管理：** systemd (hireinsight.service / hireinsight-worker.service)
+**生产入口：** 使用正式 HTTPS 域名，不在仓库文档中保存真实服务器 IP。
+**服务目录：** 由部署环境决定，示例使用 `/opt/hireinsight`。
+**服务管理：** 推荐 Docker Compose；systemd + venv 为可选兼容方案。
 **数据库：** PostgreSQL
-**Python 环境：** /opt/hireinsight/.venv
+**运行环境：** Docker 镜像内 Python 3.12；systemd 部署使用独立 venv。
 
 ---
 

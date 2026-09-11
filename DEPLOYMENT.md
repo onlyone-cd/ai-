@@ -49,6 +49,7 @@ nano .env
 - `POSTGRES_PASSWORD`：使用强密码，需和 `DATABASE_URL` 中的密码一致。
 - `DATABASE_URL`：Docker Compose 内部地址保持 `postgres:5432`，只替换密码即可。
 - `CORS_ORIGINS`：改成你的正式域名，例如 `https://hr.example.com`。
+- `INSIGHT_REPORT_CACHE_SECONDS`：洞察综合报告缓存秒数，默认 `60`；页面显式刷新会绕过缓存。
 - `DEEPSEEK_API_KEY`：填新的生产 Key，不要把真实 Key 提交到 Git。
 - `SEED_DEMO_DATA=false`、`AUTO_CREATE_DB=false`：生产保持关闭。
 
@@ -233,4 +234,4 @@ curl https://your-domain.example/healthz
 - 对象存储或专用文件服务。
 - Redis/Celery 高吞吐任务队列，用于替换当前数据库轻量任务队列，承载更大规模的批量简历解析、AI 评分和 BOSS 批量同步。
 - 集中日志、错误告警和 AI 费用阈值告警。
-- E2E 自动化测试和正式发布流水线。
+- 扩展 Playwright E2E 覆盖率，并在现有 GitHub Actions 基础上增加版本化发布、制品留存和回滚门禁。

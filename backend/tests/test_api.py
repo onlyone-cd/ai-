@@ -7,13 +7,15 @@ import zipfile
 
 import jwt
 import pytest
-from sqlalchemy import inspect
+from sqlalchemy import JSON, column, inspect, select
+from sqlalchemy.dialects import postgresql, sqlite
 
 from app import create_app, db
 from app.config import Config
 from app.auth import verify_password
 from app.llm_client import LLMError, chat_json
 from app.models import AgentConversation, AgentMessage, AuditLog, BackgroundTask, BossAccount, BossDraft, BossSyncJob, Candidate, CandidateTag, EmployeeCompensation, EmployeeProfile, EmployeeRecommendation, InterviewAssignment, InterviewFeedback, InterviewSpeechLog, Job, LLMUsage, Match, NotificationLog, OfferRecord, OrganizationUnit, PipelineStage, ResumeAttachment, User
+from app.routes import json_text_path
 from app.task_service import run_next_task
 
 
@@ -1223,6 +1225,18 @@ def test_list_endpoints_return_pagination_meta(client, admin_headers):
     audit_data = audits.get_json()["data"]
     assert len(audit_data["items"]) == 1
     assert audit_data["total"] >= 1
+
+
+def test_candidate_experience_stats_query_is_cross_database_compatible():
+    resume_json = column("resume_json", JSON)
+    experience_level = json_text_path(resume_json, "experience_analysis", "level")
+
+    sqlite_sql = str(select(experience_level).compile(dialect=sqlite.dialect(), compile_kwargs={"literal_binds": True}))
+    postgres_sql = str(select(experience_level).compile(dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}))
+
+    assert "JSON_EXTRACT" in sqlite_sql.upper()
+    assert "->>" in postgres_sql
+    assert "json_extract" not in postgres_sql.lower()
 
 
 def test_candidate_resume_export(client, admin_headers):

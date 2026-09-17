@@ -198,6 +198,16 @@ curl https://your-domain.example/healthz
 
 返回 `status=ok` 才允许切流。
 
+`healthz` 只验证进程和数据库连接。生产发布后还应执行只读、带认证的业务巡检，覆盖人才库、岗位、流程和洞察接口：
+
+```powershell
+$env:HIREINSIGHT_PROBE_USERNAME = "production-probe-user"
+$env:HIREINSIGHT_PROBE_PASSWORD = "use-a-secret-store-value"
+python scripts/probe_business_api.py --base-url https://your-domain.example
+```
+
+也可以通过 `HIREINSIGHT_PROBE_TOKEN` 使用短期令牌。密码或令牌只允许来自 CI/CD 密钥库或受保护的环境变量，不要写入仓库、命令行参数或日志。`scripts/check_production.py` 会在配置上述凭据后，通过 SSH 标准输入安全传递凭据并运行同一组业务检查；设置 `HIREINSIGHT_REQUIRE_BUSINESS_PROBE=true` 可在未配置业务凭据时让巡检失败。
+
 ## 数据和文件
 
 - 数据库使用 PostgreSQL，生产不要使用 SQLite。

@@ -1582,7 +1582,10 @@ def employee_report(user, employee_id):
 @login_required
 @roles_required("admin", "manager", "recruiter")
 def list_candidates(user):
-    query = visible_candidate_query(user).options(db.joinedload(Candidate.owner), db.joinedload(Candidate.tags)).order_by(Candidate.created_at.desc())
+    # Candidate rows contain large resume fields. Joining tags repeats those
+    # fields once per tag and can make even a small page expensive. Load the
+    # owner in the main query and fetch tags in one separate IN query instead.
+    query = visible_candidate_query(user).options(db.joinedload(Candidate.owner), db.selectinload(Candidate.tags)).order_by(Candidate.created_at.desc())
     experience_level = request.args.get("experience_level")
     if experience_level and experience_level != "all":
         candidates, meta = paginate_query(query)
@@ -7513,17 +7516,22 @@ def json_text_path(column, *path):
 def experience_stats_v2(query):
     """使用数据库查询计算经验统计，避免加载所有记录"""
     labels = {"student": "在校生", "fresh": "应届毕业", "lt1": "1 年以下", "1-3": "1-3 年", "3-5": "3-5 年", "5-10": "5-10 年", "gt10": "10 年以上"}
-    sub = query.subquery()
     # Use SQLAlchemy's dialect-aware JSON operators. ``json_extract`` is a
     # SQLite-only function and fails on PostgreSQL, which is used in
     # production. This expression compiles to JSON_EXTRACT on SQLite and
     # PostgreSQL's -> / ->> operators on PostgreSQL.
-    experience_level = json_text_path(sub.c.resume_json, "experience_analysis", "level")
-    rows = db.session.query(sub.c.id, experience_level).all()
+    experience_level = json_text_path(Candidate.resume_json, "experience_analysis", "level")
+    rows = (
+        query.enable_eagerloads(False)
+        .with_entities(experience_level, func.count(Candidate.id))
+        .order_by(None)
+        .group_by(experience_level)
+        .all()
+    )
     stats = Counter()
-    for row_id, level in rows:
+    for level, count in rows:
         key = level if level and level != "remote" else "lt1"
-        stats[key] += 1
+        stats[key] += count
     return [{"key": key, "label": labels[key], "count": stats.get(key, 0)} for key in labels]
 
 

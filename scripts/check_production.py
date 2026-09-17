@@ -12,6 +12,7 @@ used to construct the local command.
 from __future__ import annotations
 
 import os
+import json
 import subprocess
 import sys
 
@@ -28,6 +29,7 @@ def main() -> int:
     username = required_env("HIREINSIGHT_SSH_USER")
     key_filename = os.getenv("HIREINSIGHT_SSH_KEY_FILE") or None
     port = int(os.getenv("HIREINSIGHT_SSH_PORT", "22"))
+    require_business = os.getenv("HIREINSIGHT_REQUIRE_BUSINESS_PROBE", "false").strip().lower() in {"1", "true", "yes"}
 
     base_command = [
         "ssh",
@@ -60,6 +62,33 @@ def main() -> int:
             failed = True
             if result.stderr.strip():
                 print(f"{name} error: {result.stderr.strip()}", file=sys.stderr)
+
+    credentials = {
+        "username": os.getenv("HIREINSIGHT_PROBE_USERNAME", ""),
+        "password": os.getenv("HIREINSIGHT_PROBE_PASSWORD", ""),
+        "token": os.getenv("HIREINSIGHT_PROBE_TOKEN", ""),
+    }
+    has_credentials = bool(credentials["token"] or (credentials["username"] and credentials["password"]))
+    if has_credentials:
+        remote_command = "python3 /opt/hireinsight/scripts/probe_business_api.py --base-url http://127.0.0.1:5001 --credentials-stdin"
+        result = subprocess.run(
+            [*base_command, remote_command],
+            input=json.dumps(credentials),
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=90,
+        )
+        print(result.stdout.strip() or "business probe: no response")
+        if result.returncode != 0:
+            failed = True
+            if result.stderr.strip():
+                print(f"business probe error: {result.stderr.strip()}", file=sys.stderr)
+    else:
+        message = "business probe skipped: set HIREINSIGHT_PROBE_TOKEN or HIREINSIGHT_PROBE_USERNAME/HIREINSIGHT_PROBE_PASSWORD"
+        print(message)
+        if require_business:
+            failed = True
     return 1 if failed else 0
 
 

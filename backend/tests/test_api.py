@@ -7,7 +7,7 @@ import zipfile
 
 import jwt
 import pytest
-from sqlalchemy import JSON, column, inspect, select
+from sqlalchemy import JSON, column, event, inspect, select
 from sqlalchemy.dialects import postgresql, sqlite
 
 from app import create_app, db
@@ -1237,6 +1237,25 @@ def test_candidate_experience_stats_query_is_cross_database_compatible():
     assert "JSON_EXTRACT" in sqlite_sql.upper()
     assert "->>" in postgres_sql
     assert "json_extract" not in postgres_sql.lower()
+
+
+def test_candidate_list_avoids_large_tag_join_and_aggregates_experience(client, admin_headers, app):
+    statements = []
+
+    def capture_statement(connection, cursor, statement, parameters, context, executemany):
+        statements.append(" ".join(statement.lower().split()))
+
+    with app.app_context():
+        event.listen(db.engine, "before_cursor_execute", capture_statement)
+        try:
+            response = client.get("/api/candidates?limit=2", headers=admin_headers)
+        finally:
+            event.remove(db.engine, "before_cursor_execute", capture_statement)
+
+    assert response.status_code == 200
+    assert not any("join candidate_tag" in statement for statement in statements)
+    assert any("from candidate_tag" in statement and " in (" in statement for statement in statements)
+    assert any("group by" in statement and "json_extract" in statement for statement in statements)
 
 
 def test_candidate_resume_export(client, admin_headers):

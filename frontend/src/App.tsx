@@ -2759,9 +2759,9 @@ function AgentPage() {
               <div className="agent-turn assistant">
                 <div className="agent-turn-icon"><Bot size={16} /></div>
                 <div className="agent-message agent-thinking">
-                  <span />
-                  <span />
-                  <span />
+                  <Sparkles size={15} />
+                  <em>正在理解上下文、检索业务数据并组织回答</em>
+                  <i><span /><span /><span /></i>
                 </div>
               </div>
             )}
@@ -2846,9 +2846,12 @@ function AgentTrace({ response }: { response: AgentResponse }) {
   return (
     <div className="agent-trace">
       <div className="agent-trace-head">
-        <span><Sparkles size={14} />{trace?.mode === "deepseek" ? "DeepSeek 规划" : "本地规划"}</span>
-        <span>{trace?.intent || response.tool}</span>
+        <span><Sparkles size={14} />分析与执行</span>
+        <span className={trace?.answer_mode === "deepseek" ? "ai" : "fallback"}>
+          {trace?.answer_mode === "deepseek" ? "AI 综合" : "规则兜底"}
+        </span>
       </div>
+      {trace?.explanation && <p className="agent-trace-explanation">{trace.explanation}</p>}
       {plan.length > 0 && (
         <div className="agent-trace-steps">
           {plan.slice(0, 4).map((item, index) => (
@@ -2872,14 +2875,17 @@ function AgentTrace({ response }: { response: AgentResponse }) {
       <details className="agent-trace-detail">
         <summary>
           <Database size={13} />
-          记忆与知识库
+          查看上下文与证据
           <ChevronRight size={13} />
         </summary>
         <div className="agent-trace-grid">
+          <span>识别意图：{trace?.intent || response.tool}</span>
           <span>历史记忆：{trace?.memory?.length || 0} 条</span>
           <span>知识命中：{knowledgeCount} 条</span>
           <span>联网：{trace?.web?.needed ? "已判断需要" : "未需要"}</span>
+          {trace?.context_resolution && <span>{trace.context_resolution}</span>}
           {trace?.planner_error && <span>规划器兜底：{trace.planner_error}</span>}
+          {response.answer_synthesis_error && <span>回答综合兜底：{response.answer_synthesis_error}</span>}
         </div>
         {calls.some((call) => call.summary) && (
           <ul>

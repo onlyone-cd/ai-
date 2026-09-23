@@ -586,8 +586,13 @@ export type AgentResponse = {
     web?: { needed?: boolean; reason?: string };
     final?: { status?: string; summary?: string };
     planner_error?: string;
+    answer_mode?: "deepseek" | "rules" | string;
+    explanation?: string;
+    context_resolution?: string;
   };
   tool_calls?: { name: string; status: string; readonly?: boolean; summary?: string }[];
+  answer_mode?: "deepseek" | "rules" | string;
+  answer_synthesis_error?: string;
   pending_action?: Record<string, unknown> | null;
   suggestions: string[];
   readonly: boolean;
@@ -1009,7 +1014,10 @@ export const api = {
   updateAgentConversation: (id: number, payload: Partial<Pick<AgentConversation, "title" | "status">>) =>
     request<AgentConversation>(`/agent/conversations/${id}`, { method: "PATCH", body: JSON.stringify(payload) }),
   chat: (message: string, pending_action?: Record<string, unknown> | null, conversation_id?: number | null) =>
-    request<AgentResponse>("/agent/chat", { method: "POST", body: JSON.stringify({ message, pending_action, conversation_id }) })
+    request<AgentResponse>("/agent/chat", {
+      method: "POST",
+      body: JSON.stringify(conversation_id ? { message, conversation_id } : { message, pending_action })
+    })
 };
 
 export type PipelineItem = {

@@ -4433,11 +4433,17 @@ def agent_chat(user):
     message = payload.get("message", "")
     conversation = resolve_agent_conversation(user, payload, message)
     history = agent_recent_history(conversation)
-    pending_action = payload.get("pending_action") if "pending_action" in payload else conversation.pending_action
+    pending_action = resolve_agent_pending_action(conversation, payload)
+    pending_action = reset_pending_action_for_new_intent(message, pending_action)
+    effective_message, context_resolution = resolve_agent_followup_context(message, history, pending_action)
     db.session.add(AgentMessage(conversation_id=conversation.id, role="user", content=str(message or "")[:12000]))
     db.session.flush()
-    planner = build_agent_execution_plan(user, message, pending_action, history)
-    result = run_agent_multi_tool_chain(user, message, planner, history=history) if should_run_agent_multi_tool_chain(planner, pending_action, message) else run_agent_tool(user, message, pending_action, history=history)
+    planner = build_agent_execution_plan(user, effective_message, pending_action, history)
+    if context_resolution:
+        planner["context_resolution"] = context_resolution
+        planner["memory"] = [context_resolution, *(planner.get("memory") or [])][:6]
+    result = run_agent_multi_tool_chain(user, effective_message, planner, history=history) if should_run_agent_multi_tool_chain(planner, pending_action, effective_message) else run_agent_tool(user, effective_message, pending_action, history=history)
+    result = synthesize_agent_single_tool_answer(effective_message, result, planner, history=history)
     result = attach_agent_trace(result, planner)
     conversation.pending_action = result.get("pending_action")
     if conversation.title == "新对话":
@@ -4560,6 +4566,47 @@ def agent_recent_history(conversation, limit=12):
     return [{"role": item.role, "content": item.content, "tool": item.tool} for item in messages]
 
 
+def resolve_agent_pending_action(conversation, payload):
+    """Keep the server-side conversation state authoritative.
+
+    Older clients may still continue a draft without a conversation id, so their
+    pending payload remains supported. Once a conversation id is present, trusting
+    the browser copy can resurrect an old draft or erase the current one.
+    """
+    if payload.get("conversation_id"):
+        return conversation.pending_action
+    return payload.get("pending_action") if "pending_action" in payload else conversation.pending_action
+
+
+def reset_pending_action_for_new_intent(message, pending_action):
+    if not isinstance(pending_action, dict):
+        return pending_action
+    text = str(message or "").strip()
+    if pending_action.get("type") == "create_job" and is_create_job_request(text) and not is_agent_confirm(text):
+        return None
+    return pending_action
+
+
+def resolve_agent_followup_context(message, history, pending_action=None):
+    """Resolve simple pronoun follow-ups from recent turns without inventing an entity."""
+    text = str(message or "").strip()
+    if pending_action or not text or not is_person_reference_without_entity(text):
+        return text, None
+    for item in reversed(history or []):
+        previous = str(item.get("content") or "").strip()
+        if not previous:
+            continue
+        candidate, _ = find_candidate_for_agent_message(previous)
+        if candidate:
+            note = f"已从上文承接候选人：{candidate.name_masked}。"
+            return f"{text}；承接上文，对象是候选人 {candidate.name_masked}", note
+        employee, _ = find_employee_for_agent_message(previous)
+        if employee:
+            note = f"已从上文承接员工：{employee.name}。"
+            return f"{text}；承接上文，对象是员工 {employee.name}", note
+    return text, None
+
+
 def safe_agent_response(result):
     data = dict(result or {})
     data.pop("conversation", None)
@@ -4586,7 +4633,10 @@ def build_agent_execution_plan(user, message, pending_action=None, history=None)
         "knowledge": slim_agent_knowledge(knowledge),
         "web": {"needed": should_agent_use_web(text), "reason": "问题包含联网/趋势/最新等外部信息意图" if should_agent_use_web(text) else "优先使用系统内部知识库"},
     }
-    if pending_action or not text or not llm_available():
+    # A single-tool request does not need a separate LLM planning round-trip.
+    # Spend the model call after the tool returns, when real business facts are
+    # available for a useful answer. Multi-step requests still use AI planning.
+    if pending_action or not text or not llm_available() or len(heuristic_tools) <= 1 or not is_explicit_multi_step_agent_request(text):
         return planner
     try:
         data = chat_json(
@@ -4632,18 +4682,89 @@ def build_agent_execution_plan(user, message, pending_action=None, history=None)
     return planner
 
 
+def synthesize_agent_single_tool_answer(text, result, planner, history=None):
+    data = dict(result or {})
+    tool = str(data.get("tool") or "chat")
+    data["answer_mode"] = "rules"
+    if tool == "chat" and isinstance(data.get("result"), dict) and data["result"].get("llm") == "deepseek":
+        data["answer_mode"] = "deepseek"
+        return data
+    if tool in {"chat", "agent_toolchain", "analyze_employee_resume", "agent_clarification"}:
+        return data
+    if data.get("readonly") is not True or not llm_available():
+        return data
+    try:
+        facts = compact_agent_tool_payload(data.get("result"))
+        response = chat_json(
+            [
+                {
+                    "role": "system",
+                    "content": (
+                        "你是 HireInsight 招聘 AI Agent 的回答综合器。工具已经执行完毕，你要基于工具返回的真实事实，"
+                        "给出自然、专业、有上下文的中文回答。先直接回答用户，再解释关键判断，最后给出一项最有价值的下一步。"
+                        "不得改写姓名、岗位、数量、分数和状态，不得编造工具结果之外的事实；信息不足时明确说明。"
+                        "不要输出或声称展示隐藏思维链，只能给出简短、可核验的分析摘要。"
+                        "输出 JSON：{\"answer\":\"最终回答\",\"suggestions\":[\"后续问题1\",\"后续问题2\",\"后续问题3\"]}"
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": json.dumps(
+                        {
+                            "question": text,
+                            "recent_history": format_agent_history(history or []),
+                            "intent": (planner or {}).get("intent"),
+                            "tool": tool,
+                            "tool_answer": data.get("answer"),
+                            "tool_facts": facts,
+                        },
+                        ensure_ascii=False,
+                    ),
+                },
+            ],
+            temperature=0.25,
+            timeout=30,
+            source="agent",
+            tool_name="agent_answer_synthesis",
+        )
+        answer = str(response.get("answer") or "").strip()
+        if answer:
+            data["answer"] = answer
+            suggestions = [str(item).strip()[:120] for item in (response.get("suggestions") or []) if str(item).strip()]
+            if suggestions:
+                data["suggestions"] = suggestions[:4]
+            data["answer_mode"] = "deepseek"
+    except LLMError as exc:
+        data["answer_mode"] = "rules"
+        data["answer_synthesis_error"] = str(exc)[:180]
+    return data
+
+
 def attach_agent_trace(result, planner):
     data = dict(result or {})
     executed_tool = str(data.get("tool") or "chat")
     trace = dict(planner or {})
     trace["plan"] = merge_agent_trace_plan(trace.get("plan"), data)
     trace["tool_calls"] = build_agent_tool_calls(trace.get("selected_tools"), data)
+    trace["answer_mode"] = data.get("answer_mode", "rules")
+    trace["explanation"] = agent_trace_explanation(trace, data)
     trace["final"] = {"status": "answered", "summary": summarize_text(data.get("answer"), 160)}
     data["agent_trace"] = trace
     data["tool_calls"] = trace["tool_calls"]
     if isinstance(data.get("result"), dict):
         data["result"].setdefault("agent_trace", trace)
     return data
+
+
+def agent_trace_explanation(trace, result):
+    tool_calls = trace.get("tool_calls") or []
+    succeeded = [item.get("name") for item in tool_calls if item.get("status") == "succeeded" and item.get("name")]
+    if not succeeded and result.get("tool"):
+        succeeded = [result.get("tool")]
+    source = "AI 已结合上下文组织回答" if trace.get("answer_mode") == "deepseek" else "当前使用稳定规则组织回答"
+    if succeeded:
+        return f"{source}；事实来自已执行工具：{'、'.join(succeeded[:4])}。"
+    return f"{source}；本轮未执行数据工具。"
 
 
 def infer_agent_tool_name(text, pending_action=None):

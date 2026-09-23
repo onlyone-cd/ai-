@@ -2316,6 +2316,65 @@ def test_agent_counts_candidate_segments_and_can_create_job_after_confirmation(c
     assert {"SQL", "Python"} <= {skill["tag"] for skill in create_data["result"]["job"]["jd_structured"]["skills"]}
 
 
+def test_agent_confirmation_uses_server_conversation_draft_instead_of_stale_browser_state(client, admin_headers):
+    draft_response = client.post(
+        "/api/agent/chat",
+        headers=admin_headers,
+        json={"message": "创建岗位 数据分析师 城市上海 部门数据部 JD 要求 SQL、Python、报表分析，3 年以上经验"},
+    )
+    draft_data = draft_response.get_json()["data"]
+    conversation_id = draft_data["conversation"]["id"]
+    stale_browser_draft = {
+        "type": "create_job",
+        "payload": {
+            "title": "Java 后端开发工程师",
+            "city": "北京",
+            "department": "旧研发部",
+            "jd_text": "旧会话中的 Java 岗位草案，不应覆盖当前服务端会话。" * 4,
+            "skill_tags_raw": "Java 5|Spring Boot 5",
+        },
+    }
+
+    create_response = client.post(
+        "/api/agent/chat",
+        headers=admin_headers,
+        json={
+            "conversation_id": conversation_id,
+            "message": "确认创建",
+            "pending_action": stale_browser_draft,
+        },
+    )
+
+    assert create_response.status_code == 200
+    create_data = create_response.get_json()["data"]
+    assert create_data["result"]["created"] is True
+    assert create_data["result"]["job"]["title"] == "数据分析师"
+    assert create_data["result"]["job"]["city"] == "上海"
+    assert create_data["result"]["job"]["department"] == "数据部"
+
+
+def test_agent_new_create_request_replaces_existing_job_draft(client, admin_headers):
+    first = client.post(
+        "/api/agent/chat",
+        headers=admin_headers,
+        json={"message": "创建岗位 Java 后端工程师 城市北京 部门旧研发部 JD 要求 Java、Spring Boot，5 年经验"},
+    ).get_json()["data"]
+
+    replacement = client.post(
+        "/api/agent/chat",
+        headers=admin_headers,
+        json={
+            "conversation_id": first["conversation"]["id"],
+            "message": "改为创建岗位 数据分析师 城市上海 部门数据部 JD 要求 SQL、Python、报表分析，3 年以上经验",
+        },
+    ).get_json()["data"]
+
+    assert replacement["result"]["draft"]["title"] == "数据分析师"
+    assert replacement["result"]["draft"]["city"] == "上海"
+    assert replacement["result"]["draft"]["department"] == "数据部"
+    assert "Java 后端开发工程师" not in replacement["answer"]
+
+
 def test_agent_candidate_segment_stats_use_primary_occupation(client, admin_headers):
     before = client.post("/api/agent/chat", headers=admin_headers, json={"message": "现在人才库有多少人？软件开发和会计分别多少？"})
     assert before.status_code == 200
@@ -2674,6 +2733,48 @@ def test_agent_remembers_clarification_and_continues_resume_analysis(client, adm
     assert "接上上一步任务" in second_data["answer"]
 
 
+def test_agent_resolves_pronoun_followup_from_conversation_history(client, admin_headers):
+    job = Job(
+        owner_hr_id=1,
+        title="上下文 Java 后端工程师",
+        city="长沙",
+        department="研发部",
+        job_code="AGENT-CONTEXT-JAVA",
+        jd_text="负责 Java 后端开发，要求 Spring Boot、MySQL、Redis。",
+        jd_structured={},
+        status="active",
+    )
+    candidate = Candidate(
+        owner_hr_id=1,
+        upload_batch_id="agent-context",
+        name_masked="上下文候选人甲",
+        title="Java 后端工程师",
+        city="长沙",
+        raw_text="上下文候选人甲，4 年 Java 后端开发经验，熟悉 Spring Boot、MySQL、Redis。",
+        resume_json={"summary": "4 年 Java 后端经验"},
+        source="upload",
+    )
+    db.session.add_all([job, candidate])
+    db.session.commit()
+
+    first = client.post(
+        "/api/agent/chat",
+        headers=admin_headers,
+        json={"message": "查询上下文候选人甲的简历"},
+    ).get_json()["data"]
+    second = client.post(
+        "/api/agent/chat",
+        headers=admin_headers,
+        json={"conversation_id": first["conversation"]["id"], "message": "他适合什么岗位？"},
+    )
+
+    assert second.status_code == 200
+    second_data = second.get_json()["data"]
+    assert second_data["tool"] != "agent_clarification"
+    assert "上下文候选人甲" in second_data["answer"]
+    assert "上下文候选人甲" in second_data["agent_trace"]["context_resolution"]
+
+
 def test_agent_asks_for_job_before_open_ended_candidate_match(client, admin_headers):
     job = Job(owner_hr_id=1, title="会计", city="上海", department="财务部", job_code="AGENT-CLARIFY-ACCOUNTING", jd_text="负责总账会计、财务报表、纳税申报。", jd_structured={}, status="active")
     candidate = Candidate(owner_hr_id=1, upload_batch_id="agent-clarify-job", name_masked="会计候选人", title="总账会计", raw_text="5 年总账会计经验，熟悉财务报表和纳税申报。", resume_json={}, source="upload")
@@ -2739,6 +2840,38 @@ def test_agent_free_chat_falls_back_to_llm_chat(client, admin_headers):
     data = response.get_json()["data"]
     assert data["tool"] == "chat"
     assert data["result"]["llm"] == "disabled"
+
+
+def test_agent_synthesizes_single_tool_facts_after_execution(client, admin_headers, app, monkeypatch):
+    app.config["LLM_ENABLED"] = True
+    app.config["DEEPSEEK_API_KEY"] = "test-key"
+    calls = []
+
+    def fake_chat_json(messages, **kwargs):
+        calls.append({"messages": messages, "kwargs": kwargs})
+        assert kwargs["tool_name"] == "agent_answer_synthesis"
+        assert "get_candidate_segment_stats" in messages[-1]["content"]
+        assert "tool_facts" in messages[-1]["content"]
+        return {
+            "answer": "人才库结构已核对：软件开发与会计人才数量均来自实时统计。建议下一步按紧缺岗位查看可约面人选。",
+            "suggestions": ["查看软件开发候选人", "查看会计候选人"],
+        }
+
+    monkeypatch.setattr("app.routes.chat_json", fake_chat_json)
+
+    response = client.post(
+        "/api/agent/chat",
+        headers=admin_headers,
+        json={"message": "现在人才库有多少软件开发人员和会计人员？"},
+    )
+
+    assert response.status_code == 200
+    data = response.get_json()["data"]
+    assert len(calls) == 1
+    assert data["answer_mode"] == "deepseek"
+    assert data["agent_trace"]["answer_mode"] == "deepseek"
+    assert "实时统计" in data["answer"]
+    assert data["suggestions"] == ["查看软件开发候选人", "查看会计候选人"]
 
 
 def test_agent_generate_job_without_details_asks_for_title(client, admin_headers):

@@ -2713,7 +2713,7 @@ function AgentPage() {
           <h1>AI Agent</h1>
           <span>{busy ? "正在执行" : loading ? "正在加载历史" : "就绪"} · 已连接 {tools.length || 12} 个工具 · 历史自动保存</span>
         </div>
-        <button className="primary-button" type="button" onClick={newConversation}>
+        <button className="primary-button" type="button" onClick={newConversation} disabled={loading || busy}>
           <Plus size={17} />
           新建聊天
         </button>

@@ -4686,6 +4686,8 @@ def synthesize_agent_single_tool_answer(text, result, planner, history=None):
     data = dict(result or {})
     tool = str(data.get("tool") or "chat")
     data["answer_mode"] = "rules"
+    if agent_result_uses_llm(data.get("result")):
+        data["answer_mode"] = "deepseek"
     if tool == "chat" and isinstance(data.get("result"), dict) and data["result"].get("llm") == "deepseek":
         data["answer_mode"] = "deepseek"
         return data
@@ -4738,6 +4740,17 @@ def synthesize_agent_single_tool_answer(text, result, planner, history=None):
         data["answer_mode"] = "rules"
         data["answer_synthesis_error"] = str(exc)[:180]
     return data
+
+
+def agent_result_uses_llm(payload):
+    if not isinstance(payload, dict):
+        return False
+    if payload.get("llm") == "deepseek":
+        return True
+    if (payload.get("ai_review") or {}).get("source") == "deepseek":
+        return True
+    items = payload.get("items") or []
+    return any(((item.get("reason") or {}).get("ai_review") or {}).get("source") == "deepseek" for item in items if isinstance(item, dict))
 
 
 def attach_agent_trace(result, planner):
@@ -4800,6 +4813,8 @@ def infer_agent_tool_names(text, pending_action=None):
         tools.append("chat")
     if is_candidate_count_request(value):
         tools.append("get_candidate_segment_stats")
+        if not is_explicit_multi_step_agent_request(value):
+            return list(dict.fromkeys(tools))[:5]
     if "offer" in lowered or "入职" in value:
         tools.append("get_offer_status")
     if "面试" in value:
@@ -5572,7 +5587,7 @@ def is_ambiguous_create_and_recommend_request(text):
         return False
     payload = parse_job_payload_from_message(value)
     title = str(payload.get("title") or "").strip()
-    if not title or title in {"新岗位", "一个岗位"}:
+    if not title or title in {"新", "一个", "一份", "新岗位", "一个岗位"}:
         return True
     if title.startswith("并推荐") or title.startswith("推荐"):
         return True
@@ -6861,7 +6876,7 @@ def continue_pending_agent_action(user, text, pending_action, suggestions, histo
     payload = dict(pending_action.get("payload") or {})
     if is_agent_confirm(text):
         return create_job_from_payload(user, payload)
-    updates = parse_job_payload_from_message(text)
+    updates = parse_job_payload_updates(text)
     for key, value in updates.items():
         if value:
             payload[key] = value
@@ -7062,8 +7077,11 @@ def format_agent_job_draft(payload, prefix, missing):
 def parse_job_payload_from_message(text):
     normalized = re.sub(r"\s+", " ", text.replace("\n", " ")).strip()
     rest_match = re.search(r"(?:创建|新增|发布|生成).{0,6}岗位\s*[:：]?\s*(.*)", normalized, flags=re.I)
+    natural_title_match = re.search(r"(?:创建|新增|发布|生成)\s*(?:一个|一份|个)?\s*(.+?)\s*(?:的)?岗位(?:\s|，|,|。|；|;|并|$)", normalized, flags=re.I)
     rest = rest_match.group(1).strip() if rest_match else normalized
-    title = re.split(r"\s*(?:城市|地点|部门|JD|jd|要求|职责|薪资|技能)\s*[:：]?", rest, maxsplit=1)[0].strip(" ，,。；;")
+    title = natural_title_match.group(1).strip() if natural_title_match else re.split(r"\s*(?:城市|地点|部门|JD|jd|要求|职责|薪资|技能)\s*[:：]?", rest, maxsplit=1)[0].strip(" ，,。；;")
+    title = re.sub(r"^(?:一个|一份|个)\s*", "", title).strip()
+    title = re.sub(r"\s*(?:并)?生成$", "", title).strip()
     city = extract_agent_field(normalized, ["城市", "地点"])
     department = extract_agent_field(normalized, ["部门"])
     job_code = extract_agent_field(normalized, ["编号", "编码"])
@@ -7072,6 +7090,18 @@ def parse_job_payload_from_message(text):
     if not jd:
         jd = f"{title}。{normalized}" if title else normalized
     return {"title": title[:128], "city": city, "department": department, "job_code": job_code, "skill_tags_raw": skill_tags_raw, "jd_text": jd}
+
+
+def parse_job_payload_updates(text):
+    normalized = re.sub(r"\s+", " ", str(text or "").replace("\n", " ")).strip()
+    updates = parse_job_payload_from_message(normalized)
+    explicit_title = re.search(r"(?:岗位|职位)(?:名称)?\s*[:：]?\s*(?:改为|换成|调整为|是)?\s*([^，,。；;]+)", normalized, flags=re.I)
+    if explicit_title and not is_create_job_request(normalized):
+        value = re.split(r"\s*(?:城市|地点|部门|JD|jd|要求|职责|薪资|技能)\s*[:：]?", explicit_title.group(1), maxsplit=1)[0]
+        updates["title"] = value.strip(" ，,。；;")[:128]
+    elif not is_create_job_request(normalized):
+        updates.pop("title", None)
+    return updates
 
 
 def extract_agent_field(text, labels):

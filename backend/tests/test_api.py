@@ -2375,6 +2375,28 @@ def test_agent_new_create_request_replaces_existing_job_draft(client, admin_head
     assert "Java 后端开发工程师" not in replacement["answer"]
 
 
+def test_agent_job_supplement_does_not_replace_title_with_word_supplement(client, admin_headers):
+    first = client.post(
+        "/api/agent/chat",
+        headers=admin_headers,
+        json={"message": "创建一个数据分析师的岗位 并生成jd"},
+    ).get_json()["data"]
+    assert first["result"]["draft"]["title"] == "数据分析师"
+
+    supplemented = client.post(
+        "/api/agent/chat",
+        headers=admin_headers,
+        json={
+            "conversation_id": first["conversation"]["id"],
+            "message": "补充要求 5 年以上经验，本科，熟悉 SQL、Python 和数据可视化，城市上海",
+        },
+    ).get_json()["data"]
+
+    assert supplemented["result"]["draft"]["title"] == "数据分析师"
+    assert supplemented["result"]["draft"]["city"] == "上海"
+    assert "岗位：补充" not in supplemented["answer"]
+
+
 def test_agent_candidate_segment_stats_use_primary_occupation(client, admin_headers):
     before = client.post("/api/agent/chat", headers=admin_headers, json={"message": "现在人才库有多少人？软件开发和会计分别多少？"})
     assert before.status_code == 200
